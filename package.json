@@ -1,0 +1,44 @@
+{
+  "name": "sogni-transcribe",
+  "version": "1.0.0",
+  "description": "REST API for audio transcription and text-to-speech",
+  "type": "module",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "pm2:start": "pm2 start ecosystem.config.cjs",
+    "pm2:stop": "pm2 stop sogni-transcribe",
+    "pm2:restart": "pm2 restart sogni-transcribe",
+    "pm2:delete": "pm2 delete sogni-transcribe",
+    "pm2:logs": "pm2 logs sogni-transcribe",
+    "pm2:status": "pm2 status",
+    "test": "vitest",
+    "test:run": "vitest run",
+    "test:coverage": "vitest run --coverage"
+  },
+  "keywords": [
+    "transcription",
+    "tts",
+    "text-to-speech",
+    "parakeet",
+    "kokoro"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@hapi/boom": "^10.0.1",
+    "@hapi/hapi": "^21.3.12",
+    "@hapi/inert": "^7.1.0",
+    "dotenv": "^16.4.7",
+    "joi": "^17.13.3",
+    "kokoro-js": "^1.2.0"
+  },
+  "devDependencies": {
+    "@vitest/coverage-v8": "^3.0.4",
+    "vitest": "^3.0.4"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}

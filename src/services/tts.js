@@ -48,6 +48,16 @@ export class TTSService {
       const rl = createInterface({ input: daemonProcess.stdout });
 
       rl.on('line', (line) => {
+        // Skip empty lines
+        if (!line.trim()) return;
+
+        // Check if line looks like JSON before parsing
+        // This filters out pip/spacy installation output that leaks to stdout
+        if (!line.startsWith('{')) {
+          console.log(`[tts-daemon] ${line}`);
+          return;
+        }
+
         try {
           const response = JSON.parse(line);
 
@@ -80,7 +90,8 @@ export class TTSService {
             }
           }
         } catch (e) {
-          console.error('Failed to parse TTS daemon response:', line, e);
+          // Log unexpected JSON parse failures, but don't spam for known non-JSON output
+          console.error('Failed to parse TTS daemon JSON response:', line, e);
         }
       });
 

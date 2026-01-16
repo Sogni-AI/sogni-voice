@@ -38,7 +38,7 @@ class ParakeetDaemon:
         try:
             from parakeet_mlx import from_pretrained
             print("Loading parakeet-mlx model...", file=sys.stderr)
-            self.model = from_pretrained()
+            self.model = from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
             print("Model loaded successfully", file=sys.stderr)
             return True
         except ImportError as e:

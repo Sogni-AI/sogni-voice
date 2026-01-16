@@ -33,7 +33,8 @@ export class TranscriptionService {
 
       console.log('Starting parakeet-mlx daemon (model loading may take a moment)...');
 
-      daemonProcess = spawn('python3', [daemonPath], {
+      const pythonPath = join(__dirname, '../../.venv/bin/python3');
+      daemonProcess = spawn(pythonPath, [daemonPath], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: { ...process.env, PYTHONUNBUFFERED: '1' },
       });

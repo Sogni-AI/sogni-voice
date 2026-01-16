@@ -7,11 +7,12 @@ export const config = {
     host: process.env.HOST || '0.0.0.0',
   },
   tts: {
-    modelId: process.env.TTS_MODEL_ID || 'onnx-community/Kokoro-82M-v1.0-ONNX',
-    dtype: process.env.TTS_DTYPE || 'fp32',
-    device: process.env.TTS_DEVICE || 'cpu',
+    modelId: process.env.TTS_MODEL_ID || 'mlx-community/Kokoro-82M-bf16',
     defaultVoice: process.env.TTS_DEFAULT_VOICE || 'af_heart',
     defaultSpeed: parseFloat(process.env.TTS_DEFAULT_SPEED) || 1.0,
+    timeout: parseInt(process.env.TTS_TIMEOUT, 10) || 60000,
+    daemonStartupTimeout: parseInt(process.env.TTS_DAEMON_STARTUP_TIMEOUT, 10) || 60000,
+    preWarmDaemon: process.env.PREWARM_TTS !== 'false',
   },
   transcription: {
     timeout: parseInt(process.env.TRANSCRIBE_TIMEOUT, 10) || 300000,

@@ -12,19 +12,21 @@ module.exports = {
         NODE_ENV: 'development',
         PORT: 3000,
         HOST: '0.0.0.0',
-        // Force ONNX Runtime single-threaded to prevent mutex errors on Apple Silicon
-        OMP_NUM_THREADS: '1',
-        ORT_INTRA_OP_NUM_THREADS: '1',
-        ORT_INTER_OP_NUM_THREADS: '1',
+        // ORT threading config: generateLock serializes requests, so we can allow
+        // intra-op parallelism for faster single-inference performance
+        OMP_NUM_THREADS: '4',
+        ORT_INTRA_OP_NUM_THREADS: '4', // Parallelism within operations (matmul, etc)
+        ORT_INTER_OP_NUM_THREADS: '1', // Keep sequential between operations
       },
       env_production: {
         NODE_ENV: 'production',
         PORT: 3000,
         HOST: '0.0.0.0',
-        // Force ONNX Runtime single-threaded to prevent mutex errors on Apple Silicon
-        OMP_NUM_THREADS: '1',
-        ORT_INTRA_OP_NUM_THREADS: '1',
-        ORT_INTER_OP_NUM_THREADS: '1',
+        // ORT threading config: generateLock serializes requests, so we can allow
+        // intra-op parallelism for faster single-inference performance
+        OMP_NUM_THREADS: '4',
+        ORT_INTRA_OP_NUM_THREADS: '4', // Parallelism within operations (matmul, etc)
+        ORT_INTER_OP_NUM_THREADS: '1', // Keep sequential between operations
       },
     },
   ],

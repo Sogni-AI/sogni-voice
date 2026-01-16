@@ -31,8 +31,7 @@
     "@hapi/hapi": "^21.3.12",
     "@hapi/inert": "^7.1.0",
     "dotenv": "^16.4.7",
-    "joi": "^17.13.3",
-    "kokoro-js": "^1.2.0"
+    "joi": "^17.13.3"
   },
   "devDependencies": {
     "@vitest/coverage-v8": "^3.0.4",
@@ -40,9 +39,5 @@
   },
   "engines": {
     "node": ">=18.0.0"
-  },
-  "overrides": {
-    "onnxruntime-node": "1.20.1",
-    "onnxruntime-common": "1.20.1"
   }
 }

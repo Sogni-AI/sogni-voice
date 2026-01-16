@@ -1,6 +1,7 @@
 import { startServer } from './server.js';
 import { tempFileManager } from './utils/tempFile.js';
 import { transcriptionService } from './services/transcription.js';
+import { ttsService } from './services/tts.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -10,6 +11,7 @@ const gracefulShutdown = async (signal) => {
   await Promise.all([
     tempFileManager.cleanupAll(),
     transcriptionService.shutdown(),
+    ttsService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -24,11 +26,20 @@ process.on('unhandledRejection', (err) => {
 
 startServer()
   .then(async () => {
-    // Optionally pre-warm the transcription daemon
+    // Optionally pre-warm the daemons
+    const preWarmPromises = [];
+
     if (config.transcription.preWarmDaemon) {
       console.log('Pre-warming transcription daemon...');
-      await transcriptionService.initialize();
+      preWarmPromises.push(transcriptionService.initialize());
     }
+
+    if (config.tts.preWarmDaemon) {
+      console.log('Pre-warming TTS daemon...');
+      preWarmPromises.push(ttsService.initialize());
+    }
+
+    await Promise.all(preWarmPromises);
   })
   .catch((err) => {
     console.error('Failed to start server:', err);

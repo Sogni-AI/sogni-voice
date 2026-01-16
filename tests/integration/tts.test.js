@@ -1,19 +1,38 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { writeFile } from 'node:fs/promises';
+
+// Create a fake WAV header (minimal valid WAV structure)
+const createFakeWavBuffer = () => {
+  const buffer = new ArrayBuffer(44);
+  const view = new DataView(buffer);
+  // RIFF header
+  view.setUint32(0, 0x52494646, false); // "RIFF"
+  view.setUint32(4, 36, true); // file size - 8
+  view.setUint32(8, 0x57415645, false); // "WAVE"
+  // fmt chunk
+  view.setUint32(12, 0x666d7420, false); // "fmt "
+  view.setUint32(16, 16, true); // chunk size
+  view.setUint16(20, 1, true); // audio format (PCM)
+  view.setUint16(22, 1, true); // num channels
+  view.setUint32(24, 24000, true); // sample rate
+  view.setUint32(28, 48000, true); // byte rate
+  view.setUint16(32, 2, true); // block align
+  view.setUint16(34, 16, true); // bits per sample
+  // data chunk
+  view.setUint32(36, 0x64617461, false); // "data"
+  view.setUint32(40, 0, true); // data size
+  return buffer;
+};
 
 // Mock the TTS service
 vi.mock('../../src/services/tts.js', () => ({
   ttsService: {
     generate: vi.fn().mockImplementation(async (text, options) => {
-      // Create a fake WAV file
-      if (options.outputPath) {
-        await writeFile(options.outputPath, Buffer.from('RIFF fake wav'));
-      }
       return {
-        audio: {},
+        audio: {
+          toWav: () => createFakeWavBuffer(),
+        },
         voice: options.voice || 'af_heart',
         speed: options.speed || 1.0,
-        outputPath: options.outputPath,
       };
     }),
     listVoices: vi.fn().mockReturnValue([

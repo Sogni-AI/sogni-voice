@@ -104,19 +104,6 @@ describe('TTSService', () => {
       expect(result.speed).toBe(1.5);
     });
 
-    it('should save to file when outputPath is provided', async () => {
-      const mockAudio = {
-        save: vi.fn().mockResolvedValue(undefined),
-      };
-      mockTTSInstance.generate.mockResolvedValue(mockAudio);
-
-      await service.generate('Hello world', {
-        outputPath: '/tmp/output.wav',
-      });
-
-      expect(mockAudio.save).toHaveBeenCalledWith('/tmp/output.wav');
-    });
-
     it('should handle generation failure', async () => {
       mockTTSInstance.generate.mockRejectedValue(new Error('Generation failed'));
 
@@ -138,14 +125,6 @@ describe('TTSService', () => {
       const result = await service.generate('Hello world');
 
       expect(result.audio).toBe(mockAudio);
-    });
-
-    it('should include outputPath in result when provided', async () => {
-      const result = await service.generate('Hello world', {
-        outputPath: '/tmp/test.wav',
-      });
-
-      expect(result.outputPath).toBe('/tmp/test.wav');
     });
   });
 

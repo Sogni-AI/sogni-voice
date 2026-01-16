@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile } from 'node:fs/promises';
+import { writeFile, readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config/index.js';
@@ -35,22 +35,16 @@ export const ttsRoutes = [
       try {
         const { text, voice, speed, format } = request.payload;
 
-        // Create temp directory for output
-        tempDir = await tempFileManager.createTempDir('tts-');
-        const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
+        // Generate audio (returns RawAudio object)
+        const { audio } = await ttsService.generate(text, { voice, speed });
 
-        // Generate audio
-        await ttsService.generate(text, {
-          voice,
-          speed,
-          outputPath,
-        });
+        // Convert to WAV in memory (no disk I/O for wav/buffer formats)
+        const wavBuffer = Buffer.from(audio.toWav());
 
         if (format === 'buffer') {
-          const audioBuffer = await readFile(outputPath);
           return {
             success: true,
-            audio: audioBuffer.toString('base64'),
+            audio: wavBuffer.toString('base64'),
             voice,
             speed,
             format: 'wav',
@@ -58,24 +52,28 @@ export const ttsRoutes = [
         }
 
         if (format === 'opus') {
-          const opusPath = outputPath.replace('.wav', '.opus');
+          // Opus requires temp files for ffmpeg conversion
+          tempDir = await tempFileManager.createTempDir('tts-');
+          const wavPath = await tempFileManager.createTempFile(tempDir, 'wav');
+          const opusPath = wavPath.replace('.wav', '.opus');
+
+          await writeFile(wavPath, wavBuffer);
           await execFileAsync('ffmpeg', [
-            '-i', outputPath,
+            '-i', wavPath,
             '-c:a', 'libopus',
             '-b:a', '32k',
             '-y',
             opusPath,
           ]);
-          const audioBuffer = await readFile(opusPath);
-          return h.response(audioBuffer)
+
+          const opusBuffer = await readFile(opusPath);
+          return h.response(opusBuffer)
             .type('audio/opus')
             .header('Content-Disposition', 'attachment; filename="output.opus"');
         }
 
-        // Return WAV file as download
-        const audioBuffer = await readFile(outputPath);
-
-        return h.response(audioBuffer)
+        // Return WAV directly from memory
+        return h.response(wavBuffer)
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {

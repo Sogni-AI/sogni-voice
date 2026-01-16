@@ -35,7 +35,6 @@ export class TTSService {
     const {
       voice = config.tts.defaultVoice,
       speed = config.tts.defaultSpeed,
-      outputPath,
     } = options;
 
     // Serialize access to the ONNX model to prevent C++ mutex errors
@@ -55,15 +54,10 @@ export class TTSService {
         speed,
       });
 
-      if (outputPath) {
-        await audio.save(outputPath);
-      }
-
       return {
         audio,
         voice,
         speed,
-        outputPath,
       };
     } catch (error) {
       if (error instanceof TTSError) throw error;

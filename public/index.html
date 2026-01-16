@@ -159,6 +159,7 @@
 
     <label style="margin-top: 16px;">Transcript Result:</label>
     <div class="result" id="transcriptResult">No transcript yet. Record audio and it will appear here.</div>
+    <div class="status" id="transcriptTiming"></div>
   </div>
 
   <!-- TTS Section -->
@@ -195,6 +196,7 @@
     <audio id="generatedAudio" controls style="display: none;"></audio>
 
     <div class="result" id="ttsResult">No audio generated yet.</div>
+    <div class="status" id="ttsTiming"></div>
   </div>
 
   <script>
@@ -209,6 +211,7 @@
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
+    const transcriptTiming = document.getElementById('transcriptTiming');
 
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
@@ -249,6 +252,7 @@
         recordStatus.textContent = 'Recording in progress...';
         transcriptResult.className = 'result';
         transcriptResult.textContent = 'Recording...';
+        transcriptTiming.textContent = '';
       } catch (error) {
         recordStatus.textContent = 'Error: ' + error.message;
         transcriptResult.className = 'result error';
@@ -286,7 +290,8 @@
 
         if (response.ok && data.success) {
           transcriptResult.className = 'result success';
-          transcriptResult.textContent = `${data.transcript}\n\nElapsed time: ${elapsed}s`;
+          transcriptResult.textContent = data.transcript;
+          transcriptTiming.textContent = `Elapsed time: ${elapsed}s`;
           recordStatus.textContent = 'Transcription complete!';
         } else {
           throw new Error(data.message || 'Transcription failed');
@@ -307,6 +312,7 @@
     const ttsStatus = document.getElementById('ttsStatus');
     const generatedAudio = document.getElementById('generatedAudio');
     const ttsResult = document.getElementById('ttsResult');
+    const ttsTiming = document.getElementById('ttsTiming');
 
     speedRange.addEventListener('input', () => {
       speedValue.textContent = speedRange.value;
@@ -348,6 +354,7 @@
       ttsStatus.textContent = 'Generating speech...';
       ttsResult.innerHTML = '<span class="loading"></span>Generating audio...';
       ttsResult.className = 'result';
+      ttsTiming.textContent = '';
       generatedAudio.style.display = 'none';
 
       const startTime = performance.now();
@@ -380,7 +387,8 @@
         generatedAudio.play();
 
         ttsResult.className = 'result success';
-        ttsResult.textContent = `Audio generated successfully!\nVoice: ${voiceSelect.value}\nSpeed: ${speedRange.value}x\nText length: ${text.length} characters\nElapsed time: ${elapsed}s`;
+        ttsResult.textContent = `Audio generated successfully!\nVoice: ${voiceSelect.value}\nSpeed: ${speedRange.value}x\nText length: ${text.length} characters`;
+        ttsTiming.textContent = `Elapsed time: ${elapsed}s`;
         ttsStatus.textContent = 'Speech generated successfully!';
       } catch (error) {
         ttsResult.className = 'result error';

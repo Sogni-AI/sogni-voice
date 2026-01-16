@@ -6,3 +6,5 @@ coverage/
 out/
 *.wav
 *.mp3
+.claude/
+.venv/

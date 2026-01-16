@@ -27,7 +27,10 @@ import traceback
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
-# Model repo ID
+# Local model path (relative to this script)
+import os
+SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
+MODEL_PATH = os.path.join(SCRIPT_DIR, "..", "models", "kokoro-tts")
 MODEL_REPO = "mlx-community/Kokoro-82M-bf16"
 SAMPLE_RATE = 24000
 
@@ -37,21 +40,43 @@ class TTSDaemon:
         self.model = None
         self.running = True
 
+    def ensure_model_downloaded(self) -> bool:
+        """Download the model if not present locally. Returns True on success."""
+        if os.path.exists(MODEL_PATH) and os.path.isdir(MODEL_PATH):
+            # Check for required files
+            required = ["config.json", "kokoro-v1_0.safetensors", "voices"]
+            if all(os.path.exists(os.path.join(MODEL_PATH, f)) for f in required):
+                return True
+
+        print(f"Model not found at {MODEL_PATH}, downloading...", file=sys.stderr)
+        try:
+            from huggingface_hub import snapshot_download
+            os.makedirs(MODEL_PATH, exist_ok=True)
+            snapshot_download(
+                MODEL_REPO,
+                local_dir=MODEL_PATH,
+            )
+            print("Model downloaded successfully", file=sys.stderr)
+            return True
+        except Exception as e:
+            print(f"Failed to download model: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return False
+
     def load_model(self) -> bool:
         """Load the Kokoro TTS model. Returns True on success."""
         try:
-            # Suppress spacy download messages by redirecting stdout temporarily
-            import contextlib
-            import io
+            # Ensure model is downloaded
+            if not self.ensure_model_downloaded():
+                return False
 
             print("Loading Kokoro TTS model...", file=sys.stderr)
 
             # Use mlx_audio's load_model utility which properly initializes weights
             from mlx_audio.tts.utils import load_model
 
-            # Capture any stdout during model init (spacy downloads go to stdout)
-            with contextlib.redirect_stdout(io.StringIO()):
-                self.model = load_model(MODEL_REPO)
+            # Load from local path - no network access needed
+            self.model = load_model(MODEL_PATH)
 
             print("Kokoro TTS model loaded successfully", file=sys.stderr)
             return True

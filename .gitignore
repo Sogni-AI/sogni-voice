@@ -8,3 +8,5 @@ out/
 *.mp3
 .claude/
 .venv/
+models/
+__pycache__/

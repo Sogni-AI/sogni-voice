@@ -3,8 +3,10 @@ import { tempFileManager } from './utils/tempFile.js';
 import { transcriptionService } from './services/transcription.js';
 import { config } from './config/index.js';
 
-const gracefulShutdown = async () => {
-  console.log('\nShutting down gracefully...');
+const gracefulShutdown = async (signal) => {
+  console.log(`\nShutting down gracefully... (received ${signal})`);
+  console.log('Stack trace at shutdown:');
+  console.trace();
   await Promise.all([
     tempFileManager.cleanupAll(),
     transcriptionService.shutdown(),
@@ -12,8 +14,8 @@ const gracefulShutdown = async () => {
   process.exit(0);
 };
 
-process.on('SIGINT', gracefulShutdown);
-process.on('SIGTERM', gracefulShutdown);
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
 
 process.on('unhandledRejection', (err) => {
   console.error('Unhandled rejection:', err);

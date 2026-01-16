@@ -40,5 +40,9 @@
   },
   "engines": {
     "node": ">=18.0.0"
+  },
+  "overrides": {
+    "onnxruntime-node": "1.20.1",
+    "onnxruntime-common": "1.20.1"
   }
 }

@@ -4,6 +4,7 @@ import { TTSError } from '../utils/errors.js';
 
 let ttsInstance = null;
 let initPromise = null;
+let generateLock = Promise.resolve(); // Mutex for serializing generate() calls
 
 export class TTSService {
   async initialize() {
@@ -37,7 +38,16 @@ export class TTSService {
       outputPath,
     } = options;
 
+    // Serialize access to the ONNX model to prevent C++ mutex errors
+    let releaseLock;
+    const acquireLock = new Promise((resolve) => {
+      releaseLock = resolve;
+    });
+    const previousLock = generateLock;
+    generateLock = acquireLock;
+
     try {
+      await previousLock; // Wait for previous generation to complete
       const tts = await this.initialize();
 
       const audio = await tts.generate(text, {
@@ -58,6 +68,8 @@ export class TTSService {
     } catch (error) {
       if (error instanceof TTSError) throw error;
       throw new TTSError(`TTS generation failed: ${error.message}`, error);
+    } finally {
+      releaseLock(); // Release lock for next request
     }
   }
 

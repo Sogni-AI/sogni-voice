@@ -1,130 +1,254 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { EventEmitter } from 'node:events';
+import { Readable, Writable } from 'node:stream';
 
-// Mock kokoro-js before importing the service
-vi.mock('kokoro-js', () => ({
-  KokoroTTS: {
-    from_pretrained: vi.fn(),
-  },
+// Mock child_process before importing the service
+vi.mock('node:child_process', () => ({
+  spawn: vi.fn(),
 }));
 
-import { KokoroTTS } from 'kokoro-js';
+import { spawn } from 'node:child_process';
 
 describe('TTSService', () => {
-  let service;
-  let mockTTSInstance;
   let TTSService;
+  let service;
+  let mockProcess;
+  let mockStdin;
+  let mockStdout;
+  let mockStderr;
 
   beforeEach(async () => {
     vi.clearAllMocks();
-    // Reset modules to clear singleton state (ttsInstance, initPromise)
+    // Reset modules to clear singleton state
     vi.resetModules();
 
-    // Re-import the service fresh for each test
+    // Re-mock after reset
+    vi.doMock('node:child_process', () => ({
+      spawn: vi.fn(),
+    }));
+
+    // Create mock streams
+    mockStdin = new Writable({
+      write(chunk, encoding, callback) {
+        // Store written data for assertions
+        mockStdin.lastWrite = chunk.toString();
+        callback();
+      }
+    });
+    mockStdin.lastWrite = '';
+
+    mockStdout = new Readable({ read() {} });
+    mockStderr = new Readable({ read() {} });
+
+    // Create mock process
+    mockProcess = new EventEmitter();
+    mockProcess.stdin = mockStdin;
+    mockProcess.stdout = mockStdout;
+    mockProcess.stderr = mockStderr;
+    mockProcess.kill = vi.fn();
+
+    // Get fresh spawn mock and configure it
+    const { spawn: freshSpawn } = await import('node:child_process');
+    freshSpawn.mockReturnValue(mockProcess);
+
+    // Import fresh service
     const module = await import('../../../src/services/tts.js');
     TTSService = module.TTSService;
     service = new TTSService();
+  });
 
-    mockTTSInstance = {
-      generate: vi.fn().mockResolvedValue({
-        save: vi.fn().mockResolvedValue(undefined),
-      }),
-    };
-
-    // Re-import kokoro-js mock and set it up
-    const kokoroModule = await import('kokoro-js');
-    kokoroModule.KokoroTTS.from_pretrained.mockResolvedValue(mockTTSInstance);
+  afterEach(async () => {
+    // Cleanup daemon if running
+    try {
+      await service.shutdown();
+    } catch (e) {
+      // Ignore shutdown errors in tests
+    }
   });
 
   describe('initialize', () => {
-    it('should initialize the TTS model', async () => {
-      const result = await service.initialize();
-      const kokoroModule = await import('kokoro-js');
-      expect(kokoroModule.KokoroTTS.from_pretrained).toHaveBeenCalled();
-      expect(result).toBe(mockTTSInstance);
+    it('should start daemon and wait for ready signal', async () => {
+      const initPromise = service.initialize();
+
+      // Simulate daemon sending ready signal
+      setTimeout(() => {
+        mockStdout.push('{"status":"ready"}\n');
+      }, 10);
+
+      await initPromise;
+      expect(service.isReady()).toBe(true);
     });
 
-    it('should return existing instance if already initialized', async () => {
-      const kokoroModule = await import('kokoro-js');
+    it('should reject if daemon fails to start', async () => {
+      const initPromise = service.initialize();
 
-      // First initialization
-      const result1 = await service.initialize();
-      // Second call should return same instance without calling from_pretrained again
-      const result2 = await service.initialize();
+      // Simulate spawn error
+      setTimeout(() => {
+        mockProcess.emit('error', new Error('spawn failed'));
+      }, 10);
 
-      expect(result1).toBe(result2);
-      expect(kokoroModule.KokoroTTS.from_pretrained).toHaveBeenCalledTimes(1);
+      await expect(initPromise).rejects.toThrow('Failed to spawn TTS daemon');
     });
 
-    it('should handle initialization failure', async () => {
-      const kokoroModule = await import('kokoro-js');
-      kokoroModule.KokoroTTS.from_pretrained.mockRejectedValue(new Error('Model not found'));
+    it('should reject if daemon sends error status', async () => {
+      const initPromise = service.initialize();
 
-      await expect(service.initialize()).rejects.toThrow('Failed to initialize TTS model');
+      // Simulate daemon error during startup
+      setTimeout(() => {
+        mockStdout.push('{"status":"error","error":"Failed to load model"}\n');
+      }, 10);
+
+      await expect(initPromise).rejects.toThrow('Daemon failed to start');
     });
 
-    it('should allow retry after initialization failure', async () => {
-      const kokoroModule = await import('kokoro-js');
+    it('should deduplicate concurrent initialization calls', async () => {
+      const { spawn: freshSpawn } = await import('node:child_process');
 
-      // First call fails
-      kokoroModule.KokoroTTS.from_pretrained.mockRejectedValueOnce(new Error('Network error'));
-      await expect(service.initialize()).rejects.toThrow('Failed to initialize TTS model');
+      const promise1 = service.initialize();
+      const promise2 = service.initialize();
 
-      // Reset mock for successful retry
-      kokoroModule.KokoroTTS.from_pretrained.mockResolvedValueOnce(mockTTSInstance);
+      // Simulate ready
+      setTimeout(() => {
+        mockStdout.push('{"status":"ready"}\n');
+      }, 10);
 
-      // Second call should succeed
-      const result = await service.initialize();
-      expect(result).toBe(mockTTSInstance);
+      await Promise.all([promise1, promise2]);
+
+      // Spawn should only be called once despite two initialize() calls
+      expect(freshSpawn).toHaveBeenCalledTimes(1);
     });
   });
 
   describe('generate', () => {
-    it('should generate audio with default options', async () => {
-      const result = await service.generate('Hello world');
+    beforeEach(async () => {
+      // Initialize daemon first
+      const initPromise = service.initialize();
+      setTimeout(() => {
+        mockStdout.push('{"status":"ready"}\n');
+      }, 10);
+      await initPromise;
+    });
 
-      expect(mockTTSInstance.generate).toHaveBeenCalledWith('Hello world', {
-        voice: 'af_heart',
-        speed: 1.0,
+    it('should successfully generate audio with default options', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
       });
+
+      // Get the request from what was written to stdin
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.text).toBe('Hello world');
+      expect(request.voice).toBe('af_heart');
+      expect(request.speed).toBe(1.0);
+      expect(request.output_path).toBe('/tmp/output.wav');
+
+      // Simulate successful response
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.5}\n`);
+
+      const result = await generatePromise;
+      expect(result.outputPath).toBe('/tmp/output.wav');
+      expect(result.duration).toBe(1.5);
       expect(result.voice).toBe('af_heart');
-      expect(result.speed).toBe(1.0);
     });
 
     it('should generate audio with custom voice and speed', async () => {
-      const result = await service.generate('Hello world', {
+      const generatePromise = service.generate('Hello world', {
         voice: 'am_adam',
         speed: 1.5,
+        outputPath: '/tmp/output.wav',
       });
 
-      expect(mockTTSInstance.generate).toHaveBeenCalledWith('Hello world', {
-        voice: 'am_adam',
-        speed: 1.5,
-      });
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.voice).toBe('am_adam');
+      expect(request.speed).toBe(1.5);
+
+      // Simulate successful response
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":2.0}\n`);
+
+      const result = await generatePromise;
       expect(result.voice).toBe('am_adam');
       expect(result.speed).toBe(1.5);
     });
 
-    it('should handle generation failure', async () => {
-      mockTTSInstance.generate.mockRejectedValue(new Error('Generation failed'));
-
-      await expect(service.generate('Hello')).rejects.toThrow('TTS generation failed');
+    it('should require outputPath', async () => {
+      await expect(service.generate('Hello world'))
+        .rejects.toThrow('outputPath is required');
     });
 
-    it('should re-throw TTSError without wrapping', async () => {
-      const { TTSError } = await import('../../../src/utils/errors.js');
-      const originalError = new TTSError('Custom TTS error');
-      mockTTSInstance.generate.mockRejectedValue(originalError);
+    it('should handle generation errors', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
+      });
 
-      await expect(service.generate('Hello')).rejects.toBe(originalError);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+
+      // Simulate error response
+      mockStdout.push(`{"id":"${request.id}","success":false,"error":"TTS generation failed"}\n`);
+
+      await expect(generatePromise).rejects.toThrow('TTS generation failed');
     });
 
-    it('should include audio object in result', async () => {
-      const mockAudio = { data: 'audio data' };
-      mockTTSInstance.generate.mockResolvedValue(mockAudio);
+    it('should handle daemon crash during generation', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
+      });
 
-      const result = await service.generate('Hello world');
+      // Simulate daemon crash
+      setTimeout(() => {
+        mockProcess.emit('close', 1);
+      }, 10);
 
-      expect(result.audio).toBe(mockAudio);
+      await expect(generatePromise).rejects.toThrow('TTS daemon process terminated');
+    });
+  });
+
+  describe('shutdown', () => {
+    beforeEach(async () => {
+      const initPromise = service.initialize();
+      setTimeout(() => {
+        mockStdout.push('{"status":"ready"}\n');
+      }, 10);
+      await initPromise;
+    });
+
+    it('should send shutdown command and wait for close', async () => {
+      const shutdownPromise = service.shutdown();
+
+      // Verify shutdown command was sent
+      await new Promise(resolve => setTimeout(resolve, 10));
+      expect(mockStdin.lastWrite).toContain('"command":"shutdown"');
+
+      // Simulate process close
+      mockProcess.emit('close', 0);
+
+      await shutdownPromise;
+      expect(service.isReady()).toBe(false);
+    });
+
+    it('should force kill if shutdown times out', async () => {
+      vi.useFakeTimers();
+
+      const shutdownPromise = service.shutdown();
+
+      // Fast-forward past the 5 second timeout
+      vi.advanceTimersByTime(6000);
+
+      await shutdownPromise;
+      expect(mockProcess.kill).toHaveBeenCalledWith('SIGKILL');
+
+      vi.useRealTimers();
+    });
+
+    it('should do nothing if daemon is not running', async () => {
+      // Shutdown first time
+      mockProcess.emit('close', 0);
+      await service.shutdown();
+
+      // Second shutdown should be a no-op
+      await service.shutdown();
+      // No errors thrown
     });
   });
 
@@ -133,7 +257,33 @@ describe('TTSService', () => {
       const voices = service.listVoices();
       expect(voices).toContain('af_heart');
       expect(voices).toContain('am_adam');
+      // Check for new MLX voices
+      expect(voices).toContain('bf_emma');
+      expect(voices).toContain('jf_alpha');
       expect(Array.isArray(voices)).toBe(true);
+    });
+  });
+
+  describe('daemon log forwarding', () => {
+    it('should forward stderr to console', async () => {
+      const consoleSpy = vi.spyOn(console, 'log').mockImplementation(() => {});
+
+      const initPromise = service.initialize();
+
+      // Simulate stderr output
+      mockStderr.push('Loading model...');
+
+      setTimeout(() => {
+        mockStdout.push('{"status":"ready"}\n');
+      }, 20);
+
+      await initPromise;
+
+      expect(consoleSpy).toHaveBeenCalledWith(
+        expect.stringContaining('[tts-daemon]')
+      );
+
+      consoleSpy.mockRestore();
     });
   });
 });

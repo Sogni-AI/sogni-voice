@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { writeFile, readFile } from 'node:fs/promises';
+import { readFile } from 'node:fs/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { config } from '../config/index.js';
@@ -35,11 +35,15 @@ export const ttsRoutes = [
       try {
         const { text, voice, speed, format } = request.payload;
 
-        // Generate audio (returns RawAudio object)
-        const { audio } = await ttsService.generate(text, { voice, speed });
+        // Create temp directory and file for TTS output
+        tempDir = await tempFileManager.createTempDir('tts-');
+        const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        // Convert to WAV in memory (no disk I/O for wav/buffer formats)
-        const wavBuffer = Buffer.from(audio.toWav());
+        // Generate audio to file (daemon-based MLX TTS)
+        await ttsService.generate(text, { voice, speed, outputPath });
+
+        // Read the generated WAV file
+        const wavBuffer = await readFile(outputPath);
 
         if (format === 'buffer') {
           return {
@@ -52,14 +56,10 @@ export const ttsRoutes = [
         }
 
         if (format === 'opus') {
-          // Opus requires temp files for ffmpeg conversion
-          tempDir = await tempFileManager.createTempDir('tts-');
-          const wavPath = await tempFileManager.createTempFile(tempDir, 'wav');
-          const opusPath = wavPath.replace('.wav', '.opus');
+          const opusPath = outputPath.replace('.wav', '.opus');
 
-          await writeFile(wavPath, wavBuffer);
           await execFileAsync('ffmpeg', [
-            '-i', wavPath,
+            '-i', outputPath,
             '-c:a', 'libopus',
             '-b:a', '32k',
             '-y',
@@ -72,7 +72,7 @@ export const ttsRoutes = [
             .header('Content-Disposition', 'attachment; filename="output.opus"');
         }
 
-        // Return WAV directly from memory
+        // Return WAV file
         return h.response(wavBuffer)
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');

@@ -36,9 +36,17 @@ class TTSDaemon:
     def load_model(self) -> bool:
         """Load the Kokoro TTS model. Returns True on success."""
         try:
+            # Suppress spacy download messages by redirecting stdout temporarily
+            import contextlib
+            import io
+
             from kokoro import KokoroTTS
             print("Loading Kokoro TTS model...", file=sys.stderr)
-            self.tts = KokoroTTS()
+
+            # Capture any stdout during model init (spacy downloads go to stdout)
+            with contextlib.redirect_stdout(io.StringIO()):
+                self.tts = KokoroTTS()
+
             print("Kokoro TTS model loaded successfully", file=sys.stderr)
             return True
         except ImportError as e:

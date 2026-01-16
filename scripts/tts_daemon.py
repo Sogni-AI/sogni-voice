@@ -27,10 +27,14 @@ import traceback
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
+# Model repo ID
+MODEL_REPO = "mlx-community/Kokoro-82M-bf16"
+SAMPLE_RATE = 24000
+
 
 class TTSDaemon:
     def __init__(self):
-        self.tts = None
+        self.model = None
         self.running = True
 
     def load_model(self) -> bool:
@@ -40,18 +44,20 @@ class TTSDaemon:
             import contextlib
             import io
 
-            from kokoro import KokoroTTS
             print("Loading Kokoro TTS model...", file=sys.stderr)
+
+            # Use mlx_audio's load_model utility which properly initializes weights
+            from mlx_audio.tts.utils import load_model
 
             # Capture any stdout during model init (spacy downloads go to stdout)
             with contextlib.redirect_stdout(io.StringIO()):
-                self.tts = KokoroTTS()
+                self.model = load_model(MODEL_REPO)
 
             print("Kokoro TTS model loaded successfully", file=sys.stderr)
             return True
         except ImportError as e:
-            print(f"kokoro-tts-mlx not installed: {e}", file=sys.stderr)
-            print("Install with: pip install git+https://github.com/flight505/kokoro_tts_mlx.git", file=sys.stderr)
+            print(f"mlx-audio not installed: {e}", file=sys.stderr)
+            print("Install with: pip install mlx-audio", file=sys.stderr)
             return False
         except Exception as e:
             print(f"Failed to load model: {e}", file=sys.stderr)
@@ -60,25 +66,45 @@ class TTSDaemon:
 
     def synthesize(self, text: str, voice: str, speed: float, output_path: str) -> dict:
         """Synthesize text to speech. Returns result dict."""
-        if self.tts is None:
+        if self.model is None:
             return {"success": False, "error": "Model not loaded"}
 
         try:
-            # Use generate() for maximum performance
+            import mlx.core as mx
+            import numpy as np
+            import soundfile as sf
+
+            # Use generate() with correct lang_code for American English
             result = None
-            for r in self.tts.generate(text, voice=voice, speed=speed):
+            for r in self.model.generate(text, voice=voice, speed=speed, lang_code="a"):
                 result = r
 
             if result is None:
                 return {"success": False, "error": "No audio generated"}
 
+            # Evaluate and convert to numpy
+            mx.eval(result.audio)
+            audio_np = np.array(result.audio)
+
+            # Check for NaN values
+            if np.isnan(audio_np).any():
+                return {"success": False, "error": "Generated audio contains NaN values"}
+
+            # Normalize if needed
+            max_val = np.abs(audio_np).max()
+            if max_val > 1.0:
+                audio_np = audio_np / max_val
+
             # Save to file
-            self.tts.save(result.audio, output_path)
+            sf.write(output_path, audio_np, SAMPLE_RATE)
+
+            # Calculate duration
+            duration = len(audio_np) / SAMPLE_RATE
 
             return {
                 "success": True,
                 "output_path": output_path,
-                "duration": result.duration_seconds if hasattr(result, 'duration_seconds') else 0,
+                "duration": duration,
             }
         except FileNotFoundError as e:
             return {"success": False, "error": f"Output path not accessible: {output_path}"}

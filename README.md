@@ -70,6 +70,8 @@ cp .env.example .env
 | TTS_DEFAULT_VOICE | af_heart | Default TTS voice |
 | TTS_DEFAULT_SPEED | 1.0 | Default speech speed |
 | MAX_FILE_SIZE_MB | 100 | Max upload file size |
+| DAEMON_STARTUP_TIMEOUT | 120000 | Transcription daemon startup timeout (ms) |
+| PREWARM_TRANSCRIPTION | true | Pre-load transcription model on server start |
 
 ## Running the Server
 
@@ -221,6 +223,17 @@ On first use, ML models are downloaded automatically:
 
 Models are cached locally after the first download. Subsequent requests will be much faster.
 
+## Performance
+
+### Transcription Daemon
+
+The transcription service uses a persistent Python daemon that keeps the parakeet-mlx model loaded in memory. This provides significant performance benefits:
+
+- **First request**: Model loads (~2-5 seconds), then transcribes
+- **Subsequent requests**: 2-5x faster (no model loading overhead)
+
+The daemon starts automatically when the server starts and shuts down gracefully with the server. To disable pre-loading (lazy load on first request instead), set `PREWARM_TRANSCRIPTION=false`.
+
 ## Available Voices
 
 ### Female voices (af_*)
@@ -237,6 +250,8 @@ Models are cached locally after the first download. Subsequent requests will be 
 
 ```
 sogni-transcribe/
+├── scripts/
+│   └── parakeet_daemon.py    # Persistent transcription daemon
 ├── src/
 │   ├── index.js              # Entry point
 │   ├── server.js             # HAPI server setup
@@ -250,7 +265,7 @@ sogni-transcribe/
 │   │   ├── transcribe.js     # POST /transcribe
 │   │   └── tts.js            # POST /tts, GET /tts/voices
 │   ├── services/
-│   │   ├── transcription.js  # parakeet-mlx integration
+│   │   ├── transcription.js  # parakeet-mlx daemon integration
 │   │   └── tts.js            # kokoro-js integration
 │   └── utils/
 │       ├── tempFile.js       # Temp file management

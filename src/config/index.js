@@ -15,6 +15,8 @@ export const config = {
   },
   transcription: {
     timeout: parseInt(process.env.TRANSCRIBE_TIMEOUT, 10) || 300000,
+    daemonStartupTimeout: parseInt(process.env.DAEMON_STARTUP_TIMEOUT, 10) || 120000,
+    preWarmDaemon: process.env.PREWARM_TRANSCRIPTION !== 'false',
   },
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,

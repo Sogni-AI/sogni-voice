@@ -30,6 +30,7 @@ export const ttsRoutes = [
       tags: ['api', 'tts'],
     },
     handler: async (request, h) => {
+      const startTime = performance.now();
       let tempDir = null;
 
       try {
@@ -46,6 +47,8 @@ export const ttsRoutes = [
         const wavBuffer = await readFile(outputPath);
 
         if (format === 'buffer') {
+          const durationMs = performance.now() - startTime;
+          console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
           return {
             success: true,
             audio: wavBuffer.toString('base64'),
@@ -67,12 +70,16 @@ export const ttsRoutes = [
           ]);
 
           const opusBuffer = await readFile(opusPath);
+          const durationMs = performance.now() - startTime;
+          console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
           return h.response(opusBuffer)
             .type('audio/opus')
             .header('Content-Disposition', 'attachment; filename="output.opus"');
         }
 
         // Return WAV file
+        const durationMs = performance.now() - startTime;
+        console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
         return h.response(wavBuffer)
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');

@@ -50,8 +50,8 @@ class ParakeetDaemon:
             traceback.print_exc(file=sys.stderr)
             return False
 
-    def transcribe(self, audio_path: str) -> dict:
-        """Transcribe audio file. Returns result dict."""
+    def transcribe(self, audio_path: str, timestamps: bool = False) -> dict:
+        """Transcribe audio file. Returns result dict with optional timestamps."""
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
 
@@ -68,13 +68,39 @@ class ParakeetDaemon:
             else:
                 text = str(result)
 
-            return {"success": True, "text": text.strip()}
+            response = {"success": True, "text": text.strip()}
+
+            # Extract timestamps if requested
+            if timestamps:
+                segments = self._extract_timestamps(result)
+                if segments:
+                    response["timestamps"] = segments
+
+            return response
         except FileNotFoundError:
             return {"success": False, "error": f"Audio file not found: {audio_path}"}
         except Exception as e:
             print(f"Transcription error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e)}
+
+    def _extract_timestamps(self, result) -> list:
+        """Extract timestamp segments from transcription result."""
+        segments = []
+
+        try:
+            # parakeet-mlx returns AlignedResult with sentences attribute
+            if hasattr(result, 'sentences'):
+                for sentence in result.sentences:
+                    segments.append({
+                        "start": sentence.start,
+                        "end": sentence.end,
+                        "text": sentence.text.strip()
+                    })
+        except Exception as e:
+            print(f"Error extracting timestamps: {e}", file=sys.stderr)
+
+        return segments
 
     def send_response(self, response: dict):
         """Send JSON response to stdout."""
@@ -99,7 +125,8 @@ class ParakeetDaemon:
         if not audio_path:
             return {"id": request_id, "success": False, "error": "Missing audio_path"}
 
-        result = self.transcribe(audio_path)
+        timestamps = request.get("timestamps", False)
+        result = self.transcribe(audio_path, timestamps=timestamps)
         result["id"] = request_id
         return result
 

@@ -71,7 +71,11 @@ export class TranscriptionService {
           if (pending) {
             pendingRequests.delete(requestId);
             if (response.success) {
-              pending.resolve({ text: response.text, rawOutput: '' });
+              const result = { text: response.text, rawOutput: '' };
+              if (response.timestamps) {
+                result.timestamps = response.timestamps;
+              }
+              pending.resolve(result);
             } else {
               pending.reject(new TranscriptionError(response.error));
             }
@@ -131,8 +135,9 @@ export class TranscriptionService {
   /**
    * Transcribe an audio file
    * @param {string} audioFilePath - Path to the audio file
-   * @param {object} options - Transcription options (currently unused, kept for API compatibility)
-   * @returns {Promise<{text: string, rawOutput: string}>}
+   * @param {object} options - Transcription options
+   * @param {boolean} options.timestamps - Include word/segment timestamps
+   * @returns {Promise<{text: string, rawOutput: string, timestamps?: Array}>}
    */
   async transcribe(audioFilePath, options = {}) {
     await this._ensureDaemon();
@@ -141,6 +146,7 @@ export class TranscriptionService {
       throw new TranscriptionError('Transcription daemon not available');
     }
 
+    const { timestamps = false } = options;
     const requestId = `req-${++requestIdCounter}`;
 
     return new Promise((resolve, reject) => {
@@ -163,6 +169,7 @@ export class TranscriptionService {
       const request = JSON.stringify({
         id: requestId,
         audio_path: audioFilePath,
+        timestamps,
       });
 
       daemonProcess.stdin.write(request + '\n');

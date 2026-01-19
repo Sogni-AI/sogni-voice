@@ -150,6 +150,12 @@
     <div class="controls">
       <button id="recordBtn">Start Recording</button>
       <button id="stopBtn" disabled>Stop Recording</button>
+      <div class="form-group" style="margin-bottom: 0; margin-left: 12px;">
+        <label for="subtitlesCheck" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
+          <input type="checkbox" id="subtitlesCheck" style="width: 16px; height: 16px; cursor: pointer;">
+          Include subtitle timings
+        </label>
+      </div>
     </div>
 
     <div class="status" id="recordStatus">Ready to record</div>
@@ -208,6 +214,7 @@
 
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const subtitlesCheck = document.getElementById('subtitlesCheck');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
@@ -275,10 +282,14 @@
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
 
       const startTime = performance.now();
+      const includeTimestamps = subtitlesCheck.checked;
 
       try {
         const formData = new FormData();
         formData.append('file', audioBlob, 'recording.webm');
+        if (includeTimestamps) {
+          formData.append('timestamps', 'true');
+        }
 
         const response = await fetch(`${API_BASE}/transcribe`, {
           method: 'POST',
@@ -290,7 +301,20 @@
 
         if (response.ok && data.success) {
           transcriptResult.className = 'result success';
-          transcriptResult.textContent = data.transcript;
+
+          let resultText;
+
+          // When timestamps requested, API only returns timestamps (no transcript)
+          if (data.timestamps && data.timestamps.length > 0) {
+            resultText = 'Subtitle Timings:\n';
+            resultText += data.timestamps.map(seg =>
+              `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}`
+            ).join('\n');
+          } else {
+            resultText = data.transcript;
+          }
+
+          transcriptResult.textContent = resultText;
           transcriptTiming.textContent = `Elapsed time: ${elapsed}s`;
           recordStatus.textContent = 'Transcription complete!';
         } else {
@@ -301,6 +325,13 @@
         transcriptResult.textContent = 'Error: ' + error.message;
         recordStatus.textContent = 'Transcription failed';
       }
+    }
+
+    // Helper to format seconds as MM:SS.ms
+    function formatTime(seconds) {
+      const mins = Math.floor(seconds / 60);
+      const secs = (seconds % 60).toFixed(2);
+      return `${mins}:${secs.padStart(5, '0')}`;
     }
 
     // ==================== Text-to-Speech ====================

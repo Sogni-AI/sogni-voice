@@ -81,10 +81,14 @@ export class TTSService {
           if (pending) {
             pendingRequests.delete(requestId);
             if (response.success) {
-              pending.resolve({
+              const result = {
                 outputPath: response.output_path,
                 duration: response.duration,
-              });
+              };
+              if (response.timestamps) {
+                result.timestamps = response.timestamps;
+              }
+              pending.resolve(result);
             } else {
               pending.reject(new TTSError(response.error));
             }
@@ -149,13 +153,15 @@ export class TTSService {
    * @param {string} options.voice - Voice to use
    * @param {number} options.speed - Speech speed
    * @param {string} options.outputPath - Path to save audio file
-   * @returns {Promise<{outputPath: string, duration: number}>}
+   * @param {boolean} options.timestamps - Whether to include word-level timestamps
+   * @returns {Promise<{outputPath: string, duration: number, timestamps?: Array}>}
    */
   async generate(text, options = {}) {
     const {
       voice = config.tts.defaultVoice,
       speed = config.tts.defaultSpeed,
       outputPath,
+      timestamps = false,
     } = options;
 
     if (!outputPath) {
@@ -179,13 +185,17 @@ export class TTSService {
       pendingRequests.set(requestId, {
         resolve: (result) => {
           clearTimeout(timeoutId);
-          resolve({
+          const response = {
             audio: null, // Audio is saved to file, not returned
             voice,
             speed,
             outputPath: result.outputPath,
             duration: result.duration,
-          });
+          };
+          if (result.timestamps) {
+            response.timestamps = result.timestamps;
+          }
+          resolve(response);
         },
         reject: (error) => {
           clearTimeout(timeoutId);
@@ -199,6 +209,7 @@ export class TTSService {
         voice,
         speed,
         output_path: outputPath,
+        timestamps,
       });
 
       daemonProcess.stdin.write(request + '\n');

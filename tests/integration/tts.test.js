@@ -23,6 +23,12 @@ const createFakeWavBuffer = () => {
   return buffer;
 };
 
+// Mock timestamps data for testing
+const mockTimestamps = [
+  { word: 'Hello', start: 0.0, end: 0.3 },
+  { word: 'world', start: 0.35, end: 0.7 },
+];
+
 // Mock the TTS service (daemon-based API that writes to outputPath)
 vi.mock('../../src/services/tts.js', () => ({
   ttsService: {
@@ -31,12 +37,20 @@ vi.mock('../../src/services/tts.js', () => ({
       if (options.outputPath) {
         writeFileSync(options.outputPath, createFakeWavBuffer());
       }
-      return {
+      const result = {
         outputPath: options.outputPath,
         duration: 1.0,
         voice: options.voice || 'af_heart',
         speed: options.speed || 1.0,
       };
+      // Include timestamps if requested
+      if (options.timestamps) {
+        result.timestamps = [
+          { word: 'Hello', start: 0.0, end: 0.3 },
+          { word: 'world', start: 0.35, end: 0.7 },
+        ];
+      }
+      return result;
     }),
     listVoices: vi.fn().mockReturnValue([
       'af_heart', 'af_alloy', 'am_adam',
@@ -195,6 +209,106 @@ describe('TTS Routes', () => {
       });
 
       expect(response.statusCode).toBe(400);
+    });
+
+    it('should return JSON with timestamps when timestamps=true', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello world',
+          timestamps: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(payload.success).toBe(true);
+      expect(payload.audio).toBeDefined();
+      expect(payload.timestamps).toBeDefined();
+      expect(Array.isArray(payload.timestamps)).toBe(true);
+      expect(payload.timestamps[0]).toHaveProperty('word');
+      expect(payload.timestamps[0]).toHaveProperty('start');
+      expect(payload.timestamps[0]).toHaveProperty('end');
+    });
+
+    it('should return JSON response when timestamps=true even with wav format', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello world',
+          format: 'wav',
+          timestamps: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(payload.success).toBe(true);
+      expect(payload.format).toBe('wav');
+      expect(payload.timestamps).toBeDefined();
+    });
+
+    it('should return opus audio with timestamps when both requested', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello world',
+          format: 'opus',
+          timestamps: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(payload.success).toBe(true);
+      expect(payload.format).toBe('opus');
+      expect(payload.timestamps).toBeDefined();
+    });
+
+    it('should not include timestamps when timestamps=false', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello world',
+          format: 'buffer',
+          timestamps: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(payload.success).toBe(true);
+      expect(payload.timestamps).toBeUndefined();
+    });
+
+    it('should accept timestamps as boolean true', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello',
+          timestamps: true,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+    });
+
+    it('should accept timestamps as boolean false', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/tts',
+        payload: {
+          text: 'Hello',
+          timestamps: false,
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
     });
   });
 

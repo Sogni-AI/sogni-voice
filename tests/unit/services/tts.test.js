@@ -202,6 +202,57 @@ describe('TTSService', () => {
 
       await expect(generatePromise).rejects.toThrow('TTS daemon process terminated');
     });
+
+    it('should pass timestamps option to daemon when true', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
+        timestamps: true,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.timestamps).toBe(true);
+
+      // Simulate successful response with timestamps
+      const mockTimestamps = [
+        { word: 'Hello', start: 0.0, end: 0.5 },
+        { word: 'world', start: 0.5, end: 1.0 },
+      ];
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.0,"timestamps":${JSON.stringify(mockTimestamps)}}\n`);
+
+      const result = await generatePromise;
+      expect(result.timestamps).toEqual(mockTimestamps);
+    });
+
+    it('should not include timestamps in result when not requested', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
+        timestamps: false,
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.timestamps).toBe(false);
+
+      // Simulate successful response without timestamps
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.0}\n`);
+
+      const result = await generatePromise;
+      expect(result.timestamps).toBeUndefined();
+    });
+
+    it('should default timestamps to false when not specified', async () => {
+      const generatePromise = service.generate('Hello world', {
+        outputPath: '/tmp/output.wav',
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.timestamps).toBe(false);
+
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.0}\n`);
+      await generatePromise;
+    });
   });
 
   describe('shutdown', () => {

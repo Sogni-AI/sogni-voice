@@ -89,8 +89,20 @@ class TTSDaemon:
             traceback.print_exc(file=sys.stderr)
             return False
 
-    def synthesize(self, text: str, voice: str, speed: float, output_path: str) -> dict:
-        """Synthesize text to speech. Returns result dict."""
+    def _get_lang_code(self, voice: str) -> str:
+        """Get language code from voice prefix."""
+        if voice.startswith(('af_', 'am_')):
+            return 'a'  # American English
+        elif voice.startswith(('bf_', 'bm_')):
+            return 'b'  # British English
+        elif voice.startswith(('jf_', 'jm_')):
+            return 'j'  # Japanese
+        elif voice.startswith(('zf_', 'zm_')):
+            return 'z'  # Chinese
+        return 'a'  # Default to American English
+
+    def synthesize(self, text: str, voice: str, speed: float, output_path: str, timestamps: bool = False) -> dict:
+        """Synthesize text to speech. Returns result dict with optional word timestamps."""
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
 
@@ -99,17 +111,45 @@ class TTSDaemon:
             import numpy as np
             import soundfile as sf
 
-            # Use generate() with correct lang_code for American English
-            result = None
-            for r in self.model.generate(text, voice=voice, speed=speed, lang_code="a"):
-                result = r
+            lang_code = self._get_lang_code(voice)
+            word_timestamps = []
 
-            if result is None:
-                return {"success": False, "error": "No audio generated"}
+            if timestamps:
+                # Use pipeline directly to get word-level timestamps
+                pipeline = self.model._get_pipeline(lang_code)
+                audio_segments = []
 
-            # Evaluate and convert to numpy
-            mx.eval(result.audio)
-            audio_np = np.array(result.audio)
+                for result in pipeline(text, voice=voice, speed=speed):
+                    # Collect timestamps from tokens
+                    if result.tokens:
+                        for token in result.tokens:
+                            word_timestamps.append({
+                                "word": token.text,
+                                "start": round(token.start_ts, 3),
+                                "end": round(token.end_ts, 3),
+                            })
+
+                    # Collect audio
+                    if result.output and result.output.audio is not None:
+                        mx.eval(result.output.audio)
+                        audio_segments.append(np.array(result.output.audio))
+
+                if not audio_segments:
+                    return {"success": False, "error": "No audio generated"}
+
+                # Concatenate all audio segments
+                audio_np = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
+            else:
+                # Use model.generate() for simpler path when timestamps not needed
+                result = None
+                for r in self.model.generate(text, voice=voice, speed=speed, lang_code=lang_code):
+                    result = r
+
+                if result is None:
+                    return {"success": False, "error": "No audio generated"}
+
+                mx.eval(result.audio)
+                audio_np = np.array(result.audio)
 
             # Check for NaN values
             if np.isnan(audio_np).any():
@@ -126,11 +166,16 @@ class TTSDaemon:
             # Calculate duration
             duration = len(audio_np) / SAMPLE_RATE
 
-            return {
+            response = {
                 "success": True,
                 "output_path": output_path,
                 "duration": duration,
             }
+
+            if timestamps:
+                response["timestamps"] = word_timestamps
+
+            return response
         except FileNotFoundError as e:
             return {"success": False, "error": f"Output path not accessible: {output_path}"}
         except Exception as e:
@@ -167,8 +212,9 @@ class TTSDaemon:
 
         voice = request.get("voice", "af_heart")
         speed = request.get("speed", 1.0)
+        timestamps = request.get("timestamps", False)
 
-        result = self.synthesize(text, voice, speed, output_path)
+        result = self.synthesize(text, voice, speed, output_path, timestamps)
         result["id"] = request_id
         return result
 

@@ -24,6 +24,8 @@ export const ttsRoutes = [
             .description('Speech speed (0.5-2.0)'),
           format: Joi.string().valid('wav', 'opus', 'buffer').default('wav')
             .description('Output format (wav, opus, or buffer for base64 wav)'),
+          timestamps: Joi.boolean().default(false)
+            .description('Include word-level timestamps in response'),
         }),
       },
       description: 'Convert text to speech audio',
@@ -34,28 +36,55 @@ export const ttsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, voice, speed, format } = request.payload;
+        const { text, voice, speed, format, timestamps } = request.payload;
 
         // Create temp directory and file for TTS output
         tempDir = await tempFileManager.createTempDir('tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
         // Generate audio to file (daemon-based MLX TTS)
-        await ttsService.generate(text, { voice, speed, outputPath });
+        const result = await ttsService.generate(text, { voice, speed, outputPath, timestamps });
 
         // Read the generated WAV file
         const wavBuffer = await readFile(outputPath);
 
-        if (format === 'buffer') {
-          const durationMs = performance.now() - startTime;
-          console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
-          return {
+        // Helper to build response with timestamps
+        const buildJsonResponse = (audioBuffer, audioFormat) => {
+          const response = {
             success: true,
-            audio: wavBuffer.toString('base64'),
+            audio: audioBuffer.toString('base64'),
             voice,
             speed,
-            format: 'wav',
+            format: audioFormat,
           };
+          if (timestamps && result.timestamps) {
+            response.timestamps = result.timestamps;
+          }
+          return response;
+        };
+
+        if (format === 'buffer' || timestamps) {
+          // Return JSON response with base64 audio (and timestamps if requested)
+          let audioBuffer = wavBuffer;
+          let audioFormat = 'wav';
+
+          // Convert to opus if requested
+          if (format === 'opus') {
+            const opusPath = outputPath.replace('.wav', '.opus');
+            await execFileAsync('ffmpeg', [
+              '-i', outputPath,
+              '-c:a', 'libopus',
+              '-b:a', '32k',
+              '-y',
+              opusPath,
+            ]);
+            audioBuffer = await readFile(opusPath);
+            audioFormat = 'opus';
+          }
+
+          const durationMs = performance.now() - startTime;
+          console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
+          return buildJsonResponse(audioBuffer, audioFormat);
         }
 
         if (format === 'opus') {

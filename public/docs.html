@@ -241,7 +241,13 @@ print(data['transcript'])</code></pre>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>wav</td>
-        <td>Output format: "wav" (returns audio file) or "buffer" (returns base64)</td>
+        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON)</td>
+      </tr>
+      <tr>
+        <td><code>timestamps</code> <span class="optional">(optional)</span></td>
+        <td>boolean</td>
+        <td>false</td>
+        <td>Include word-level timestamps for subtitle generation (forces JSON response)</td>
       </tr>
     </table>
 
@@ -257,12 +263,39 @@ print(data['transcript'])</code></pre>
   "format": "wav"
 }</code></pre>
 
-    <h3>cURL Example</h3>
+    <h3>Response (with timestamps: true)</h3>
+    <p>When <code>timestamps</code> is enabled, the response is always JSON and includes word-level timing data for subtitle generation:</p>
+    <pre><code>{
+  "success": true,
+  "audio": "UklGRiQAAABXQVZFZm10IBAA...",  // base64 encoded audio
+  "voice": "af_heart",
+  "speed": 1.0,
+  "format": "wav",
+  "timestamps": [
+    { "word": "Hello", "start": 0.000, "end": 0.312 },
+    { "word": ",", "start": 0.312, "end": 0.440 },
+    { "word": "world", "start": 0.440, "end": 0.752 },
+    { "word": "!", "start": 0.752, "end": 0.880 }
+  ]
+}</code></pre>
+    <p>Each timestamp object contains:</p>
+    <ul>
+      <li><code>word</code> - The word or punctuation token</li>
+      <li><code>start</code> - Start time in seconds</li>
+      <li><code>end</code> - End time in seconds</li>
+    </ul>
+
+    <h3>cURL Examples</h3>
     <pre><code># Save as WAV file
 curl -X POST https://voice.sogni.ai/tts \
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!", "voice": "af_heart", "speed": 1.0}' \
-  --output output.wav</code></pre>
+  --output output.wav
+
+# Get audio with word-level timestamps for subtitles
+curl -X POST https://voice.sogni.ai/tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!", "voice": "af_heart", "timestamps": true}'</code></pre>
 
     <h3>JavaScript Example</h3>
     <pre><code>const response = await fetch('https://voice.sogni.ai/tts', {
@@ -283,6 +316,42 @@ const audioUrl = URL.createObjectURL(audioBlob);
 const audio = new Audio(audioUrl);
 audio.play();</code></pre>
 
+    <h3>JavaScript Example (with timestamps for subtitles)</h3>
+    <pre><code>const response = await fetch('https://voice.sogni.ai/tts', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json'
+  },
+  body: JSON.stringify({
+    text: 'Welcome to our video. Today we will learn something new.',
+    voice: 'af_heart',
+    timestamps: true
+  })
+});
+
+const data = await response.json();
+
+// Decode and play audio
+const audioBytes = atob(data.audio);
+const audioArray = new Uint8Array(audioBytes.length);
+for (let i = 0; i < audioBytes.length; i++) {
+  audioArray[i] = audioBytes.charCodeAt(i);
+}
+const audioBlob = new Blob([audioArray], { type: 'audio/wav' });
+const audioUrl = URL.createObjectURL(audioBlob);
+const audio = new Audio(audioUrl);
+
+// Display subtitles synced to audio
+audio.ontimeupdate = () => {
+  const currentTime = audio.currentTime;
+  const activeWords = data.timestamps.filter(
+    t => currentTime >= t.start && currentTime < t.end
+  );
+  console.log('Current word:', activeWords.map(w => w.word).join(' '));
+};
+
+audio.play();</code></pre>
+
     <h3>Python Example</h3>
     <pre><code>import requests
 
@@ -298,6 +367,38 @@ response = requests.post(
 # Save the audio file
 with open('output.wav', 'wb') as f:
     f.write(response.content)</code></pre>
+
+    <h3>Python Example (with timestamps for subtitles)</h3>
+    <pre><code>import requests
+import base64
+
+response = requests.post(
+    'https://voice.sogni.ai/tts',
+    json={
+        'text': 'Welcome to our video. Today we will learn something new.',
+        'voice': 'af_heart',
+        'timestamps': True
+    }
+)
+
+data = response.json()
+
+# Save the audio file
+audio_bytes = base64.b64decode(data['audio'])
+with open('output.wav', 'wb') as f:
+    f.write(audio_bytes)
+
+# Generate SRT subtitle file
+with open('subtitles.srt', 'w') as f:
+    for i, ts in enumerate(data['timestamps'], 1):
+        start = ts['start']
+        end = ts['end']
+        # Convert to SRT format (HH:MM:SS,mmm)
+        start_str = f"{int(start//3600):02d}:{int((start%3600)//60):02d}:{int(start%60):02d},{int((start%1)*1000):03d}"
+        end_str = f"{int(end//3600):02d}:{int((end%3600)//60):02d}:{int(end%60):02d},{int((end%1)*1000):03d}"
+        f.write(f"{i}\n{start_str} --> {end_str}\n{ts['word']}\n\n")
+
+print(f"Generated {len(data['timestamps'])} subtitle entries")</code></pre>
   </div>
 
   <!-- List Voices Section -->

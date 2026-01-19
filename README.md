@@ -7,6 +7,7 @@ A REST API for audio transcription and text-to-speech synthesis.
 ## Features
 
 - **Audio Transcription**: Upload audio files and get text transcripts using [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
+  - Optional subtitle timing mode returns segments with start/end timestamps
 - **Text-to-Speech**: Convert text to natural-sounding speech using [Kokoro TTS](https://github.com/hexgrad/kokoro)
 - **Multiple Voices**: 20+ voices available for TTS
 - **Fast**: Optimized for Apple Silicon with MLX backend
@@ -145,6 +146,25 @@ Response:
 {
   "success": true,
   "transcript": "The transcribed text...",
+  "filename": "audio.mp3"
+}
+```
+
+#### With Subtitle Timings
+```bash
+curl -X POST http://localhost:3000/transcribe \
+  -F "file=@audio.mp3" \
+  -F "timestamps=true"
+```
+
+Response:
+```json
+{
+  "success": true,
+  "timestamps": [
+    { "start": 0.00, "end": 2.34, "text": "Hello and welcome" },
+    { "start": 2.34, "end": 5.67, "text": "to our presentation" }
+  ],
   "filename": "audio.mp3"
 }
 ```

@@ -364,7 +364,7 @@
 
     <!-- Qwen-specific options -->
     <div id="qwenOptions" class="qwen-options hidden">
-      <div class="form-group" style="margin-bottom: 0;">
+      <div class="form-group">
         <label for="languageSelect">Language:</label>
         <select id="languageSelect">
           <option value="English">English</option>
@@ -375,6 +375,13 @@
           <option value="German">German</option>
           <option value="Spanish">Spanish</option>
         </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 0;">
+        <label for="voiceInstruct">Voice Style Instruction: <span style="font-weight: normal; color: #666;">(optional)</span></label>
+        <input type="text" id="voiceInstruct" placeholder="e.g., 'Speak slowly and calmly' or 'With excitement'" style="margin-bottom: 4px;">
+        <div style="font-size: 12px; color: #856404;">
+          Control tone, speed, and emotion with natural language. Requires CustomVoice model.
+        </div>
       </div>
     </div>
 
@@ -628,6 +635,7 @@
     const ttsText = document.getElementById('ttsText');
     const voiceSelect = document.getElementById('voiceSelect');
     const languageSelect = document.getElementById('languageSelect');
+    const voiceInstruct = document.getElementById('voiceInstruct');
     const speedRange = document.getElementById('speedRange');
     const speedValue = document.getElementById('speedValue');
     const generateBtn = document.getElementById('generateBtn');
@@ -786,17 +794,35 @@
           });
         } else {
           // Qwen TTS with built-in voice
-          response = await fetch(`${API_BASE}/qwen-tts`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              text: text,
-              voice: selectedVoice,
-              language: languageSelect.value,
-            }),
-          });
+          const instruct = voiceInstruct.value.trim();
+
+          if (instruct) {
+            // Use custom-voice endpoint for instruction-based generation
+            response = await fetch(`${API_BASE}/qwen-tts/custom-voice`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: text,
+                speaker: selectedVoice,
+                instruct: instruct,
+              }),
+            });
+          } else {
+            // Standard Qwen TTS
+            response = await fetch(`${API_BASE}/qwen-tts`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: text,
+                voice: selectedVoice,
+                language: languageSelect.value,
+              }),
+            });
+          }
         }
 
         if (!response.ok) {
@@ -814,11 +840,21 @@
         generatedAudio.play();
 
         const isClone = selectedVoice.startsWith('clone:');
+        const instructUsed = currentModel === 'qwen' ? voiceInstruct.value.trim() : '';
         const voiceInfo = isClone
           ? `Clone: ${selectedVoice.replace('clone:', '')}`
           : `Voice: ${selectedVoice}`;
-        const modelUsed = isClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : 'Qwen3');
-        const extraInfo = (isClone || currentModel !== 'kokoro') ? `\nLanguage: ${languageSelect.value}` : `\nSpeed: ${speedRange.value}x`;
+        const modelUsed = isClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : (instructUsed ? 'Qwen3 (CustomVoice)' : 'Qwen3'));
+
+        let extraInfo = '';
+        if (currentModel === 'kokoro') {
+          extraInfo = `\nSpeed: ${speedRange.value}x`;
+        } else {
+          extraInfo = `\nLanguage: ${languageSelect.value}`;
+          if (instructUsed) {
+            extraInfo += `\nInstruction: "${instructUsed}"`;
+          }
+        }
 
         ttsResult.className = 'result success';
         ttsResult.textContent = `Audio generated successfully!\nModel: ${modelUsed}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;

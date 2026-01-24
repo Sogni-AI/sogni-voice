@@ -35,10 +35,27 @@ import signal
 import traceback
 import os
 import pickle
+import io
+import contextlib
 
 # Ensure unbuffered output for reliable communication
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
+
+
+@contextlib.contextmanager
+def suppress_flash_attn_warning():
+    """Suppress the flash-attn warning that qwen_tts prints on import.
+
+    flash-attn is a CUDA-only library that cannot be installed on Apple Silicon.
+    qwen_tts falls back to a PyTorch implementation which works fine on MPS.
+    """
+    original_stdout = sys.stdout
+    sys.stdout = io.StringIO()
+    try:
+        yield
+    finally:
+        sys.stdout = original_stdout
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 VOICE_CLONES_DIR = os.environ.get('QWEN_TTS_VOICE_CLONES_DIR', os.path.join(SCRIPT_DIR, "..", "voice_clones"))
@@ -101,7 +118,8 @@ class QwenTTSDaemon:
             print(f"Model: {model_repo}", file=sys.stderr)
 
             import torch
-            from qwen_tts import Qwen3TTSModel
+            with suppress_flash_attn_warning():
+                from qwen_tts import Qwen3TTSModel
 
             # Use MPS (Apple Silicon GPU) with float32 for numerical stability
             device = "mps" if torch.backends.mps.is_available() else "cpu"

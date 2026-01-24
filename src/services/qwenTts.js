@@ -78,7 +78,7 @@ export class QwenTTSService {
             modelInfo = {
               variant: response.model_variant,
               features: response.features || [],
-              voices: response.voices || [],
+              voices: response.speakers || response.voices || [],
             };
             daemonReady = true;
             resolve();

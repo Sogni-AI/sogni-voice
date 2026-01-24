@@ -309,6 +309,13 @@
     .upload-btn:hover {
       background: #218838;
     }
+    .style-disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .style-disabled input {
+      background: #e9ecef;
+    }
   </style>
 </head>
 <body>
@@ -390,6 +397,19 @@
           <option value="German">German</option>
           <option value="Spanish">Spanish</option>
         </select>
+      </div>
+    </div>
+
+    <!-- Style Instructions - always visible but faded when not available -->
+    <div class="form-group" id="styleInstructGroup" style="margin-bottom: 16px;">
+      <label for="styleInstruct">
+        Style Instructions: <span style="font-weight: normal; color: #666;">(optional)</span>
+        <span id="styleInstructBadge" class="badge" style="font-size: 11px; padding: 2px 6px;">Qwen3 Style</span>
+      </label>
+      <input type="text" id="styleInstruct" placeholder="e.g., valley girl, excited and bubbly, whispering, angry, sad..." style="margin-bottom: 4px;">
+      <div id="styleInstructHint" style="font-size: 12px; color: #666;">Describe how the voice should sound - emotion, accent, speaking style, etc.</div>
+      <div id="styleInstructNotice" class="hidden" style="font-size: 12px; color: #999; font-style: italic; margin-top: 4px;">
+        Requires Qwen3 TTS with style-enabled model. Not compatible with voice clones.
       </div>
     </div>
 
@@ -489,6 +509,8 @@
 
     let currentModel = 'kokoro';
     let qwenEnabled = false;
+    let qwenCustomVoiceEnabled = false;
+    let qwenVoiceCloningEnabled = false;
     let kokoroVoices = [];
     let qwenVoices = [];
     let qwenClones = [];
@@ -509,6 +531,33 @@
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
         loadKokoroVoices();
+      }
+      updateStyleInstructUI();
+    }
+
+    function updateStyleInstructUI() {
+      const styleGroup = document.getElementById('styleInstructGroup');
+      const styleInput = document.getElementById('styleInstruct');
+      const styleHint = document.getElementById('styleInstructHint');
+      const styleNotice = document.getElementById('styleInstructNotice');
+      const styleBadge = document.getElementById('styleInstructBadge');
+
+      const isAvailable = currentModel === 'qwen' && qwenCustomVoiceEnabled;
+
+      if (isAvailable) {
+        styleGroup.classList.remove('style-disabled');
+        styleInput.disabled = false;
+        styleHint.classList.remove('hidden');
+        styleNotice.classList.add('hidden');
+        styleBadge.style.background = '#28a745';
+        styleBadge.textContent = 'Active';
+      } else {
+        styleGroup.classList.add('style-disabled');
+        styleInput.disabled = true;
+        styleHint.classList.add('hidden');
+        styleNotice.classList.remove('hidden');
+        styleBadge.style.background = '#6c757d';
+        styleBadge.textContent = 'Qwen3 Style';
       }
     }
 
@@ -688,6 +737,8 @@
 
         if (!response.ok) {
           qwenEnabled = false;
+          qwenCustomVoiceEnabled = false;
+          qwenVoiceCloningEnabled = false;
           updateQwenAvailability();
           return;
         }
@@ -696,6 +747,15 @@
         qwenEnabled = true;
         qwenVoices = data.voices || [];
         qwenClones = data.clones || [];
+
+        // Check which features are available
+        const features = data.features || [];
+        qwenCustomVoiceEnabled = features.includes('custom_voice');
+        qwenVoiceCloningEnabled = features.includes('voice_cloning');
+
+        // Update UI based on feature availability
+        updateStyleInstructUI();
+        updateVoiceCloningUI();
 
         voiceSelect.innerHTML = '';
 
@@ -706,8 +766,9 @@
           qwenVoices.forEach(voice => {
             const option = document.createElement('option');
             option.value = voice;
-            option.textContent = voice;
-            if (voice === data.default) {
+            // Capitalize voice name for display (e.g., "serena" -> "Serena", "ono_anna" -> "Ono Anna")
+            option.textContent = voice.split('_').map(word => word.charAt(0).toUpperCase() + word.slice(1)).join(' ');
+            if (voice === data.default || voice.toLowerCase() === data.default?.toLowerCase()) {
               option.selected = true;
             }
             optgroup.appendChild(option);
@@ -733,6 +794,8 @@
       } catch (error) {
         console.error('Failed to load Qwen voices:', error);
         qwenEnabled = false;
+        qwenCustomVoiceEnabled = false;
+        qwenVoiceCloningEnabled = false;
         updateQwenAvailability();
       }
     }
@@ -749,6 +812,38 @@
       } else {
         qwenDisabledMessage.classList.add('hidden');
         voiceCloningContent.classList.remove('hidden');
+        updateVoiceCloningUI();
+      }
+    }
+
+    function updateVoiceCloningUI() {
+      const createCloneSection = document.querySelector('#voiceCloningContent .subsection:first-child');
+      const voiceCloningNotice = document.getElementById('voiceCloningNotice');
+
+      if (!qwenVoiceCloningEnabled) {
+        // Hide create clone section if voice_cloning not supported
+        if (createCloneSection) {
+          createCloneSection.style.display = 'none';
+        }
+        // Add/update notice if it doesn't exist
+        if (!voiceCloningNotice) {
+          const notice = document.createElement('div');
+          notice.id = 'voiceCloningNotice';
+          notice.className = 'result';
+          notice.style.marginBottom = '16px';
+          notice.textContent = 'Voice cloning requires a Base model variant. Current model supports Style Instructions instead (see TTS section above).';
+          const content = document.getElementById('voiceCloningContent');
+          content.insertBefore(notice, content.firstChild);
+        }
+      } else {
+        // Show create clone section
+        if (createCloneSection) {
+          createCloneSection.style.display = 'block';
+        }
+        // Remove notice if exists
+        if (voiceCloningNotice) {
+          voiceCloningNotice.remove();
+        }
       }
     }
 
@@ -801,17 +896,34 @@
           });
         } else {
           // Qwen TTS with built-in voice
-          response = await fetch(`${API_BASE}/qwen-tts`, {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              text: text,
-              voice: selectedVoice,
-              language: languageSelect.value,
-            }),
-          });
+          const styleInstruct = document.getElementById('styleInstruct').value.trim();
+
+          // Use custom-voice endpoint if style instructions are provided
+          if (styleInstruct && qwenCustomVoiceEnabled) {
+            response = await fetch(`${API_BASE}/qwen-tts/custom-voice`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: text,
+                speaker: selectedVoice,
+                instruct: styleInstruct,
+              }),
+            });
+          } else {
+            response = await fetch(`${API_BASE}/qwen-tts`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: text,
+                voice: selectedVoice,
+                language: languageSelect.value,
+              }),
+            });
+          }
         }
 
         if (!response.ok) {
@@ -833,10 +945,20 @@
           ? `Clone: ${selectedVoice.replace('clone:', '')}`
           : `Voice: ${selectedVoice}`;
         const modelUsed = isClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : 'Qwen3');
-        const extraInfo = (isClone || currentModel !== 'kokoro') ? `\nLanguage: ${languageSelect.value}` : `\nSpeed: ${speedRange.value}x`;
+        const styleInstruct = document.getElementById('styleInstruct').value.trim();
+        const usedStyle = currentModel === 'qwen' && styleInstruct && qwenCustomVoiceEnabled;
+        let extraInfo = '';
+        if (isClone || currentModel !== 'kokoro') {
+          extraInfo = `\nLanguage: ${languageSelect.value}`;
+          if (usedStyle) {
+            extraInfo += `\nStyle: ${styleInstruct}`;
+          }
+        } else {
+          extraInfo = `\nSpeed: ${speedRange.value}x`;
+        }
 
         ttsResult.className = 'result success';
-        ttsResult.textContent = `Audio generated successfully!\nModel: ${modelUsed}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;
+        ttsResult.textContent = `Audio generated successfully!\nModel: ${modelUsed}${usedStyle ? ' (Custom Voice)' : ''}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;
         ttsTiming.textContent = `Elapsed time: ${elapsed}s`;
         ttsStatus.textContent = 'Speech generated successfully!';
       } catch (error) {
@@ -1187,15 +1309,24 @@
           const data = await response.json();
           qwenEnabled = true;
           qwenClones = data.clones || [];
+          // Check which features are available
+          const features = data.features || [];
+          qwenCustomVoiceEnabled = features.includes('custom_voice');
+          qwenVoiceCloningEnabled = features.includes('voice_cloning');
           updateVoiceCloneList();
         } else {
           qwenEnabled = false;
+          qwenCustomVoiceEnabled = false;
+          qwenVoiceCloningEnabled = false;
         }
       } catch {
         qwenEnabled = false;
+        qwenCustomVoiceEnabled = false;
+        qwenVoiceCloningEnabled = false;
       }
 
       updateQwenAvailability();
+      updateStyleInstructUI();
     }
 
     initialize();

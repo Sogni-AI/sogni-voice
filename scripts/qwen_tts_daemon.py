@@ -85,8 +85,8 @@ MODEL_VARIANTS = {
     },
 }
 
-# Available speakers for CustomVoice model
-SPEAKERS = ['Chelsie', 'Ethan', 'Serena', 'Vivian', 'Ryan', 'Aiden', 'Eric', 'Dylan']
+# Available speakers for CustomVoice model (from qwen_tts library)
+SPEAKERS = ['Aiden', 'Dylan', 'Eric', 'Ono_Anna', 'Ryan', 'Serena', 'Sohee', 'Uncle_Fu', 'Vivian']
 
 # Supported languages
 LANGUAGES = ['auto', 'chinese', 'english', 'french', 'german', 'italian', 'japanese', 'korean', 'portuguese', 'russian', 'spanish']
@@ -222,9 +222,10 @@ class QwenTTSDaemon:
         try:
             import soundfile as sf
 
+            # Speaker names must be lowercase for the model
             wavs, sr = self.model.generate_custom_voice(
                 text=text,
-                speaker=speaker,
+                speaker=speaker.lower(),
                 instruct=instruct,
             )
 

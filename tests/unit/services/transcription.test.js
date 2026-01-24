@@ -166,6 +166,64 @@ describe('TranscriptionService', () => {
 
       await expect(transcribePromise).rejects.toThrow('Daemon process terminated');
     });
+
+    it('should pass wordTimestamps option to daemon', async () => {
+      const transcribePromise = service.transcribe('/path/to/audio.mp3', { wordTimestamps: true });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+
+      expect(request.audio_path).toBe('/path/to/audio.mp3');
+      expect(request.word_timestamps).toBe(true);
+
+      // Simulate response with word timestamps
+      const wordTimestamps = [
+        { start: 0.0, end: 0.5, text: 'This' },
+        { start: 0.5, end: 0.8, text: 'is' },
+        { start: 0.8, end: 1.0, text: 'a' },
+        { start: 1.0, end: 1.5, text: 'test' },
+      ];
+      mockStdout.push(`{"id":"${request.id}","success":true,"text":"This is a test","timestamps":${JSON.stringify(wordTimestamps)}}\n`);
+
+      const result = await transcribePromise;
+      expect(result.text).toBe('This is a test');
+      expect(result.timestamps).toEqual(wordTimestamps);
+    });
+
+    it('should pass timestamps option to daemon for sentence-level', async () => {
+      const transcribePromise = service.transcribe('/path/to/audio.mp3', { timestamps: true });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+
+      expect(request.timestamps).toBe(true);
+      expect(request.word_timestamps).toBe(false);
+
+      // Simulate response with sentence timestamps
+      const sentenceTimestamps = [
+        { start: 0.0, end: 2.5, text: 'This is a test sentence.' },
+      ];
+      mockStdout.push(`{"id":"${request.id}","success":true,"text":"This is a test sentence.","timestamps":${JSON.stringify(sentenceTimestamps)}}\n`);
+
+      const result = await transcribePromise;
+      expect(result.timestamps).toEqual(sentenceTimestamps);
+    });
+
+    it('should not include timestamps when not requested', async () => {
+      const transcribePromise = service.transcribe('/path/to/audio.mp3');
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+
+      expect(request.timestamps).toBe(false);
+      expect(request.word_timestamps).toBe(false);
+
+      mockStdout.push(`{"id":"${request.id}","success":true,"text":"This is a test"}\n`);
+
+      const result = await transcribePromise;
+      expect(result.text).toBe('This is a test');
+      expect(result.timestamps).toBeUndefined();
+    });
   });
 
   describe('shutdown', () => {

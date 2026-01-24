@@ -107,18 +107,62 @@ class ParakeetDaemon:
         return segments
 
     def _extract_word_timestamps(self, result) -> list:
-        """Extract word-level timestamp segments from transcription result."""
+        """Extract word-level timestamp segments from transcription result.
+
+        Parakeet-mlx returns sub-word tokens (BPE). Tokens starting with a space
+        begin a new word, others continue the previous word. This method merges
+        tokens into complete words.
+        """
         segments = []
 
         try:
-            # parakeet-mlx returns AlignedResult with words attribute
-            if hasattr(result, 'words'):
-                for word in result.words:
-                    segments.append({
-                        "start": word.start,
-                        "end": word.end,
-                        "text": word.text.strip()
-                    })
+            # parakeet-mlx returns AlignedResult with tokens property
+            # tokens are sub-word BPE tokens that need to be merged into words
+            if hasattr(result, 'tokens') and result.tokens:
+                current_word = None
+
+                for token in result.tokens:
+                    text = token.text
+
+                    # Token starting with space = new word
+                    if text.startswith(' '):
+                        # Save previous word if exists
+                        if current_word is not None:
+                            word_text = current_word['text'].strip()
+                            if word_text:
+                                segments.append({
+                                    "start": current_word['start'],
+                                    "end": current_word['end'],
+                                    "text": word_text
+                                })
+                        # Start new word
+                        current_word = {
+                            'text': text,
+                            'start': token.start,
+                            'end': token.end
+                        }
+                    elif current_word is None:
+                        # First token doesn't start with space
+                        current_word = {
+                            'text': text,
+                            'start': token.start,
+                            'end': token.end
+                        }
+                    else:
+                        # Continue current word
+                        current_word['text'] += text
+                        current_word['end'] = token.end
+
+                # Don't forget the last word
+                if current_word is not None:
+                    word_text = current_word['text'].strip()
+                    if word_text:
+                        segments.append({
+                            "start": current_word['start'],
+                            "end": current_word['end'],
+                            "text": word_text
+                        })
+
         except Exception as e:
             print(f"Error extracting word timestamps: {e}", file=sys.stderr)
 

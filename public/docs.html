@@ -165,7 +165,12 @@
       <tr>
         <td><code>timestamps</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to include subtitle timings with start/end times for each segment</td>
+        <td>Set to "true" to include sentence-level timings with start/end times for each segment</td>
+      </tr>
+      <tr>
+        <td><code>wordTimestamps</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Set to "true" to include word-level timings with start/end times for each word (overrides timestamps)</td>
       </tr>
     </table>
 
@@ -176,22 +181,35 @@
   "filename": "recording.mp3"
 }</code></pre>
 
-    <h3>Response (with timestamps)</h3>
-    <p>When <code>timestamps=true</code>, the response includes segment-level timing data for subtitle generation:</p>
+    <h3>Response (with sentence timestamps)</h3>
+    <p>When <code>timestamps=true</code>, the response includes sentence-level timing data for subtitle generation:</p>
     <pre><code>{
   "success": true,
   "timestamps": [
     { "start": 0.00, "end": 2.34, "text": "Hello and welcome" },
     { "start": 2.34, "end": 5.67, "text": "to our presentation today" },
     { "start": 5.67, "end": 8.90, "text": "we will cover several topics" }
-  ],
-  "filename": "recording.mp3"
+  ]
+}</code></pre>
+
+    <h3>Response (with word timestamps)</h3>
+    <p>When <code>wordTimestamps=true</code>, the response includes word-level timing data for precise subtitle synchronization:</p>
+    <pre><code>{
+  "success": true,
+  "timestamps": [
+    { "start": 0.00, "end": 0.48, "text": "Hello" },
+    { "start": 0.48, "end": 0.72, "text": "and" },
+    { "start": 0.72, "end": 1.20, "text": "welcome" },
+    { "start": 1.20, "end": 1.44, "text": "to" },
+    { "start": 1.44, "end": 1.68, "text": "our" },
+    { "start": 1.68, "end": 2.34, "text": "presentation" }
+  ]
 }</code></pre>
     <p>Each timestamp object contains:</p>
     <ul>
       <li><code>start</code> - Start time in seconds</li>
       <li><code>end</code> - End time in seconds</li>
-      <li><code>text</code> - The transcribed text for that segment</li>
+      <li><code>text</code> - The transcribed text (sentence or word depending on mode)</li>
     </ul>
 
     <h3>cURL Examples</h3>
@@ -199,10 +217,15 @@
 curl -X POST https://voice.sogni.ai/transcribe \
   -F "file=@/path/to/audio.mp3"
 
-# With subtitle timings
+# With sentence-level timings
 curl -X POST https://voice.sogni.ai/transcribe \
   -F "file=@/path/to/audio.mp3" \
-  -F "timestamps=true"</code></pre>
+  -F "timestamps=true"
+
+# With word-level timings
+curl -X POST https://voice.sogni.ai/transcribe \
+  -F "file=@/path/to/audio.mp3" \
+  -F "wordTimestamps=true"</code></pre>
 
     <h3>JavaScript Example</h3>
     <pre><code>const formData = new FormData();
@@ -216,7 +239,7 @@ const response = await fetch('https://voice.sogni.ai/transcribe', {
 const data = await response.json();
 console.log(data.transcript);</code></pre>
 
-    <h3>JavaScript Example (with subtitle timings)</h3>
+    <h3>JavaScript Example (with sentence timings)</h3>
     <pre><code>const formData = new FormData();
 formData.append('file', audioFile);
 formData.append('timestamps', 'true');
@@ -235,6 +258,32 @@ data.timestamps.forEach(seg => {
   console.log(`[${start} → ${end}] ${seg.text}`);
 });</code></pre>
 
+    <h3>JavaScript Example (with word-level timings)</h3>
+    <pre><code>const formData = new FormData();
+formData.append('file', audioFile);
+formData.append('wordTimestamps', 'true');
+
+const response = await fetch('https://voice.sogni.ai/transcribe', {
+  method: 'POST',
+  body: formData
+});
+
+const data = await response.json();
+
+// Display word-by-word timings
+data.timestamps.forEach(word => {
+  const start = word.start.toFixed(2);
+  const end = word.end.toFixed(2);
+  console.log(`[${start} → ${end}] ${word.text}`);
+});
+
+// Or build full text with timing metadata
+const words = data.timestamps.map(w => ({
+  text: w.text,
+  startMs: Math.round(w.start * 1000),
+  endMs: Math.round(w.end * 1000)
+}));</code></pre>
+
     <h3>Python Example</h3>
     <pre><code>import requests
 
@@ -247,7 +296,7 @@ with open('audio.mp3', 'rb') as f:
 data = response.json()
 print(data['transcript'])</code></pre>
 
-    <h3>Python Example (with subtitle timings)</h3>
+    <h3>Python Example (with sentence timings)</h3>
     <pre><code>import requests
 
 with open('audio.mp3', 'rb') as f:
@@ -270,6 +319,34 @@ with open('subtitles.srt', 'w') as f:
         f.write(f"{i}\n{start_str} --> {end_str}\n{seg['text']}\n\n")
 
 print(f"Generated {len(data['timestamps'])} subtitle entries")</code></pre>
+
+    <h3>Python Example (with word-level timings)</h3>
+    <pre><code>import requests
+
+with open('audio.mp3', 'rb') as f:
+    response = requests.post(
+        'https://voice.sogni.ai/transcribe',
+        files={'file': f},
+        data={'wordTimestamps': 'true'}
+    )
+
+data = response.json()
+
+# Print word-by-word timing
+for word in data['timestamps']:
+    print(f"[{word['start']:.2f} → {word['end']:.2f}] {word['text']}")
+
+# Generate WebVTT with word highlighting (for karaoke-style subtitles)
+with open('subtitles.vtt', 'w') as f:
+    f.write("WEBVTT\n\n")
+    for i, word in enumerate(data['timestamps']):
+        start = word['start']
+        end = word['end']
+        start_str = f"{int(start//3600):02d}:{int((start%3600)//60):02d}:{start%60:06.3f}"
+        end_str = f"{int(end//3600):02d}:{int((end%3600)//60):02d}:{end%60:06.3f}"
+        f.write(f"{i+1}\n{start_str} --> {end_str}\n{word['text']}\n\n")
+
+print(f"Generated {len(data['timestamps'])} word entries")</code></pre>
   </div>
 
   <!-- TTS Section -->

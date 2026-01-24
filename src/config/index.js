@@ -22,4 +22,14 @@ export const config = {
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
   },
+  qwenTts: {
+    enabled: process.env.QWEN_TTS_ENABLED === 'true',
+    modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',
+    defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+    defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
+    timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 300000, // 5 minutes for voice cloning
+    daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
+    preWarmDaemon: process.env.PREWARM_QWEN_TTS === 'true',
+    voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
+  },
 };

@@ -50,7 +50,7 @@ class ParakeetDaemon:
             traceback.print_exc(file=sys.stderr)
             return False
 
-    def transcribe(self, audio_path: str, timestamps: bool = False) -> dict:
+    def transcribe(self, audio_path: str, timestamps: bool = False, word_timestamps: bool = False) -> dict:
         """Transcribe audio file. Returns result dict with optional timestamps."""
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
@@ -70,8 +70,12 @@ class ParakeetDaemon:
 
             response = {"success": True, "text": text.strip()}
 
-            # Extract timestamps if requested
-            if timestamps:
+            # Extract timestamps if requested (word-level takes priority)
+            if word_timestamps:
+                segments = self._extract_word_timestamps(result)
+                if segments:
+                    response["timestamps"] = segments
+            elif timestamps:
                 segments = self._extract_timestamps(result)
                 if segments:
                     response["timestamps"] = segments
@@ -85,7 +89,7 @@ class ParakeetDaemon:
             return {"success": False, "error": str(e)}
 
     def _extract_timestamps(self, result) -> list:
-        """Extract timestamp segments from transcription result."""
+        """Extract sentence-level timestamp segments from transcription result."""
         segments = []
 
         try:
@@ -99,6 +103,24 @@ class ParakeetDaemon:
                     })
         except Exception as e:
             print(f"Error extracting timestamps: {e}", file=sys.stderr)
+
+        return segments
+
+    def _extract_word_timestamps(self, result) -> list:
+        """Extract word-level timestamp segments from transcription result."""
+        segments = []
+
+        try:
+            # parakeet-mlx returns AlignedResult with words attribute
+            if hasattr(result, 'words'):
+                for word in result.words:
+                    segments.append({
+                        "start": word.start,
+                        "end": word.end,
+                        "text": word.text.strip()
+                    })
+        except Exception as e:
+            print(f"Error extracting word timestamps: {e}", file=sys.stderr)
 
         return segments
 
@@ -126,7 +148,8 @@ class ParakeetDaemon:
             return {"id": request_id, "success": False, "error": "Missing audio_path"}
 
         timestamps = request.get("timestamps", False)
-        result = self.transcribe(audio_path, timestamps=timestamps)
+        word_timestamps = request.get("word_timestamps", False)
+        result = self.transcribe(audio_path, timestamps=timestamps, word_timestamps=word_timestamps)
         result["id"] = request_id
         return result
 

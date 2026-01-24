@@ -22,7 +22,9 @@ export const transcribeRoutes = [
         payload: Joi.object({
           file: Joi.any().required().description('Audio file to transcribe'),
           timestamps: Joi.string().valid('true', 'false').optional()
-            .description('Include subtitle timings in response'),
+            .description('Include sentence-level subtitle timings in response'),
+          wordTimestamps: Joi.string().valid('true', 'false').optional()
+            .description('Include word-level subtitle timings in response (overrides timestamps)'),
         }),
       },
       description: 'Transcribe an audio file to text',
@@ -32,8 +34,9 @@ export const transcribeRoutes = [
       let tempDir = null;
 
       try {
-        const { file, timestamps: timestampsParam } = request.payload;
+        const { file, timestamps: timestampsParam, wordTimestamps: wordTimestampsParam } = request.payload;
         const timestamps = timestampsParam === 'true';
+        const wordTimestamps = wordTimestampsParam === 'true';
 
         if (!file || !file.hapi) {
           throw Boom.badRequest('No audio file provided');
@@ -51,10 +54,10 @@ export const transcribeRoutes = [
         await pipeline(file, writeStream);
 
         // Perform transcription
-        const result = await transcriptionService.transcribe(tempFilePath, { timestamps });
+        const result = await transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps });
 
         // When timestamps requested, only return timestamps for programmatic use
-        if (timestamps && result.timestamps) {
+        if ((timestamps || wordTimestamps) && result.timestamps) {
           return {
             success: true,
             timestamps: result.timestamps,

@@ -32,6 +32,12 @@
       border-bottom: 2px solid #007bff;
       padding-bottom: 8px;
     }
+    h3 {
+      margin-top: 20px;
+      margin-bottom: 12px;
+      color: #555;
+      font-size: 16px;
+    }
     .controls {
       display: flex;
       gap: 12px;
@@ -60,6 +66,24 @@
       background: #dc3545;
       animation: pulse 1s infinite;
     }
+    button.danger {
+      background: #dc3545;
+      padding: 8px 16px;
+      font-size: 14px;
+    }
+    button.danger:hover:not(:disabled) {
+      background: #c82333;
+    }
+    button.secondary {
+      background: #6c757d;
+    }
+    button.secondary:hover:not(:disabled) {
+      background: #545b62;
+    }
+    button.small {
+      padding: 8px 16px;
+      font-size: 14px;
+    }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
       50% { opacity: 0.7; }
@@ -83,15 +107,20 @@
       border-color: #c3e6cb;
       color: #155724;
     }
-    textarea {
+    textarea, input[type="text"] {
       width: 100%;
-      min-height: 100px;
       padding: 12px;
       border: 1px solid #ced4da;
       border-radius: 6px;
       font-size: 16px;
-      resize: vertical;
       margin-bottom: 12px;
+    }
+    textarea {
+      min-height: 100px;
+      resize: vertical;
+    }
+    input[type="text"] {
+      margin-bottom: 0;
     }
     label {
       display: block;
@@ -137,6 +166,134 @@
       0% { transform: rotate(0deg); }
       100% { transform: rotate(360deg); }
     }
+    .model-selector {
+      display: flex;
+      gap: 12px;
+      margin-bottom: 20px;
+      padding: 12px;
+      background: #e9ecef;
+      border-radius: 6px;
+    }
+    .model-selector label {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      cursor: pointer;
+      margin-bottom: 0;
+      font-weight: normal;
+    }
+    .model-selector input[type="radio"] {
+      width: 16px;
+      height: 16px;
+      cursor: pointer;
+    }
+    .voice-clone-list {
+      margin-top: 16px;
+    }
+    .voice-clone-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 12px;
+      background: #f8f9fa;
+      border: 1px solid #dee2e6;
+      border-radius: 6px;
+      margin-bottom: 8px;
+    }
+    .voice-clone-item .clone-name {
+      font-weight: 500;
+      color: #333;
+    }
+    .voice-clone-item .clone-actions {
+      display: flex;
+      gap: 8px;
+    }
+    .hidden {
+      display: none !important;
+    }
+    .qwen-options {
+      padding: 12px;
+      background: #fff3cd;
+      border: 1px solid #ffc107;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    .qwen-options.disabled {
+      opacity: 0.5;
+      pointer-events: none;
+    }
+    .divider {
+      border-top: 1px solid #dee2e6;
+      margin: 24px 0;
+    }
+    .subsection {
+      padding: 16px;
+      background: #f8f9fa;
+      border-radius: 6px;
+      margin-bottom: 16px;
+    }
+    .inline-input {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .inline-input input {
+      flex: 1;
+    }
+    .badge {
+      display: inline-block;
+      padding: 2px 8px;
+      font-size: 12px;
+      border-radius: 12px;
+      background: #007bff;
+      color: white;
+      margin-left: 8px;
+    }
+    .badge.warning {
+      background: #ffc107;
+      color: #212529;
+    }
+    .confirm-dialog {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0,0,0,0.5);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      z-index: 1000;
+    }
+    .confirm-dialog-content {
+      background: white;
+      padding: 24px;
+      border-radius: 8px;
+      max-width: 400px;
+      text-align: center;
+    }
+    .confirm-dialog-content p {
+      margin-bottom: 20px;
+    }
+    .confirm-dialog-content .buttons {
+      display: flex;
+      gap: 12px;
+      justify-content: center;
+    }
+    .upload-btn {
+      background: #28a745;
+      color: white;
+      border: none;
+      padding: 12px 24px;
+      border-radius: 6px;
+      cursor: pointer;
+      font-size: 16px;
+      transition: background 0.2s;
+      display: inline-block;
+    }
+    .upload-btn:hover {
+      background: #218838;
+    }
   </style>
 </head>
 <body>
@@ -149,12 +306,14 @@
 
     <div class="controls">
       <button id="recordBtn">Start Recording</button>
-      <button id="stopBtn" disabled>Stop Recording</button>
-      <div class="form-group" style="margin-bottom: 0; margin-left: 12px;">
-        <label for="subtitlesCheck" style="display: inline-flex; align-items: center; gap: 6px; cursor: pointer;">
-          <input type="checkbox" id="subtitlesCheck" style="width: 16px; height: 16px; cursor: pointer;">
-          Include subtitle timings
-        </label>
+      <button id="stopBtn" style="display: none;">Stop Recording</button>
+      <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0; margin-left: 12px;">
+        <label style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Subtitle timings:</label>
+        <select id="timestampMode" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px;">
+          <option value="none">None</option>
+          <option value="sentence">By sentence</option>
+          <option value="word">By word</option>
+        </select>
       </div>
     </div>
 
@@ -173,6 +332,17 @@
     <h2>2. Text to Speech</h2>
     <p>Enter text and receive a voice recording you can play.</p>
 
+    <div class="model-selector">
+      <label>
+        <input type="radio" name="ttsModel" value="kokoro" checked>
+        Kokoro TTS <span class="badge">Fast</span>
+      </label>
+      <label>
+        <input type="radio" name="ttsModel" value="qwen" id="qwenRadio">
+        Qwen3 TTS <span class="badge warning">Voice Cloning</span>
+      </label>
+    </div>
+
     <div class="form-group">
       <label for="ttsText">Text to speak:</label>
       <textarea id="ttsText" placeholder="Enter the text you want to convert to speech...">Hello! This is a test of the text to speech system. How does it sound?</textarea>
@@ -186,9 +356,25 @@
         </select>
       </div>
 
-      <div class="form-group" style="margin-bottom: 0;">
+      <div class="form-group" style="margin-bottom: 0;" id="speedControl">
         <label for="speedRange">Speed: <span class="speed-value" id="speedValue">1.0</span></label>
         <input type="range" id="speedRange" min="0.5" max="2.0" step="0.1" value="1.0">
+      </div>
+    </div>
+
+    <!-- Qwen-specific options -->
+    <div id="qwenOptions" class="qwen-options hidden">
+      <div class="form-group" style="margin-bottom: 0;">
+        <label for="languageSelect">Language:</label>
+        <select id="languageSelect">
+          <option value="English">English</option>
+          <option value="Chinese">Chinese</option>
+          <option value="Japanese">Japanese</option>
+          <option value="Korean">Korean</option>
+          <option value="French">French</option>
+          <option value="German">German</option>
+          <option value="Spanish">Spanish</option>
+        </select>
       </div>
     </div>
 
@@ -205,8 +391,111 @@
     <div class="status" id="ttsTiming"></div>
   </div>
 
+  <!-- Voice Cloning Section (Qwen3 only) -->
+  <div class="section" id="voiceCloningSection">
+    <h2>3. Voice Cloning (Qwen3 TTS)</h2>
+    <p>Record a sample of your voice (3-10 seconds) to create a voice clone that can be used for text-to-speech.</p>
+
+    <div id="qwenDisabledMessage" class="result error hidden">
+      Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=true</code> in your environment.
+    </div>
+
+    <div id="voiceCloningContent">
+      <div class="subsection">
+        <h3>Create New Voice Clone</h3>
+
+        <div class="form-group">
+          <label for="cloneName">Clone Name:</label>
+          <input type="text" id="cloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
+        </div>
+
+        <div class="form-group" id="transcriptGroup" style="display: none;">
+          <label for="cloneTranscript">Detected Transcript: <span id="transcribeStatus" style="font-size: 14px; color: #666; font-weight: normal;">(edit if needed)</span></label>
+          <textarea id="cloneTranscript" placeholder="Edit the transcript if needed..." style="min-height: 60px;"></textarea>
+          <button id="transcribeCloneBtn" class="secondary small" style="margin-top: 8px; display: none;">Retry Transcription</button>
+        </div>
+
+        <div class="controls">
+          <button id="recordCloneBtn">Record Voice Sample</button>
+          <button id="stopCloneBtn" style="display: none;">Stop Recording</button>
+          <span id="uploadOrLabel" style="color: #666; margin: 0 8px;">or</span>
+          <label for="uploadCloneFile" class="upload-btn" id="uploadCloneLabel">
+            Upload Audio File
+            <input type="file" id="uploadCloneFile" accept="audio/*" style="display: none;">
+          </label>
+        </div>
+
+        <div class="status" id="cloneRecordStatus">Ready to record or upload voice sample (3-10 seconds recommended)</div>
+
+        <label>Reference Audio:</label>
+        <audio id="cloneRecordedAudio" controls style="display: none;"></audio>
+        <div id="uploadedFileName" style="display: none; margin-top: 8px; color: #666; font-size: 14px;"></div>
+
+        <div class="controls" style="margin-top: 12px;">
+          <button id="createCloneBtn" disabled>Create Voice Clone</button>
+        </div>
+
+        <div class="result" id="cloneResult">Record or upload a voice sample (3-10 seconds recommended).</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="subsection">
+        <h3>Your Voice Clones</h3>
+        <div id="voiceCloneList" class="voice-clone-list">
+          <p style="color: #666;">No voice clones yet. Create one above!</p>
+        </div>
+        <button id="refreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Confirmation Dialog -->
+  <div id="confirmDialog" class="confirm-dialog hidden">
+    <div class="confirm-dialog-content">
+      <p id="confirmMessage">Are you sure?</p>
+      <div class="buttons">
+        <button id="confirmYes" class="danger">Delete</button>
+        <button id="confirmNo" class="secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const API_BASE = window.location.origin;
+
+    // ==================== Model Selection ====================
+    const modelRadios = document.querySelectorAll('input[name="ttsModel"]');
+    const qwenOptions = document.getElementById('qwenOptions');
+    const speedControl = document.getElementById('speedControl');
+    const voiceCloningSection = document.getElementById('voiceCloningSection');
+    const voiceCloningContent = document.getElementById('voiceCloningContent');
+    const qwenDisabledMessage = document.getElementById('qwenDisabledMessage');
+
+    let currentModel = 'kokoro';
+    let qwenEnabled = false;
+    let kokoroVoices = [];
+    let qwenVoices = [];
+    let qwenClones = [];
+
+    modelRadios.forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        currentModel = e.target.value;
+        updateModelUI();
+      });
+    });
+
+    function updateModelUI() {
+      if (currentModel === 'qwen') {
+        qwenOptions.classList.remove('hidden');
+        speedControl.classList.add('hidden'); // Qwen doesn't support speed control
+        loadQwenVoices();
+      } else {
+        qwenOptions.classList.add('hidden');
+        speedControl.classList.remove('hidden');
+        loadKokoroVoices();
+      }
+    }
 
     // ==================== Transcription ====================
     let mediaRecorder = null;
@@ -214,7 +503,7 @@
 
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
-    const subtitlesCheck = document.getElementById('subtitlesCheck');
+    const timestampMode = document.getElementById('timestampMode');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
@@ -252,10 +541,9 @@
         };
 
         mediaRecorder.start();
-        recordBtn.disabled = true;
-        recordBtn.classList.add('recording');
-        recordBtn.textContent = 'Recording...';
-        stopBtn.disabled = false;
+        recordBtn.style.display = 'none';
+        stopBtn.style.display = 'inline-block';
+        document.getElementById('subtitlesGroup').style.display = 'none';
         recordStatus.textContent = 'Recording in progress...';
         transcriptResult.className = 'result';
         transcriptResult.textContent = 'Recording...';
@@ -270,10 +558,9 @@
     function stopRecording() {
       if (mediaRecorder && mediaRecorder.state !== 'inactive') {
         mediaRecorder.stop();
-        recordBtn.disabled = false;
-        recordBtn.classList.remove('recording');
-        recordBtn.textContent = 'Start Recording';
-        stopBtn.disabled = true;
+        recordBtn.style.display = 'inline-block';
+        stopBtn.style.display = 'none';
+        document.getElementById('subtitlesGroup').style.display = 'inline-block';
         recordStatus.textContent = 'Processing...';
       }
     }
@@ -282,13 +569,15 @@
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
 
       const startTime = performance.now();
-      const includeTimestamps = subtitlesCheck.checked;
+      const mode = timestampMode.value;
 
       try {
         const formData = new FormData();
         formData.append('file', audioBlob, 'recording.webm');
-        if (includeTimestamps) {
+        if (mode === 'sentence') {
           formData.append('timestamps', 'true');
+        } else if (mode === 'word') {
+          formData.append('wordTimestamps', 'true');
         }
 
         const response = await fetch(`${API_BASE}/transcribe`, {
@@ -306,7 +595,8 @@
 
           // When timestamps requested, API only returns timestamps (no transcript)
           if (data.timestamps && data.timestamps.length > 0) {
-            resultText = 'Subtitle Timings:\n';
+            const label = mode === 'word' ? 'Word Timings:' : 'Subtitle Timings:';
+            resultText = label + '\n';
             resultText += data.timestamps.map(seg =>
               `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}`
             ).join('\n');
@@ -337,6 +627,7 @@
     // ==================== Text-to-Speech ====================
     const ttsText = document.getElementById('ttsText');
     const voiceSelect = document.getElementById('voiceSelect');
+    const languageSelect = document.getElementById('languageSelect');
     const speedRange = document.getElementById('speedRange');
     const speedValue = document.getElementById('speedValue');
     const generateBtn = document.getElementById('generateBtn');
@@ -351,14 +642,16 @@
 
     generateBtn.addEventListener('click', generateSpeech);
 
-    // Load available voices on page load
-    async function loadVoices() {
+    // Load Kokoro voices
+    async function loadKokoroVoices() {
       try {
         const response = await fetch(`${API_BASE}/tts/voices`);
         const data = await response.json();
 
+        kokoroVoices = data.voices || [];
+
         voiceSelect.innerHTML = '';
-        data.voices.forEach(voice => {
+        kokoroVoices.forEach(voice => {
           const option = document.createElement('option');
           option.value = voice;
           option.textContent = voice;
@@ -368,8 +661,79 @@
           voiceSelect.appendChild(option);
         });
       } catch (error) {
-        console.error('Failed to load voices:', error);
+        console.error('Failed to load Kokoro voices:', error);
         voiceSelect.innerHTML = '<option value="af_heart">af_heart (default)</option>';
+      }
+    }
+
+    // Load Qwen voices
+    async function loadQwenVoices() {
+      try {
+        const response = await fetch(`${API_BASE}/qwen-tts/voices`);
+
+        if (!response.ok) {
+          qwenEnabled = false;
+          updateQwenAvailability();
+          return;
+        }
+
+        const data = await response.json();
+        qwenEnabled = true;
+        qwenVoices = data.voices || [];
+        qwenClones = data.clones || [];
+
+        voiceSelect.innerHTML = '';
+
+        // Add built-in voices
+        if (qwenVoices.length > 0) {
+          const optgroup = document.createElement('optgroup');
+          optgroup.label = 'Built-in Voices';
+          qwenVoices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice;
+            option.textContent = voice;
+            if (voice === data.default) {
+              option.selected = true;
+            }
+            optgroup.appendChild(option);
+          });
+          voiceSelect.appendChild(optgroup);
+        }
+
+        // Add cloned voices
+        if (qwenClones.length > 0) {
+          const cloneGroup = document.createElement('optgroup');
+          cloneGroup.label = 'Your Voice Clones';
+          qwenClones.forEach(clone => {
+            const option = document.createElement('option');
+            option.value = `clone:${clone}`;
+            option.textContent = clone;
+            cloneGroup.appendChild(option);
+          });
+          voiceSelect.appendChild(cloneGroup);
+        }
+
+        updateQwenAvailability();
+        updateVoiceCloneList();
+      } catch (error) {
+        console.error('Failed to load Qwen voices:', error);
+        qwenEnabled = false;
+        updateQwenAvailability();
+      }
+    }
+
+    function updateQwenAvailability() {
+      const qwenRadio = document.getElementById('qwenRadio');
+
+      if (!qwenEnabled) {
+        qwenDisabledMessage.classList.remove('hidden');
+        voiceCloningContent.classList.add('hidden');
+        if (currentModel === 'qwen') {
+          voiceSelect.innerHTML = '<option>Qwen TTS not available</option>';
+        }
+      } else {
+        qwenDisabledMessage.classList.add('hidden');
+        voiceCloningContent.classList.remove('hidden');
       }
     }
 
@@ -391,17 +755,49 @@
       const startTime = performance.now();
 
       try {
-        const response = await fetch(`${API_BASE}/tts`, {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            text: text,
-            voice: voiceSelect.value,
-            speed: parseFloat(speedRange.value),
-          }),
-        });
+        let response;
+        const selectedVoice = voiceSelect.value;
+
+        // Always route cloned voices to Qwen TTS, regardless of selected model
+        if (selectedVoice.startsWith('clone:')) {
+          const cloneId = selectedVoice.replace('clone:', '');
+          response = await fetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: text,
+              language: languageSelect.value,
+            }),
+          });
+        } else if (currentModel === 'kokoro') {
+          // Kokoro TTS
+          response = await fetch(`${API_BASE}/tts`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: text,
+              voice: selectedVoice,
+              speed: parseFloat(speedRange.value),
+            }),
+          });
+        } else {
+          // Qwen TTS with built-in voice
+          response = await fetch(`${API_BASE}/qwen-tts`, {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+              text: text,
+              voice: selectedVoice,
+              language: languageSelect.value,
+            }),
+          });
+        }
 
         if (!response.ok) {
           const errorData = await response.json();
@@ -417,8 +813,15 @@
         generatedAudio.style.display = 'block';
         generatedAudio.play();
 
+        const isClone = selectedVoice.startsWith('clone:');
+        const voiceInfo = isClone
+          ? `Clone: ${selectedVoice.replace('clone:', '')}`
+          : `Voice: ${selectedVoice}`;
+        const modelUsed = isClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : 'Qwen3');
+        const extraInfo = (isClone || currentModel !== 'kokoro') ? `\nLanguage: ${languageSelect.value}` : `\nSpeed: ${speedRange.value}x`;
+
         ttsResult.className = 'result success';
-        ttsResult.textContent = `Audio generated successfully!\nVoice: ${voiceSelect.value}\nSpeed: ${speedRange.value}x\nText length: ${text.length} characters`;
+        ttsResult.textContent = `Audio generated successfully!\nModel: ${modelUsed}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;
         ttsTiming.textContent = `Elapsed time: ${elapsed}s`;
         ttsStatus.textContent = 'Speech generated successfully!';
       } catch (error) {
@@ -430,8 +833,350 @@
       }
     }
 
-    // Initialize
-    loadVoices();
+    // ==================== Voice Cloning ====================
+    let cloneMediaRecorder = null;
+    let cloneAudioChunks = [];
+    let cloneAudioBlob = null;
+
+    const recordCloneBtn = document.getElementById('recordCloneBtn');
+    const stopCloneBtn = document.getElementById('stopCloneBtn');
+    const uploadCloneFile = document.getElementById('uploadCloneFile');
+    const uploadedFileName = document.getElementById('uploadedFileName');
+    const cloneRecordStatus = document.getElementById('cloneRecordStatus');
+    const cloneRecordedAudio = document.getElementById('cloneRecordedAudio');
+    const cloneName = document.getElementById('cloneName');
+    const cloneTranscript = document.getElementById('cloneTranscript');
+    const transcriptGroup = document.getElementById('transcriptGroup');
+    const transcribeCloneBtn = document.getElementById('transcribeCloneBtn');
+    const transcribeStatus = document.getElementById('transcribeStatus');
+    const createCloneBtn = document.getElementById('createCloneBtn');
+    const cloneResult = document.getElementById('cloneResult');
+    const refreshClonesBtn = document.getElementById('refreshClonesBtn');
+
+    recordCloneBtn.addEventListener('click', startCloneRecording);
+    stopCloneBtn.addEventListener('click', stopCloneRecording);
+    uploadCloneFile.addEventListener('change', handleFileUpload);
+    transcribeCloneBtn.addEventListener('click', transcribeCloneAudio);
+    createCloneBtn.addEventListener('click', createVoiceClone);
+    refreshClonesBtn.addEventListener('click', loadQwenVoices);
+
+    async function handleFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      // Validate file type
+      if (!file.type.startsWith('audio/')) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Please select an audio file (WAV, MP3, OGG, etc.)';
+        return;
+      }
+
+      // Validate file size (max 50MB)
+      if (file.size > 50 * 1024 * 1024) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'File too large. Please select a file under 50MB.';
+        return;
+      }
+
+      cloneAudioBlob = file;
+      const audioUrl = URL.createObjectURL(file);
+      cloneRecordedAudio.src = audioUrl;
+      cloneRecordedAudio.style.display = 'block';
+      uploadedFileName.textContent = `Uploaded: ${file.name}`;
+      uploadedFileName.style.display = 'block';
+
+      // Reset transcript and status
+      cloneTranscript.value = '';
+      transcriptGroup.style.display = 'none';
+      transcribeCloneBtn.style.display = 'none';
+
+      cloneRecordStatus.textContent = 'Audio file loaded. Transcribing...';
+      cloneResult.innerHTML = '<span class="loading"></span>Transcribing audio...';
+      cloneResult.className = 'result';
+      createCloneBtn.disabled = true;
+
+      // Auto-transcribe the uploaded audio
+      await transcribeCloneAudio();
+    }
+
+    async function transcribeCloneAudio() {
+      if (!cloneAudioBlob) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'No audio to transcribe. Please record or upload audio first.';
+        return;
+      }
+
+      transcribeCloneBtn.style.display = 'none';
+      transcribeStatus.innerHTML = '<span class="loading"></span> Transcribing...';
+      transcribeStatus.style.color = '#666';
+      cloneResult.innerHTML = '<span class="loading"></span>Transcribing audio...';
+      cloneResult.className = 'result';
+
+      try {
+        const formData = new FormData();
+        // Determine file extension based on type
+        const extension = cloneAudioBlob.type.includes('webm') ? 'webm' :
+                         cloneAudioBlob.type.includes('mp3') ? 'mp3' :
+                         cloneAudioBlob.type.includes('wav') ? 'wav' : 'audio';
+        formData.append('file', cloneAudioBlob, `reference.${extension}`);
+
+        const response = await fetch(`${API_BASE}/transcribe`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          cloneTranscript.value = data.transcript;
+          transcriptGroup.style.display = 'block';
+          transcribeStatus.textContent = '(edit if needed)';
+          transcribeStatus.style.color = '#666';
+          transcribeCloneBtn.style.display = 'none';
+          cloneRecordStatus.textContent = 'Audio transcribed. Enter a name and create your clone.';
+          cloneResult.className = 'result success';
+          cloneResult.textContent = `Ready to create voice clone. Enter a name above and click "Create Voice Clone".`;
+          createCloneBtn.disabled = false;
+        } else {
+          throw new Error(data.message || 'Transcription failed');
+        }
+      } catch (error) {
+        transcriptGroup.style.display = 'block';
+        transcribeStatus.textContent = '(auto-detect failed - please type manually)';
+        transcribeStatus.style.color = '#dc3545';
+        transcribeCloneBtn.style.display = 'inline-block';
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Could not auto-detect transcript. Please type the transcript manually.';
+        cloneRecordStatus.textContent = 'Please enter the transcript manually.';
+        createCloneBtn.disabled = false; // Allow manual transcript entry
+      }
+    }
+
+    async function startCloneRecording() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Microphone access requires HTTPS or localhost.');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        cloneMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        cloneAudioChunks = [];
+
+        cloneMediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) {
+            cloneAudioChunks.push(event.data);
+          }
+        };
+
+        cloneMediaRecorder.onstop = async () => {
+          cloneAudioBlob = new Blob(cloneAudioChunks, { type: 'audio/webm' });
+          const audioUrl = URL.createObjectURL(cloneAudioBlob);
+          cloneRecordedAudio.src = audioUrl;
+          cloneRecordedAudio.style.display = 'block';
+          uploadedFileName.style.display = 'none';
+
+          cloneRecordStatus.textContent = 'Voice sample recorded. Transcribing...';
+          cloneResult.innerHTML = '<span class="loading"></span>Transcribing audio...';
+          cloneResult.className = 'result';
+
+          stream.getTracks().forEach(track => track.stop());
+
+          // Auto-transcribe the recorded audio
+          await transcribeCloneAudio();
+        };
+
+        cloneMediaRecorder.start();
+        recordCloneBtn.style.display = 'none';
+        stopCloneBtn.style.display = 'inline-block';
+        document.getElementById('uploadOrLabel').style.display = 'none';
+        document.getElementById('uploadCloneLabel').style.display = 'none';
+        uploadCloneFile.value = ''; // Clear any previously uploaded file
+        uploadedFileName.style.display = 'none';
+        cloneRecordStatus.textContent = 'Recording voice sample... (speak for 3-10 seconds)';
+        cloneResult.className = 'result';
+        cloneResult.textContent = 'Recording...';
+        createCloneBtn.disabled = true;
+        transcriptGroup.style.display = 'none';
+        transcribeCloneBtn.style.display = 'none';
+        cloneTranscript.value = ''; // Clear previous transcript
+      } catch (error) {
+        cloneRecordStatus.textContent = 'Error: ' + error.message;
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Failed to access microphone: ' + error.message;
+      }
+    }
+
+    function stopCloneRecording() {
+      if (cloneMediaRecorder && cloneMediaRecorder.state !== 'inactive') {
+        cloneMediaRecorder.stop();
+        recordCloneBtn.style.display = 'inline-block';
+        stopCloneBtn.style.display = 'none';
+        document.getElementById('uploadOrLabel').style.display = 'inline';
+        document.getElementById('uploadCloneLabel').style.display = 'inline-block';
+      }
+    }
+
+    async function createVoiceClone() {
+      const rawName = cloneName.value.trim();
+      const transcript = cloneTranscript.value.trim();
+
+      if (!rawName) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Please enter a name for the voice clone.';
+        return;
+      }
+
+      // Sanitize name: replace spaces with underscores, remove invalid characters
+      const name = rawName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
+
+      if (!name) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Please enter a valid name (letters, numbers, underscores, or hyphens only).';
+        return;
+      }
+
+      if (!transcript) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Please enter the transcript of what you spoke in the recording.';
+        return;
+      }
+
+      if (!cloneAudioBlob) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Please record a voice sample first.';
+        return;
+      }
+
+      createCloneBtn.disabled = true;
+      cloneRecordStatus.textContent = 'Creating voice clone...';
+      cloneResult.innerHTML = '<span class="loading"></span>Creating voice clone... This may take a moment.';
+      cloneResult.className = 'result';
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', cloneAudioBlob, 'reference.webm');
+        formData.append('transcript', transcript);
+        formData.append('cloneId', name);
+
+        const response = await fetch(`${API_BASE}/qwen-tts/voices/clone`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          cloneResult.className = 'result success';
+          cloneResult.textContent = `Voice clone "${name}" created successfully!\n\nYou can now select it in the Text-to-Speech section above.`;
+          cloneRecordStatus.textContent = 'Voice clone created!';
+
+          // Reset form
+          cloneName.value = '';
+          cloneTranscript.value = '';
+          transcriptGroup.style.display = 'none';
+          cloneAudioBlob = null;
+          cloneRecordedAudio.style.display = 'none';
+          uploadCloneFile.value = '';
+          uploadedFileName.style.display = 'none';
+
+          // Refresh voices list
+          await loadQwenVoices();
+        } else {
+          throw new Error(data.message || 'Failed to create voice clone');
+        }
+      } catch (error) {
+        cloneResult.className = 'result error';
+        cloneResult.textContent = 'Error: ' + error.message;
+        cloneRecordStatus.textContent = 'Clone creation failed';
+        createCloneBtn.disabled = false;
+      }
+    }
+
+    function updateVoiceCloneList() {
+      const listContainer = document.getElementById('voiceCloneList');
+
+      if (qwenClones.length === 0) {
+        listContainer.innerHTML = '<p style="color: #666;">No voice clones yet. Create one above!</p>';
+        return;
+      }
+
+      listContainer.innerHTML = qwenClones.map(clone => `
+        <div class="voice-clone-item">
+          <span class="clone-name">${escapeHtml(clone)}</span>
+          <div class="clone-actions">
+            <button class="danger small" onclick="confirmDeleteClone('${escapeHtml(clone)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    function escapeHtml(text) {
+      const div = document.createElement('div');
+      div.textContent = text;
+      return div.innerHTML;
+    }
+
+    // ==================== Confirmation Dialog ====================
+    const confirmDialog = document.getElementById('confirmDialog');
+    const confirmMessage = document.getElementById('confirmMessage');
+    const confirmYes = document.getElementById('confirmYes');
+    const confirmNo = document.getElementById('confirmNo');
+    let pendingDeleteCloneId = null;
+
+    function confirmDeleteClone(cloneId) {
+      pendingDeleteCloneId = cloneId;
+      confirmMessage.textContent = `Are you sure you want to delete the voice clone "${cloneId}"? This cannot be undone.`;
+      confirmDialog.classList.remove('hidden');
+    }
+
+    confirmYes.addEventListener('click', async () => {
+      if (pendingDeleteCloneId) {
+        await deleteVoiceClone(pendingDeleteCloneId);
+      }
+      confirmDialog.classList.add('hidden');
+      pendingDeleteCloneId = null;
+    });
+
+    confirmNo.addEventListener('click', () => {
+      confirmDialog.classList.add('hidden');
+      pendingDeleteCloneId = null;
+    });
+
+    async function deleteVoiceClone(cloneId) {
+      try {
+        const response = await fetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}`, {
+          method: 'DELETE',
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          // Refresh the list
+          await loadQwenVoices();
+        } else {
+          throw new Error(data.message || 'Failed to delete voice clone');
+        }
+      } catch (error) {
+        alert('Error deleting voice clone: ' + error.message);
+      }
+    }
+
+    // ==================== Initialize ====================
+    async function initialize() {
+      // Load Kokoro voices first (default)
+      await loadKokoroVoices();
+
+      // Check if Qwen is available
+      try {
+        const response = await fetch(`${API_BASE}/qwen-tts/voices`);
+        qwenEnabled = response.ok;
+      } catch {
+        qwenEnabled = false;
+      }
+
+      updateQwenAvailability();
+    }
+
+    initialize();
   </script>
 
   <div style="text-align: center; margin-top: 40px; padding: 20px; border-top: 1px solid #ddd;">

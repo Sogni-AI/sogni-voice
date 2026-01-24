@@ -136,7 +136,8 @@ export class TranscriptionService {
    * Transcribe an audio file
    * @param {string} audioFilePath - Path to the audio file
    * @param {object} options - Transcription options
-   * @param {boolean} options.timestamps - Include word/segment timestamps
+   * @param {boolean} options.timestamps - Include sentence-level timestamps
+   * @param {boolean} options.wordTimestamps - Include word-level timestamps (overrides timestamps)
    * @returns {Promise<{text: string, rawOutput: string, timestamps?: Array}>}
    */
   async transcribe(audioFilePath, options = {}) {
@@ -146,7 +147,7 @@ export class TranscriptionService {
       throw new TranscriptionError('Transcription daemon not available');
     }
 
-    const { timestamps = false } = options;
+    const { timestamps = false, wordTimestamps = false } = options;
     const requestId = `req-${++requestIdCounter}`;
 
     return new Promise((resolve, reject) => {
@@ -170,6 +171,7 @@ export class TranscriptionService {
         id: requestId,
         audio_path: audioFilePath,
         timestamps,
+        word_timestamps: wordTimestamps,
       });
 
       daemonProcess.stdin.write(request + '\n');

@@ -10,3 +10,4 @@ out/
 .venv/
 models/
 __pycache__/
+voice_clones/*.pkl

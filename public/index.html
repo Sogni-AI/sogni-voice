@@ -1165,10 +1165,17 @@
       // Load Kokoro voices first (default)
       await loadKokoroVoices();
 
-      // Check if Qwen is available
+      // Check if Qwen is available and load voice clones list
       try {
         const response = await fetch(`${API_BASE}/qwen-tts/voices`);
-        qwenEnabled = response.ok;
+        if (response.ok) {
+          const data = await response.json();
+          qwenEnabled = true;
+          qwenClones = data.clones || [];
+          updateVoiceCloneList();
+        } else {
+          qwenEnabled = false;
+        }
       } catch {
         qwenEnabled = false;
       }

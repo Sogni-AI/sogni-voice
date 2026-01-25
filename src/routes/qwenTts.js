@@ -5,7 +5,7 @@ import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config/index.js';
-import { qwenTtsService } from '../services/qwenTts.js';
+import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
 
 const execFileAsync = promisify(execFile);
@@ -50,7 +50,7 @@ export const qwenTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsService.generate(text, { voice, language, outputPath });
+        const result = await qwenTtsBaseService.generate(text, { voice, language, outputPath });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -131,17 +131,17 @@ export const qwenTtsRoutes = [
       try {
         const { text, speaker, instruct, format } = request.payload;
 
-        // Ensure daemon is running before checking features
-        await qwenTtsService.initialize();
+        // Use the CustomVoice daemon for style instructions
+        await qwenTtsCustomVoiceService.initialize();
 
-        if (!qwenTtsService.supportsFeature('custom_voice')) {
+        if (!qwenTtsCustomVoiceService.supportsFeature('custom_voice')) {
           throw Boom.badRequest('custom_voice feature requires the CustomVoice model variant');
         }
 
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsService.generateCustomVoice(text, { speaker, instruct, outputPath });
+        const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, { speaker, instruct, outputPath });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -214,17 +214,17 @@ export const qwenTtsRoutes = [
       try {
         const { text, instruct, format } = request.payload;
 
-        // Ensure daemon is running before checking features
-        await qwenTtsService.initialize();
+        // VoiceDesign requires a specific model variant (not Base or CustomVoice)
+        await qwenTtsBaseService.initialize();
 
-        if (!qwenTtsService.supportsFeature('voice_design')) {
+        if (!qwenTtsBaseService.supportsFeature('voice_design')) {
           throw Boom.badRequest('voice_design feature requires the VoiceDesign model variant');
         }
 
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsService.generateVoiceDesign(text, { instruct, outputPath });
+        const result = await qwenTtsBaseService.generateVoiceDesign(text, { instruct, outputPath });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -302,10 +302,10 @@ export const qwenTtsRoutes = [
       try {
         const { audio, transcript, cloneId: userCloneId } = request.payload;
 
-        // Ensure daemon is running before checking features
-        await qwenTtsService.initialize();
+        // Use the Base daemon for voice cloning
+        await qwenTtsBaseService.initialize();
 
-        if (!qwenTtsService.supportsFeature('voice_cloning')) {
+        if (!qwenTtsBaseService.supportsFeature('voice_cloning')) {
           throw Boom.badRequest('voice_cloning feature requires a Base model variant');
         }
 
@@ -339,7 +339,7 @@ export const qwenTtsRoutes = [
         console.log('Audio conversion completed');
 
         // Create the voice clone using the converted WAV
-        const result = await qwenTtsService.createVoiceClone(wavPath, transcript, cloneId);
+        const result = await qwenTtsBaseService.createVoiceClone(wavPath, transcript, cloneId);
 
         return {
           success: true,
@@ -389,17 +389,17 @@ export const qwenTtsRoutes = [
         const { cloneId } = request.params;
         const { text, language, format } = request.payload;
 
-        // Ensure daemon is running before checking features
-        await qwenTtsService.initialize();
+        // Use the Base daemon for voice clone generation
+        await qwenTtsBaseService.initialize();
 
-        if (!qwenTtsService.supportsFeature('voice_cloning')) {
+        if (!qwenTtsBaseService.supportsFeature('voice_cloning')) {
           throw Boom.badRequest('voice_cloning feature requires a Base model variant');
         }
 
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsService.generateVoiceClone(text, { cloneId, language, outputPath });
+        const result = await qwenTtsBaseService.generateVoiceClone(text, { cloneId, language, outputPath });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -460,17 +460,34 @@ export const qwenTtsRoutes = [
     },
     handler: async (request, h) => {
       try {
-        const modelInfo = qwenTtsService.getModelInfo();
-        const voices = qwenTtsService.listVoices();
-        const clonesResult = await qwenTtsService.listVoiceClones();
+        // Get info from both daemons and merge features
+        const baseInfo = qwenTtsBaseService.getModelInfo();
+        const customVoiceInfo = qwenTtsCustomVoiceService.getModelInfo();
+
+        // Use CustomVoice for speaker list (has full speaker names)
+        const voices = customVoiceInfo.voices.length > 0
+          ? customVoiceInfo.voices
+          : qwenTtsCustomVoiceService.listVoices();
+
+        // Get clones from Base service
+        const clonesResult = await qwenTtsBaseService.listVoiceClones();
+
+        // Merge features from both daemons
+        const allFeatures = [...new Set([
+          ...baseInfo.features,
+          ...customVoiceInfo.features,
+        ])];
 
         return {
           voices,
           clones: clonesResult.clones,
           default: config.qwenTts.defaultVoice,
           defaultLanguage: config.qwenTts.defaultLanguage,
-          modelVariant: modelInfo.variant || config.qwenTts.modelVariant,
-          features: modelInfo.features,
+          modelVariants: {
+            base: baseInfo.variant || config.qwenTts.baseModelVariant,
+            customVoice: customVoiceInfo.variant || config.qwenTts.customVoiceModelVariant,
+          },
+          features: allFeatures,
         };
       } catch (error) {
         if (error.isBoom) throw error;
@@ -499,7 +516,7 @@ export const qwenTtsRoutes = [
       try {
         const { cloneId } = request.params;
 
-        await qwenTtsService.deleteVoiceClone(cloneId);
+        await qwenTtsBaseService.deleteVoiceClone(cloneId);
 
         return {
           success: true,

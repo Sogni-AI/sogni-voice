@@ -2,7 +2,7 @@ import { startServer } from './server.js';
 import { tempFileManager } from './utils/tempFile.js';
 import { transcriptionService } from './services/transcription.js';
 import { ttsService } from './services/tts.js';
-import { qwenTtsService } from './services/qwenTts.js';
+import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTts.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -13,7 +13,8 @@ const gracefulShutdown = async (signal) => {
     tempFileManager.cleanupAll(),
     transcriptionService.shutdown(),
     ttsService.shutdown(),
-    qwenTtsService.shutdown(),
+    qwenTtsBaseService.shutdown(),
+    qwenTtsCustomVoiceService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -42,8 +43,11 @@ startServer()
     }
 
     if (config.qwenTts.enabled && config.qwenTts.preWarmDaemon) {
-      console.log('Pre-warming Qwen TTS daemon...');
-      preWarmPromises.push(qwenTtsService.initialize());
+      console.log('Pre-warming Qwen TTS daemons (Base + CustomVoice)...');
+      preWarmPromises.push(
+        qwenTtsBaseService.initialize(),
+        qwenTtsCustomVoiceService.initialize(),
+      );
     }
 
     await Promise.all(preWarmPromises);

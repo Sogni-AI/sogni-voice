@@ -64,6 +64,8 @@ vi.mock('../../src/config/index.js', () => ({
     qwenTts: {
       enabled: true,
       modelVariant: 'base-1.7b',
+      baseModelVariant: 'base-0.6b',
+      customVoiceModelVariant: 'custom-voice',
       defaultVoice: 'Chelsie',
       defaultLanguage: 'English',
       timeout: 120000,
@@ -74,13 +76,35 @@ vi.mock('../../src/config/index.js', () => ({
   },
 }));
 
-// Mock the Qwen TTS service
-vi.mock('../../src/services/qwenTts.js', () => ({
-  qwenTtsService: {
+// Mock the Qwen TTS services (dual-daemon setup)
+// Note: Factory function is inlined to avoid hoisting issues with vi.mock
+vi.mock('../../src/services/qwenTts.js', () => {
+  const { writeFileSync } = require('node:fs');
+
+  // Create fake WAV buffer inline
+  const createFakeWav = () => {
+    const buffer = Buffer.alloc(44);
+    buffer.write('RIFF', 0);
+    buffer.writeUInt32LE(36, 4);
+    buffer.write('WAVE', 8);
+    buffer.write('fmt ', 12);
+    buffer.writeUInt32LE(16, 16);
+    buffer.writeUInt16LE(1, 20);
+    buffer.writeUInt16LE(1, 22);
+    buffer.writeUInt32LE(24000, 24);
+    buffer.writeUInt32LE(48000, 28);
+    buffer.writeUInt16LE(2, 32);
+    buffer.writeUInt16LE(16, 34);
+    buffer.write('data', 36);
+    buffer.writeUInt32LE(0, 40);
+    return buffer;
+  };
+
+  const createMockService = (variant, features) => ({
     initialize: vi.fn().mockResolvedValue(undefined),
     generate: vi.fn().mockImplementation(async (text, options) => {
       if (options.outputPath) {
-        writeFileSync(options.outputPath, createFakeWavBuffer());
+        writeFileSync(options.outputPath, createFakeWav());
       }
       return {
         outputPath: options.outputPath,
@@ -91,7 +115,7 @@ vi.mock('../../src/services/qwenTts.js', () => ({
     }),
     generateCustomVoice: vi.fn().mockImplementation(async (text, options) => {
       if (options.outputPath) {
-        writeFileSync(options.outputPath, createFakeWavBuffer());
+        writeFileSync(options.outputPath, createFakeWav());
       }
       return {
         outputPath: options.outputPath,
@@ -102,7 +126,7 @@ vi.mock('../../src/services/qwenTts.js', () => ({
     }),
     generateVoiceDesign: vi.fn().mockImplementation(async (text, options) => {
       if (options.outputPath) {
-        writeFileSync(options.outputPath, createFakeWavBuffer());
+        writeFileSync(options.outputPath, createFakeWav());
       }
       return {
         outputPath: options.outputPath,
@@ -113,7 +137,7 @@ vi.mock('../../src/services/qwenTts.js', () => ({
     createVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'clone_test123' }),
     generateVoiceClone: vi.fn().mockImplementation(async (text, options) => {
       if (options.outputPath) {
-        writeFileSync(options.outputPath, createFakeWavBuffer());
+        writeFileSync(options.outputPath, createFakeWav());
       }
       return {
         outputPath: options.outputPath,
@@ -126,18 +150,21 @@ vi.mock('../../src/services/qwenTts.js', () => ({
     listVoiceClones: vi.fn().mockResolvedValue({ clones: ['clone_test123', 'clone_test456'] }),
     listVoices: vi.fn().mockReturnValue(['Chelsie', 'Ethan', 'Serena', 'Vivian']),
     getModelInfo: vi.fn().mockReturnValue({
-      variant: 'base-1.7b',
-      features: ['tts', 'voice_cloning'],
+      variant,
+      features,
       voices: ['Chelsie', 'Ethan'],
     }),
-    supportsFeature: vi.fn().mockImplementation((feature) => {
-      // Support all features for testing
-      return ['tts', 'voice_cloning', 'custom_voice', 'voice_design'].includes(feature);
-    }),
+    supportsFeature: vi.fn().mockImplementation((feature) => features.includes(feature)),
     shutdown: vi.fn().mockResolvedValue(undefined),
     isEnabled: vi.fn().mockReturnValue(true),
-  },
-}));
+  });
+
+  return {
+    qwenTtsBaseService: createMockService('base-0.6b', ['tts', 'voice_cloning', 'voice_design']),
+    qwenTtsCustomVoiceService: createMockService('custom-voice', ['tts', 'custom_voice']),
+    qwenTtsService: createMockService('base-0.6b', ['tts', 'voice_cloning', 'voice_design']),
+  };
+});
 
 // Mock the TTS service (to avoid conflicts)
 vi.mock('../../src/services/tts.js', () => ({
@@ -149,7 +176,7 @@ vi.mock('../../src/services/tts.js', () => ({
 }));
 
 import { initServer } from '../../src/server.js';
-import { qwenTtsService } from '../../src/services/qwenTts.js';
+import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../../src/services/qwenTts.js';
 
 describe('Qwen TTS Routes', () => {
   let server;
@@ -211,7 +238,7 @@ describe('Qwen TTS Routes', () => {
       });
 
       expect(response.statusCode).toBe(200);
-      expect(qwenTtsService.generate).toHaveBeenCalledWith(
+      expect(qwenTtsBaseService.generate).toHaveBeenCalledWith(
         'Hello',
         expect.objectContaining({
           voice: 'Ethan',
@@ -423,8 +450,13 @@ describe('Qwen TTS Routes', () => {
       expect(payload.clones).toEqual(['clone_test123', 'clone_test456']);
       expect(payload.default).toBe('Chelsie');
       expect(payload.defaultLanguage).toBe('English');
-      expect(payload.modelVariant).toBe('base-1.7b');
+      // Dual-daemon setup returns modelVariants object
+      expect(payload.modelVariants).toBeDefined();
+      expect(payload.modelVariants.base).toBe('base-0.6b');
+      expect(payload.modelVariants.customVoice).toBe('custom-voice');
+      // Features merged from both daemons
       expect(payload.features).toContain('voice_cloning');
+      expect(payload.features).toContain('custom_voice');
     });
   });
 
@@ -469,6 +501,8 @@ describe('Qwen TTS Routes (disabled)', () => {
         qwenTts: {
           enabled: false,
           modelVariant: 'base-1.7b',
+          baseModelVariant: 'base-0.6b',
+          customVoiceModelVariant: 'custom-voice',
           defaultVoice: 'Chelsie',
           defaultLanguage: 'English',
           timeout: 120000,
@@ -479,11 +513,15 @@ describe('Qwen TTS Routes (disabled)', () => {
       },
     }));
 
+    const disabledMockService = {
+      shutdown: vi.fn().mockResolvedValue(undefined),
+      isEnabled: vi.fn().mockReturnValue(false),
+    };
+
     vi.doMock('../../src/services/qwenTts.js', () => ({
-      qwenTtsService: {
-        shutdown: vi.fn().mockResolvedValue(undefined),
-        isEnabled: vi.fn().mockReturnValue(false),
-      },
+      qwenTtsBaseService: disabledMockService,
+      qwenTtsCustomVoiceService: disabledMockService,
+      qwenTtsService: disabledMockService,
     }));
 
     vi.doMock('../../src/services/tts.js', () => ({

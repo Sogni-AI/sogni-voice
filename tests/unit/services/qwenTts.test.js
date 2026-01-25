@@ -7,6 +7,22 @@ vi.mock('node:child_process', () => ({
   spawn: vi.fn(),
 }));
 
+// Mock config to ensure consistent test values
+vi.mock('../../../src/config/index.js', () => ({
+  config: {
+    qwenTts: {
+      enabled: true,
+      baseModelVariant: 'base-0.6b',
+      customVoiceModelVariant: 'custom-voice',
+      defaultVoice: 'Chelsie',
+      defaultLanguage: 'English',
+      timeout: 300000,
+      daemonStartupTimeout: 180000,
+      voiceClonesDir: './voice_clones',
+    },
+  },
+}));
+
 import { spawn } from 'node:child_process';
 
 describe('QwenTTSService', () => {
@@ -479,7 +495,7 @@ describe('QwenTTSService', () => {
       await initPromise;
 
       expect(consoleSpy).toHaveBeenCalledWith(
-        expect.stringContaining('[qwen-tts-daemon]')
+        expect.stringContaining('[qwen-tts-')
       );
 
       consoleSpy.mockRestore();

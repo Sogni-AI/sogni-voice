@@ -541,8 +541,11 @@
       const styleHint = document.getElementById('styleInstructHint');
       const styleNotice = document.getElementById('styleInstructNotice');
       const styleBadge = document.getElementById('styleInstructBadge');
+      const selectedVoice = voiceSelect.value;
 
-      const isAvailable = currentModel === 'qwen' && qwenCustomVoiceEnabled;
+      // Voice clones don't support style instructions
+      const isCloneVoice = selectedVoice && selectedVoice.startsWith('clone:');
+      const isAvailable = currentModel === 'qwen' && qwenCustomVoiceEnabled && !isCloneVoice;
 
       if (isAvailable) {
         styleGroup.classList.remove('style-disabled');
@@ -704,6 +707,9 @@
       speedValue.textContent = speedRange.value;
     });
 
+    // Update style input availability when voice selection changes
+    voiceSelect.addEventListener('change', updateStyleInstructUI);
+
     generateBtn.addEventListener('click', generateSpeech);
 
     // Load Kokoro voices
@@ -776,7 +782,7 @@
           voiceSelect.appendChild(optgroup);
         }
 
-        // Add cloned voices
+        // Add cloned voices (always available with dual-daemon setup)
         if (qwenClones.length > 0) {
           const cloneGroup = document.createElement('optgroup');
           cloneGroup.label = 'Your Voice Clones';

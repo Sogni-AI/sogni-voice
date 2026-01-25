@@ -24,7 +24,11 @@ export const config = {
   },
   qwenTts: {
     enabled: process.env.QWEN_TTS_ENABLED === 'true',
+    // Legacy single-model variant (unused in dual-daemon mode)
     modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',
+    // Dual-daemon mode: run both Base (voice cloning) and CustomVoice (style) models
+    baseModelVariant: process.env.QWEN_TTS_BASE_MODEL || 'base-0.6b',
+    customVoiceModelVariant: process.env.QWEN_TTS_CUSTOM_VOICE_MODEL || 'custom-voice',
     defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
     defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
     timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 300000, // 5 minutes for voice cloning

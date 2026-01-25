@@ -7,57 +7,61 @@ import { QwenTTSError } from '../utils/errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-// Daemon state (module-level singleton)
-let daemonProcess = null;
-let daemonReady = false;
-let initPromise = null;
-let requestIdCounter = 0;
-const pendingRequests = new Map();
-
-// Model info received from daemon on startup
-let modelInfo = {
-  variant: null,
-  features: [],
-  voices: [],
-};
-
 export class QwenTTSService {
+  /**
+   * Create a new QwenTTSService instance
+   * @param {string} variant - Model variant to use (e.g., 'base-0.6b', 'custom-voice')
+   */
+  constructor(variant) {
+    this.variant = variant;
+    this.daemonProcess = null;
+    this.daemonReady = false;
+    this.initPromise = null;
+    this.requestIdCounter = 0;
+    this.pendingRequests = new Map();
+    this.modelInfo = {
+      variant: null,
+      features: [],
+      voices: [],
+    };
+  }
+
   /**
    * Initialize the Qwen TTS daemon. Uses promise deduplication
    * to prevent multiple simultaneous initializations.
    */
   async initialize() {
-    if (daemonReady) return;
-    if (initPromise) return initPromise;
+    if (this.daemonReady) return;
+    if (this.initPromise) return this.initPromise;
 
-    initPromise = this._startDaemon();
-    return initPromise;
+    this.initPromise = this._startDaemon();
+    return this.initPromise;
   }
 
   async _startDaemon() {
     return new Promise((resolve, reject) => {
       const daemonPath = join(__dirname, '../../scripts/qwen_tts_daemon.py');
 
-      console.log('Starting Qwen3-TTS daemon (model loading may take a moment)...');
+      console.log(`Starting Qwen3-TTS daemon (variant: ${this.variant})...`);
 
       const pythonPath = join(__dirname, '../../.venv/bin/python3');
-      daemonProcess = spawn(pythonPath, [daemonPath], {
+      this.daemonProcess = spawn(pythonPath, [daemonPath], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
           ...process.env,
           PYTHONUNBUFFERED: '1',
-          QWEN_TTS_MODEL_VARIANT: config.qwenTts.modelVariant,
+          QWEN_TTS_MODEL_VARIANT: this.variant,
           QWEN_TTS_VOICE_CLONES_DIR: config.qwenTts.voiceClonesDir,
         },
       });
 
       // Handle stderr (daemon logs)
-      daemonProcess.stderr.on('data', (data) => {
-        console.log(`[qwen-tts-daemon] ${data.toString().trim()}`);
+      this.daemonProcess.stderr.on('data', (data) => {
+        console.log(`[qwen-tts-${this.variant}] ${data.toString().trim()}`);
       });
 
       // Handle stdout (JSON responses)
-      const rl = createInterface({ input: daemonProcess.stdout });
+      const rl = createInterface({ input: this.daemonProcess.stdout });
 
       rl.on('line', (line) => {
         // Skip empty lines
@@ -65,7 +69,7 @@ export class QwenTTSService {
 
         // Check if line looks like JSON before parsing
         if (!line.startsWith('{')) {
-          console.log(`[qwen-tts-daemon] ${line}`);
+          console.log(`[qwen-tts-${this.variant}] ${line}`);
           return;
         }
 
@@ -75,27 +79,27 @@ export class QwenTTSService {
           // Handle ready signal
           if (response.status === 'ready') {
             console.log(`Qwen3-TTS daemon ready (variant: ${response.model_variant})`);
-            modelInfo = {
+            this.modelInfo = {
               variant: response.model_variant,
               features: response.features || [],
               voices: response.speakers || response.voices || [],
             };
-            daemonReady = true;
+            this.daemonReady = true;
             resolve();
             return;
           }
 
           // Handle error during startup
-          if (response.status === 'error' && !daemonReady) {
+          if (response.status === 'error' && !this.daemonReady) {
             reject(new QwenTTSError(`Daemon failed to start: ${response.error}`));
             return;
           }
 
           // Handle response
           const requestId = response.id;
-          const pending = pendingRequests.get(requestId);
+          const pending = this.pendingRequests.get(requestId);
           if (pending) {
-            pendingRequests.delete(requestId);
+            this.pendingRequests.delete(requestId);
             if (response.success) {
               pending.resolve(response);
             } else {
@@ -108,33 +112,33 @@ export class QwenTTSService {
       });
 
       // Handle daemon exit
-      daemonProcess.on('close', (code) => {
-        console.log(`Qwen TTS daemon exited with code ${code}`);
-        daemonReady = false;
-        daemonProcess = null;
-        initPromise = null;
+      this.daemonProcess.on('close', (code) => {
+        console.log(`Qwen TTS daemon (${this.variant}) exited with code ${code}`);
+        this.daemonReady = false;
+        this.daemonProcess = null;
+        this.initPromise = null;
 
         // Reject all pending requests
-        for (const [id, pending] of pendingRequests) {
+        for (const [id, pending] of this.pendingRequests) {
           pending.reject(new QwenTTSError('Qwen TTS daemon process terminated'));
-          pendingRequests.delete(id);
+          this.pendingRequests.delete(id);
         }
 
         // If we haven't resolved yet, reject
-        if (!daemonReady) {
+        if (!this.daemonReady) {
           reject(new QwenTTSError(`Qwen TTS daemon exited unexpectedly with code ${code}`));
         }
       });
 
-      daemonProcess.on('error', (error) => {
-        initPromise = null;
+      this.daemonProcess.on('error', (error) => {
+        this.initPromise = null;
         reject(new QwenTTSError(`Failed to spawn Qwen TTS daemon: ${error.message}`, error));
       });
 
       // Timeout for initialization
       const startupTimeout = config.qwenTts.daemonStartupTimeout || 180000;
       setTimeout(() => {
-        if (!daemonReady) {
+        if (!this.daemonReady) {
           this.shutdown();
           reject(new QwenTTSError('Qwen TTS daemon initialization timed out'));
         }
@@ -146,10 +150,10 @@ export class QwenTTSService {
    * Ensure daemon is running, restart if needed
    */
   async _ensureDaemon() {
-    if (!daemonReady || !daemonProcess) {
-      console.log('Qwen TTS daemon not available, attempting to start...');
-      initPromise = null;
-      daemonReady = false;
+    if (!this.daemonReady || !this.daemonProcess) {
+      console.log(`Qwen TTS daemon (${this.variant}) not available, attempting to start...`);
+      this.initPromise = null;
+      this.daemonReady = false;
       await this.initialize();
     }
   }
@@ -160,37 +164,37 @@ export class QwenTTSService {
   async _sendRequest(request) {
     await this._ensureDaemon();
 
-    if (!daemonProcess || !daemonReady) {
+    if (!this.daemonProcess || !this.daemonReady) {
       throw new QwenTTSError('Qwen TTS daemon not available');
     }
 
-    const requestId = `req-${++requestIdCounter}`;
+    const requestId = `req-${++this.requestIdCounter}`;
     request.id = requestId;
 
     const timeout = config.qwenTts.timeout || 300000;
-    console.log(`[qwen-tts] Sending request ${requestId}: type=${request.type}, timeout=${timeout}ms`);
+    console.log(`[qwen-tts-${this.variant}] Sending request ${requestId}: type=${request.type}, timeout=${timeout}ms`);
 
     return new Promise((resolve, reject) => {
       const timeoutId = setTimeout(() => {
-        pendingRequests.delete(requestId);
-        console.log(`[qwen-tts] Request ${requestId} timed out after ${timeout}ms`);
+        this.pendingRequests.delete(requestId);
+        console.log(`[qwen-tts-${this.variant}] Request ${requestId} timed out after ${timeout}ms`);
         reject(new QwenTTSError('Qwen TTS request timed out'));
       }, timeout);
 
-      pendingRequests.set(requestId, {
+      this.pendingRequests.set(requestId, {
         resolve: (result) => {
           clearTimeout(timeoutId);
-          console.log(`[qwen-tts] Request ${requestId} completed successfully`);
+          console.log(`[qwen-tts-${this.variant}] Request ${requestId} completed successfully`);
           resolve(result);
         },
         reject: (error) => {
           clearTimeout(timeoutId);
-          console.log(`[qwen-tts] Request ${requestId} failed: ${error.message}`);
+          console.log(`[qwen-tts-${this.variant}] Request ${requestId} failed: ${error.message}`);
           reject(error);
         },
       });
 
-      daemonProcess.stdin.write(JSON.stringify(request) + '\n');
+      this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
     });
   }
 
@@ -413,26 +417,26 @@ export class QwenTTSService {
    * Gracefully shutdown the daemon
    */
   async shutdown() {
-    if (!daemonProcess) return;
+    if (!this.daemonProcess) return;
 
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => {
-        console.log('Qwen TTS daemon shutdown timeout, forcing kill...');
-        daemonProcess?.kill('SIGKILL');
+        console.log(`Qwen TTS daemon (${this.variant}) shutdown timeout, forcing kill...`);
+        this.daemonProcess?.kill('SIGKILL');
         resolve();
       }, 5000);
 
-      daemonProcess.once('close', () => {
+      this.daemonProcess.once('close', () => {
         clearTimeout(timeoutId);
         resolve();
       });
 
       // Send shutdown command
       try {
-        daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
+        this.daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
       } catch (e) {
         // stdin may already be closed
-        daemonProcess.kill('SIGTERM');
+        this.daemonProcess.kill('SIGTERM');
       }
     });
   }
@@ -441,7 +445,7 @@ export class QwenTTSService {
    * Check if daemon is ready
    */
   isReady() {
-    return daemonReady;
+    return this.daemonReady;
   }
 
   /**
@@ -455,15 +459,15 @@ export class QwenTTSService {
    * Get model info
    */
   getModelInfo() {
-    return { ...modelInfo };
+    return { ...this.modelInfo };
   }
 
   /**
    * List available voices
    */
   listVoices() {
-    return modelInfo.voices.length > 0
-      ? modelInfo.voices
+    return this.modelInfo.voices.length > 0
+      ? this.modelInfo.voices
       : ['Chelsie', 'Ethan', 'Serena', 'Vivian', 'Ryan', 'Aiden', 'Eric', 'Dylan'];
   }
 
@@ -471,8 +475,13 @@ export class QwenTTSService {
    * Check if a feature is supported by the current model
    */
   supportsFeature(feature) {
-    return modelInfo.features.includes(feature);
+    return this.modelInfo.features.includes(feature);
   }
 }
 
-export const qwenTtsService = new QwenTTSService();
+// Export dual service instances for Base (voice cloning) and CustomVoice (style instructions)
+export const qwenTtsBaseService = new QwenTTSService(config.qwenTts.baseModelVariant || 'base-0.6b');
+export const qwenTtsCustomVoiceService = new QwenTTSService(config.qwenTts.customVoiceModelVariant || 'custom-voice');
+
+// Legacy export for backward compatibility
+export const qwenTtsService = qwenTtsBaseService;

@@ -296,7 +296,40 @@ Response:
 
 > **Note**: Qwen3-TTS must be enabled with `QWEN_TTS_ENABLED=true`
 
+#### List Voices and Capabilities
+
+```bash
+curl http://localhost:3000/qwen-tts/voices
+```
+
+Response:
+```json
+{
+  "voices": ["Chelsie", "Ethan", "Serena", "Vivian", "Ryan", "Aiden", "Eric", "Dylan"],
+  "clones": ["my-voice", "customer-voice"],
+  "default": "Chelsie",
+  "defaultLanguage": "English",
+  "modelVariants": {
+    "base": "base-0.6b",
+    "customVoice": "custom-voice"
+  },
+  "features": ["tts", "voice_cloning", "custom_voice"]
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| voices | Standard Qwen TTS speaker voices |
+| clones | Custom cloned voices (varies by instance) |
+| default | Default voice if none specified |
+| defaultLanguage | Default language for synthesis |
+| modelVariants | Active model variants (dual-daemon mode) |
+| features | Available features based on loaded models |
+
 #### Standard TTS
+
+Generate speech with a standard voice:
+
 ```bash
 curl -X POST http://localhost:3000/qwen-tts \
   -H "Content-Type: application/json" \
@@ -304,27 +337,16 @@ curl -X POST http://localhost:3000/qwen-tts \
   --output output.wav
 ```
 
-#### Voice Cloning
-
-Create a voice clone from reference audio (3-10 seconds):
-```bash
-curl -X POST http://localhost:3000/qwen-tts/voices/clone \
-  -F "audio=@reference.wav" \
-  -F "transcript=Hello, this is my voice sample" \
-  -F "cloneId=my-voice"
-```
-
-Generate speech with cloned voice:
-```bash
-curl -X POST http://localhost:3000/qwen-tts/voices/clone/my-voice/generate \
-  -H "Content-Type: application/json" \
-  -d '{"text": "This will sound like the cloned voice"}' \
-  --output output.wav
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech |
+| voice | string | Chelsie | Speaker voice name |
+| language | string | English | Language for synthesis |
 
 #### Custom Voice (Emotion/Style Control)
 
-Requires `custom-voice` or `custom-voice-0.6b` model variant:
+Generate speech with emotion and style instructions. This feature uses the CustomVoice model to control how the speech is delivered.
+
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/custom-voice \
   -H "Content-Type: application/json" \
@@ -332,9 +354,95 @@ curl -X POST http://localhost:3000/qwen-tts/custom-voice \
   --output output.wav
 ```
 
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech |
+| speaker | string | Chelsie | Speaker voice name |
+| instruct | string | - | Style/emotion instruction (e.g., "Speak softly with a gentle tone") |
+
+**Example style instructions:**
+- "Speak with excitement and enthusiasm"
+- "Use a calm, soothing voice"
+- "Sound professional and confident"
+- "Speak slowly and clearly, as if explaining to a child"
+- "Express sadness and disappointment"
+
+**JavaScript Example:**
+```javascript
+const response = await fetch('http://localhost:3000/qwen-tts/custom-voice', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    text: 'Welcome to our presentation!',
+    speaker: 'Serena',
+    instruct: 'Speak with warmth and professionalism'
+  })
+});
+
+const audioBlob = await response.blob();
+const audioUrl = URL.createObjectURL(audioBlob);
+const audio = new Audio(audioUrl);
+audio.play();
+```
+
+**Python Example:**
+```python
+import requests
+
+response = requests.post(
+    'http://localhost:3000/qwen-tts/custom-voice',
+    json={
+        'text': 'Welcome to our presentation!',
+        'speaker': 'Serena',
+        'instruct': 'Speak with warmth and professionalism'
+    }
+)
+
+with open('output.wav', 'wb') as f:
+    f.write(response.content)
+```
+
+#### Voice Cloning
+
+Create a voice clone from reference audio (3-10 seconds recommended):
+
+```bash
+curl -X POST http://localhost:3000/qwen-tts/voices/clone \
+  -F "audio=@reference.wav" \
+  -F "transcript=Hello, this is my voice sample" \
+  -F "cloneId=my-voice"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| audio * | file | - | Reference audio file (WAV, MP3, etc.) |
+| transcript * | string | - | Exact transcript of the reference audio |
+| cloneId | string | auto-generated | Custom ID for the voice clone |
+
+Generate speech with a cloned voice:
+
+```bash
+curl -X POST http://localhost:3000/qwen-tts/voices/clone/my-voice/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "This will sound like the cloned voice"}' \
+  --output output.wav
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech |
+| language | string | English | Language for synthesis |
+
+Delete a voice clone:
+
+```bash
+curl -X DELETE http://localhost:3000/qwen-tts/voices/clone/my-voice
+```
+
 #### Voice Design (Create Voice from Description)
 
 Requires `voice-design` model variant:
+
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/voice-design \
   -H "Content-Type: application/json" \
@@ -342,10 +450,10 @@ curl -X POST http://localhost:3000/qwen-tts/voice-design \
   --output output.wav
 ```
 
-#### List Qwen Voices and Capabilities
-```bash
-curl http://localhost:3000/qwen-tts/voices
-```
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech |
+| instruct * | string | - | Description of the desired voice characteristics |
 
 ## Testing
 

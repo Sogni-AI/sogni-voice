@@ -316,10 +316,67 @@
     .style-disabled input {
       background: #e9ecef;
     }
+    .auth-section {
+      background: #e7f3ff;
+      border: 1px solid #b6d4fe;
+      border-radius: 8px;
+      padding: 16px;
+      margin-bottom: 24px;
+    }
+    .auth-section.auth-disabled {
+      background: #f8f9fa;
+      border-color: #dee2e6;
+    }
+    .auth-section h3 {
+      margin: 0 0 12px 0;
+      color: #0d6efd;
+      font-size: 14px;
+    }
+    .auth-section.auth-disabled h3 {
+      color: #6c757d;
+    }
+    .auth-input-group {
+      display: flex;
+      gap: 8px;
+      align-items: center;
+    }
+    .auth-input-group input {
+      flex: 1;
+      margin-bottom: 0;
+    }
+    .auth-status {
+      font-size: 13px;
+      margin-top: 8px;
+    }
+    .auth-status.success {
+      color: #198754;
+    }
+    .auth-status.error {
+      color: #dc3545;
+    }
+    .auth-status.info {
+      color: #6c757d;
+    }
   </style>
 </head>
 <body>
   <h1>Sogni Transcribe Test Page</h1>
+
+  <!-- Authentication Section -->
+  <div class="auth-section" id="authSection">
+    <h3 id="authTitle">API Authentication</h3>
+    <div id="authContent">
+      <div class="auth-input-group">
+        <input type="password" id="apiKeyInput" placeholder="Enter your API key..." style="margin-bottom: 0;">
+        <button id="saveApiKeyBtn" class="small">Save</button>
+        <button id="clearApiKeyBtn" class="small secondary">Clear</button>
+      </div>
+      <div class="auth-status" id="authStatus"></div>
+    </div>
+    <div id="authDisabledContent" class="hidden">
+      <p style="margin: 0; color: #6c757d; font-size: 14px;">Authentication is not enabled on this server. All API endpoints are publicly accessible.</p>
+    </div>
+  </div>
 
   <!-- Transcription Section -->
   <div class="section">
@@ -434,6 +491,9 @@
     <div id="qwenDisabledMessage" class="result error hidden">
       Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=true</code> in your environment.
     </div>
+    <div id="authRequiredMessage" class="result hidden">
+      Enter your API key above to access voice cloning features.
+    </div>
 
     <div id="voiceCloningContent">
       <div class="subsection">
@@ -498,6 +558,138 @@
 
   <script>
     const API_BASE = window.location.origin;
+
+    // ==================== Authentication ====================
+    let authEnabled = false;
+    let apiKey = localStorage.getItem('sogni_api_key') || '';
+
+    const authSection = document.getElementById('authSection');
+    const authTitle = document.getElementById('authTitle');
+    const authContent = document.getElementById('authContent');
+    const authDisabledContent = document.getElementById('authDisabledContent');
+    const apiKeyInput = document.getElementById('apiKeyInput');
+    const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
+    const clearApiKeyBtn = document.getElementById('clearApiKeyBtn');
+    const authStatus = document.getElementById('authStatus');
+
+    // Initialize API key input with stored value
+    apiKeyInput.value = apiKey;
+
+    saveApiKeyBtn.addEventListener('click', () => {
+      apiKey = apiKeyInput.value.trim();
+      if (apiKey) {
+        localStorage.setItem('sogni_api_key', apiKey);
+        // Refresh the page to load everything with the new key
+        window.location.reload();
+      } else {
+        localStorage.removeItem('sogni_api_key');
+        authStatus.textContent = 'Please enter an API key';
+        authStatus.className = 'auth-status error';
+      }
+    });
+
+    // Disable/enable UI elements based on auth state
+    function setUIDisabledState(disabled) {
+      // Buttons to disable when no API key
+      const buttonsToDisable = [
+        'recordBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn'
+      ];
+      buttonsToDisable.forEach(id => {
+        const btn = document.getElementById(id);
+        if (btn) btn.disabled = disabled;
+      });
+
+      // Also disable form inputs
+      const inputsToDisable = ['ttsText', 'voiceSelect', 'speedRange', 'languageSelect', 'styleInstruct', 'cloneName'];
+      inputsToDisable.forEach(id => {
+        const input = document.getElementById(id);
+        if (input) input.disabled = disabled;
+      });
+
+      // Disable file upload
+      const uploadLabel = document.getElementById('uploadCloneLabel');
+      if (uploadLabel) {
+        uploadLabel.style.pointerEvents = disabled ? 'none' : 'auto';
+        uploadLabel.style.opacity = disabled ? '0.5' : '1';
+      }
+    }
+
+    clearApiKeyBtn.addEventListener('click', () => {
+      apiKey = '';
+      apiKeyInput.value = '';
+      localStorage.removeItem('sogni_api_key');
+      authStatus.textContent = 'API key cleared';
+      authStatus.className = 'auth-status info';
+    });
+
+    // Helper function to get fetch headers with auth
+    function getAuthHeaders(contentType = null) {
+      const headers = {};
+      if (contentType) {
+        headers['Content-Type'] = contentType;
+      }
+      if (authEnabled && apiKey) {
+        headers['X-API-Key'] = apiKey;
+      }
+      return headers;
+    }
+
+    // Helper function for authenticated fetch
+    // Set showAuthError=false for background/initialization requests
+    async function authFetch(url, options = {}, showAuthError = true) {
+      if (authEnabled && apiKey) {
+        options.headers = options.headers || {};
+        options.headers['X-API-Key'] = apiKey;
+      }
+      const response = await fetch(url, options);
+
+      // Check for auth errors (only show message for user-initiated requests)
+      if (response.status === 401 && showAuthError) {
+        authStatus.textContent = 'Authentication failed. Check your API key.';
+        authStatus.className = 'auth-status error';
+      }
+
+      return response;
+    }
+
+    // Check if we can make authenticated API calls
+    function canMakeAuthenticatedCalls() {
+      return !authEnabled || (authEnabled && apiKey);
+    }
+
+    async function checkAuthStatus() {
+      try {
+        const response = await fetch(`${API_BASE}/auth/status`);
+        const data = await response.json();
+        authEnabled = data.authEnabled;
+
+        if (authEnabled) {
+          authSection.classList.remove('auth-disabled');
+          authContent.classList.remove('hidden');
+          authDisabledContent.classList.add('hidden');
+          authTitle.textContent = 'API Authentication Required';
+          if (apiKey) {
+            authStatus.textContent = 'API key loaded from browser storage';
+            authStatus.className = 'auth-status success';
+          } else {
+            authStatus.textContent = 'Enter your API key to access the API';
+            authStatus.className = 'auth-status info';
+          }
+        } else {
+          authSection.classList.add('auth-disabled');
+          authContent.classList.add('hidden');
+          authDisabledContent.classList.remove('hidden');
+          authTitle.textContent = 'Authentication';
+        }
+      } catch (error) {
+        console.error('Failed to check auth status:', error);
+        // Assume auth is disabled if we can't check
+        authEnabled = false;
+        authSection.classList.add('auth-disabled');
+        authContent.classList.add('hidden');
+        authDisabledContent.classList.remove('hidden');
+      }
+    }
 
     // ==================== Model Selection ====================
     const modelRadios = document.querySelectorAll('input[name="ttsModel"]');
@@ -647,7 +839,7 @@
           formData.append('wordTimestamps', 'true');
         }
 
-        const response = await fetch(`${API_BASE}/transcribe`, {
+        const response = await authFetch(`${API_BASE}/transcribe`, {
           method: 'POST',
           body: formData,
         });
@@ -713,9 +905,13 @@
     generateBtn.addEventListener('click', generateSpeech);
 
     // Load Kokoro voices
-    async function loadKokoroVoices() {
+    // showAuthError: whether to show auth error messages (false during init)
+    async function loadKokoroVoices(showAuthError = true) {
       try {
-        const response = await fetch(`${API_BASE}/tts/voices`);
+        const response = await authFetch(`${API_BASE}/tts/voices`, {}, showAuthError);
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}`);
+        }
         const data = await response.json();
 
         kokoroVoices = data.voices || [];
@@ -737,9 +933,9 @@
     }
 
     // Load Qwen voices
-    async function loadQwenVoices() {
+    async function loadQwenVoices(showAuthError = true) {
       try {
-        const response = await fetch(`${API_BASE}/qwen-tts/voices`);
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices`, {}, showAuthError);
 
         if (!response.ok) {
           qwenEnabled = false;
@@ -808,15 +1004,26 @@
 
     function updateQwenAvailability() {
       const qwenRadio = document.getElementById('qwenRadio');
+      const authRequiredMessage = document.getElementById('authRequiredMessage');
 
       if (!qwenEnabled) {
-        qwenDisabledMessage.classList.remove('hidden');
         voiceCloningContent.classList.add('hidden');
+        // Show different message based on why Qwen is not available
+        if (authEnabled && !apiKey) {
+          // Auth required but no key - show auth message, hide Qwen disabled message
+          qwenDisabledMessage.classList.add('hidden');
+          authRequiredMessage.classList.remove('hidden');
+        } else {
+          // Qwen actually disabled on server
+          qwenDisabledMessage.classList.remove('hidden');
+          authRequiredMessage.classList.add('hidden');
+        }
         if (currentModel === 'qwen') {
           voiceSelect.innerHTML = '<option>Qwen TTS not available</option>';
         }
       } else {
         qwenDisabledMessage.classList.add('hidden');
+        authRequiredMessage.classList.add('hidden');
         voiceCloningContent.classList.remove('hidden');
         updateVoiceCloningUI();
       }
@@ -877,7 +1084,7 @@
         // Always route cloned voices to Qwen TTS, regardless of selected model
         if (selectedVoice.startsWith('clone:')) {
           const cloneId = selectedVoice.replace('clone:', '');
-          response = await fetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
+          response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -889,7 +1096,7 @@
           });
         } else if (currentModel === 'kokoro') {
           // Kokoro TTS
-          response = await fetch(`${API_BASE}/tts`, {
+          response = await authFetch(`${API_BASE}/tts`, {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -906,7 +1113,7 @@
 
           // Use custom-voice endpoint if style instructions are provided
           if (styleInstruct && qwenCustomVoiceEnabled) {
-            response = await fetch(`${API_BASE}/qwen-tts/custom-voice`, {
+            response = await authFetch(`${API_BASE}/qwen-tts/custom-voice`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -918,7 +1125,7 @@
               }),
             });
           } else {
-            response = await fetch(`${API_BASE}/qwen-tts`, {
+            response = await authFetch(`${API_BASE}/qwen-tts`, {
               method: 'POST',
               headers: {
                 'Content-Type': 'application/json',
@@ -1063,7 +1270,7 @@
                          cloneAudioBlob.type.includes('wav') ? 'wav' : 'audio';
         formData.append('file', cloneAudioBlob, `reference.${extension}`);
 
-        const response = await fetch(`${API_BASE}/transcribe`, {
+        const response = await authFetch(`${API_BASE}/transcribe`, {
           method: 'POST',
           body: formData,
         });
@@ -1200,7 +1407,7 @@
         formData.append('transcript', transcript);
         formData.append('cloneId', name);
 
-        const response = await fetch(`${API_BASE}/qwen-tts/voices/clone`, {
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices/clone`, {
           method: 'POST',
           body: formData,
         });
@@ -1286,7 +1493,7 @@
 
     async function deleteVoiceClone(cloneId) {
       try {
-        const response = await fetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}`, {
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}`, {
           method: 'DELETE',
         });
 
@@ -1305,17 +1512,37 @@
 
     // ==================== Initialize ====================
     async function initialize() {
-      // Load Kokoro voices first (default)
-      await loadKokoroVoices();
+      // Check auth status first
+      await checkAuthStatus();
+
+      // If auth is enabled but no key is stored, don't make API calls
+      // User needs to enter their API key first
+      if (authEnabled && !apiKey) {
+        // Set up empty/default UI state
+        voiceSelect.innerHTML = '<option value="">Enter API key to load voices</option>';
+        qwenEnabled = false;
+        qwenCustomVoiceEnabled = false;
+        qwenVoiceCloningEnabled = false;
+        updateQwenAvailability();
+        updateStyleInstructUI();
+        // Disable all interactive elements
+        setUIDisabledState(true);
+        return;
+      }
+
+      // Auth not required or key is present - enable UI and load data
+      setUIDisabledState(false);
+
+      // Load Kokoro voices first (default) - use silent mode for init
+      await loadKokoroVoices(false);
 
       // Check if Qwen is available and load voice clones list
       try {
-        const response = await fetch(`${API_BASE}/qwen-tts/voices`);
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices`, {}, false);
         if (response.ok) {
           const data = await response.json();
           qwenEnabled = true;
           qwenClones = data.clones || [];
-          // Check which features are available
           const features = data.features || [];
           qwenCustomVoiceEnabled = features.includes('custom_voice');
           qwenVoiceCloningEnabled = features.includes('voice_cloning');

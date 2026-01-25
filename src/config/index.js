@@ -6,6 +6,11 @@ export const config = {
     port: parseInt(process.env.PORT, 10) || 3000,
     host: process.env.HOST || '0.0.0.0',
   },
+  auth: {
+    enabled: process.env.AUTH_ENABLED === 'true',
+    apiKey: process.env.AUTH_API_KEY || null,
+    excludePaths: ['/health', '/auth/status'],
+  },
   tts: {
     modelId: process.env.TTS_MODEL_ID || 'mlx-community/Kokoro-82M-bf16',
     defaultVoice: process.env.TTS_DEFAULT_VOICE || 'af_heart',

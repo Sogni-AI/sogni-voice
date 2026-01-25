@@ -8,7 +8,11 @@ export const createServer = async () => {
     port: config.server.port,
     host: config.server.host,
     routes: {
-      cors: true,
+      cors: {
+        origin: ['*'],
+        headers: ['Accept', 'Authorization', 'Content-Type', 'X-API-Key'],
+        additionalHeaders: ['X-Requested-With'],
+      },
       validate: {
         failAction: async (request, h, err) => {
           throw err;

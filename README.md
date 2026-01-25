@@ -109,6 +109,12 @@ cp .env.example .env
 | PREWARM_QWEN_TTS | false | Pre-load model on server start |
 | QWEN_TTS_VOICE_CLONES_DIR | ./voice_clones | Voice clone storage directory |
 
+#### Authentication (Optional)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| AUTH_ENABLED | false | Enable API key authentication |
+| AUTH_API_KEY | (none) | API key for authenticating requests |
+
 **Qwen3-TTS Model Variants:**
 - `base-0.6b` - Basic TTS + voice cloning (smaller, faster)
 - `base-1.7b` - Basic TTS + voice cloning (larger, higher quality)
@@ -159,6 +165,65 @@ To start on system boot:
 ```bash
 pm2 startup
 pm2 save
+```
+
+## Authentication
+
+The API supports optional API key authentication, which is **disabled by default** for local installations.
+
+### Enabling Authentication
+
+Set the following environment variables:
+
+```bash
+# .env
+AUTH_ENABLED=true
+AUTH_API_KEY=sk_your_secret_key_here
+```
+
+To generate a secure API key:
+```bash
+openssl rand -hex 32
+```
+
+### Making Authenticated Requests
+
+When authentication is enabled, include your API key using one of these methods:
+
+**X-API-Key Header (recommended):**
+```bash
+curl -X POST http://localhost:3000/tts \
+  -H "X-API-Key: sk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world"}'
+```
+
+**Authorization Bearer Header:**
+```bash
+curl -X POST http://localhost:3000/tts \
+  -H "Authorization: Bearer sk_your_secret_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world"}'
+```
+
+### Public Endpoints
+
+These endpoints are always accessible without authentication:
+- `GET /health` - Health check for monitoring
+- `GET /auth/status` - Check if authentication is enabled
+- `GET /{static files}` - Demo site and static files
+
+### Check Auth Status
+
+```bash
+curl http://localhost:3000/auth/status
+```
+
+Response:
+```json
+{
+  "authEnabled": true
+}
 ```
 
 ## API Endpoints

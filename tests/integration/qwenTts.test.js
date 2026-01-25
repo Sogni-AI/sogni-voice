@@ -48,6 +48,11 @@ const createFakeWavBuffer = () => {
 vi.mock('../../src/config/index.js', () => ({
   config: {
     server: { port: 3000, host: '0.0.0.0' },
+    auth: {
+      enabled: false,
+      apiKey: null,
+      excludePaths: ['/health', '/auth/status'],
+    },
     tts: {
       defaultVoice: 'af_heart',
       defaultSpeed: 1.0,
@@ -485,6 +490,11 @@ describe('Qwen TTS Routes (disabled)', () => {
     vi.doMock('../../src/config/index.js', () => ({
       config: {
         server: { port: 3000, host: '0.0.0.0' },
+        auth: {
+          enabled: false,
+          apiKey: null,
+          excludePaths: ['/health', '/auth/status'],
+        },
         tts: {
           defaultVoice: 'af_heart',
           defaultSpeed: 1.0,

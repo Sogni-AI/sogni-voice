@@ -1,4 +1,43 @@
-import { describe, it, expect, beforeAll, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+
+// Mock config to disable auth and set test values
+vi.mock('../../src/config/index.js', () => ({
+  config: {
+    server: { port: 3000, host: '0.0.0.0' },
+    auth: {
+      enabled: false,
+      apiKey: null,
+      excludePaths: ['/health', '/auth/status'],
+    },
+    tts: {
+      modelId: 'test-model',
+      defaultVoice: 'af_heart',
+      defaultSpeed: 1.0,
+      timeout: 60000,
+      daemonStartupTimeout: 60000,
+      preWarmDaemon: false,
+    },
+    transcription: {
+      timeout: 300000,
+      daemonStartupTimeout: 120000,
+      preWarmDaemon: false,
+    },
+    upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+    qwenTts: {
+      enabled: false,
+      modelVariant: 'base-0.6b',
+      baseModelVariant: 'base-0.6b',
+      customVoiceModelVariant: 'custom-voice',
+      defaultVoice: 'Chelsie',
+      defaultLanguage: 'English',
+      timeout: 120000,
+      daemonStartupTimeout: 180000,
+      preWarmDaemon: false,
+      voiceClonesDir: './voice_clones',
+    },
+  },
+}));
+
 import { initServer } from '../../src/server.js';
 
 describe('GET /health', () => {

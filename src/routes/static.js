@@ -8,6 +8,9 @@ export const staticRoutes = [
   {
     method: 'GET',
     path: '/{param*}',
+    options: {
+      auth: false,
+    },
     handler: {
       directory: {
         path: publicPath,

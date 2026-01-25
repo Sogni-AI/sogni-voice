@@ -139,6 +139,81 @@
     <strong>Base URL:</strong> <code>https://voice.sogni.ai</code>
   </div>
 
+  <!-- Authentication Section -->
+  <div class="section">
+    <h2>Authentication (Optional)</h2>
+    <p>API key authentication can be enabled for production deployments. When enabled, all API endpoints (except health check) require authentication.</p>
+
+    <h3>Check Auth Status</h3>
+    <div class="endpoint">
+      <span class="method get">GET</span> /auth/status
+    </div>
+    <p>Check if authentication is enabled on this server.</p>
+
+    <h4>Response</h4>
+    <pre><code>{
+  "authEnabled": true
+}</code></pre>
+
+    <h3>Authenticating Requests</h3>
+    <p>When authentication is enabled, include your API key using one of these methods:</p>
+
+    <h4>Option 1: X-API-Key Header (recommended)</h4>
+    <pre><code>curl -X POST https://voice.sogni.ai/tts \
+  -H "X-API-Key: your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world"}'</code></pre>
+
+    <h4>Option 2: Authorization Bearer Header</h4>
+    <pre><code>curl -X POST https://voice.sogni.ai/tts \
+  -H "Authorization: Bearer your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world"}'</code></pre>
+
+    <h3>JavaScript Example</h3>
+    <pre><code>const API_KEY = 'your_api_key_here';
+
+const response = await fetch('https://voice.sogni.ai/tts', {
+  method: 'POST',
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': API_KEY
+  },
+  body: JSON.stringify({
+    text: 'Hello, world!'
+  })
+});</code></pre>
+
+    <h3>Python Example</h3>
+    <pre><code>import requests
+
+API_KEY = 'your_api_key_here'
+
+response = requests.post(
+    'https://voice.sogni.ai/tts',
+    headers={'X-API-Key': API_KEY},
+    json={'text': 'Hello, world!'}
+)
+
+with open('output.wav', 'wb') as f:
+    f.write(response.content)</code></pre>
+
+    <h3>Public Endpoints</h3>
+    <p>These endpoints are always accessible without authentication:</p>
+    <ul>
+      <li><code>GET /health</code> - Health check for monitoring</li>
+      <li><code>GET /auth/status</code> - Check if auth is enabled</li>
+    </ul>
+
+    <h3>Error Response</h3>
+    <p>When authentication fails, the API returns a 401 Unauthorized response:</p>
+    <pre><code>{
+  "statusCode": 401,
+  "error": "Unauthorized",
+  "message": "Missing API key. Provide X-API-Key header or Authorization: Bearer &lt;key&gt;"
+}</code></pre>
+  </div>
+
   <!-- Transcription Section -->
   <div class="section">
     <h2>1. Voice Recording to Text (Transcription)</h2>

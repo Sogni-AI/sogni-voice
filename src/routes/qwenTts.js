@@ -460,6 +460,12 @@ export const qwenTtsRoutes = [
     },
     handler: async (request, h) => {
       try {
+        // Initialize both daemons (no-op if already running)
+        await Promise.all([
+          qwenTtsBaseService.initialize(),
+          qwenTtsCustomVoiceService.initialize(),
+        ]);
+
         // Get info from both daemons and merge features
         const baseInfo = qwenTtsBaseService.getModelInfo();
         const customVoiceInfo = qwenTtsCustomVoiceService.getModelInfo();

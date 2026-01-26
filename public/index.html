@@ -630,6 +630,19 @@
     </div>
   </div>
 
+  <!-- Rename Dialog -->
+  <div id="renameDialog" class="confirm-dialog hidden">
+    <div class="confirm-dialog-content">
+      <p>Rename voice clone "<span id="renameOldName"></span>"</p>
+      <input type="text" id="renameNewName" placeholder="Enter new name..." style="margin-bottom: 16px;">
+      <div id="renameError" style="color: #dc3545; font-size: 14px; margin-bottom: 12px; display: none;"></div>
+      <div class="buttons">
+        <button id="renameConfirm">Rename</button>
+        <button id="renameCancel" class="secondary">Cancel</button>
+      </div>
+    </div>
+  </div>
+
   <script>
     const API_BASE = window.location.origin;
 
@@ -1539,6 +1552,7 @@
         <div class="voice-clone-item">
           <span class="clone-name">${escapeHtml(clone)}</span>
           <div class="clone-actions">
+            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(clone)}')">Rename</button>
             <button class="danger small" onclick="confirmDeleteClone('${escapeHtml(clone)}')">Delete</button>
           </div>
         </div>
@@ -1595,6 +1609,91 @@
         alert('Error deleting voice clone: ' + error.message);
       }
     }
+
+    // ==================== Rename Dialog ====================
+    const renameDialog = document.getElementById('renameDialog');
+    const renameOldName = document.getElementById('renameOldName');
+    const renameNewName = document.getElementById('renameNewName');
+    const renameError = document.getElementById('renameError');
+    const renameConfirm = document.getElementById('renameConfirm');
+    const renameCancel = document.getElementById('renameCancel');
+    let pendingRenameCloneId = null;
+
+    function openRenameDialog(cloneId) {
+      pendingRenameCloneId = cloneId;
+      renameOldName.textContent = cloneId;
+      renameNewName.value = cloneId;
+      renameError.style.display = 'none';
+      renameError.textContent = '';
+      renameDialog.classList.remove('hidden');
+      renameNewName.focus();
+      renameNewName.select();
+    }
+
+    renameConfirm.addEventListener('click', async () => {
+      if (!pendingRenameCloneId) return;
+
+      const rawNewName = renameNewName.value.trim();
+      // Sanitize: replace spaces with underscores, remove invalid characters
+      const newName = rawNewName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
+
+      if (!newName) {
+        renameError.textContent = 'Please enter a valid name (letters, numbers, underscores, or hyphens only).';
+        renameError.style.display = 'block';
+        return;
+      }
+
+      if (newName === pendingRenameCloneId) {
+        renameDialog.classList.add('hidden');
+        pendingRenameCloneId = null;
+        return;
+      }
+
+      renameConfirm.disabled = true;
+      renameConfirm.textContent = 'Renaming...';
+
+      try {
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(pendingRenameCloneId)}`, {
+          method: 'PATCH',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ newCloneId: newName }),
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          renameDialog.classList.add('hidden');
+          pendingRenameCloneId = null;
+          // Refresh the list
+          await loadQwenVoices();
+        } else {
+          throw new Error(data.message || 'Failed to rename voice clone');
+        }
+      } catch (error) {
+        renameError.textContent = error.message;
+        renameError.style.display = 'block';
+      } finally {
+        renameConfirm.disabled = false;
+        renameConfirm.textContent = 'Rename';
+      }
+    });
+
+    renameCancel.addEventListener('click', () => {
+      renameDialog.classList.add('hidden');
+      pendingRenameCloneId = null;
+    });
+
+    // Handle Enter key in rename input
+    renameNewName.addEventListener('keydown', (e) => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        renameConfirm.click();
+      } else if (e.key === 'Escape') {
+        renameCancel.click();
+      }
+    });
 
     // ==================== Initialize ====================
     async function initialize() {

@@ -539,4 +539,57 @@ export const qwenTtsRoutes = [
       }
     },
   },
+
+  // Rename voice clone
+  {
+    method: 'PATCH',
+    path: '/qwen-tts/voices/clone/{cloneId}',
+    options: {
+      pre: [{ method: checkEnabled }],
+      validate: {
+        params: Joi.object({
+          cloneId: Joi.string().required()
+            .description('Current voice clone ID'),
+        }),
+        payload: Joi.object({
+          newCloneId: Joi.string().required().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('New name for the voice clone (alphanumeric, underscore, hyphen only)'),
+        }),
+      },
+      description: 'Rename a voice clone',
+      tags: ['api', 'qwen-tts'],
+    },
+    handler: async (request, h) => {
+      try {
+        const { cloneId } = request.params;
+        const { newCloneId } = request.payload;
+
+        // Use the Base daemon for voice cloning operations
+        await qwenTtsBaseService.initialize();
+
+        if (!qwenTtsBaseService.supportsFeature('voice_cloning')) {
+          throw Boom.badRequest('voice_cloning feature requires a Base model variant');
+        }
+
+        const result = await qwenTtsBaseService.renameVoiceClone(cloneId, newCloneId);
+
+        return {
+          success: true,
+          oldCloneId: result.oldCloneId,
+          newCloneId: result.newCloneId,
+          message: 'Voice clone renamed successfully',
+        };
+      } catch (error) {
+        if (error.isBoom) throw error;
+        if (error.message?.includes('not found')) {
+          throw Boom.notFound(`Voice clone '${request.params.cloneId}' not found`);
+        }
+        if (error.message?.includes('already exists')) {
+          throw Boom.conflict(`Voice clone '${request.payload.newCloneId}' already exists`);
+        }
+        console.error('Qwen TTS rename clone error:', error);
+        throw Boom.badImplementation('Failed to rename voice clone');
+      }
+    },
+  },
 ];

@@ -401,6 +401,39 @@ class QwenTTSDaemon:
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e)}
 
+    def rename_voice_clone(self, old_clone_id: str, new_clone_id: str) -> dict:
+        """Rename a voice clone."""
+        try:
+            old_path = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
+            new_path = os.path.join(VOICE_CLONES_DIR, f"{new_clone_id}.pkl")
+
+            # Check if source exists
+            if not os.path.exists(old_path):
+                return {"success": False, "error": f"Voice clone '{old_clone_id}' not found"}
+
+            # Check if destination already exists
+            if os.path.exists(new_path):
+                return {"success": False, "error": f"Voice clone '{new_clone_id}' already exists"}
+
+            # Rename the file on disk
+            os.rename(old_path, new_path)
+
+            # Update cache if the old clone was cached
+            if old_clone_id in self.voice_clones:
+                self.voice_clones[new_clone_id] = self.voice_clones.pop(old_clone_id)
+
+            print(f"[rename_voice_clone] Renamed '{old_clone_id}' to '{new_clone_id}'", file=sys.stderr)
+
+            return {
+                "success": True,
+                "old_clone_id": old_clone_id,
+                "new_clone_id": new_clone_id,
+            }
+        except Exception as e:
+            print(f"Voice clone rename error: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return {"success": False, "error": str(e)}
+
     def list_voice_clones(self) -> dict:
         """List all available voice clones."""
         try:
@@ -533,6 +566,19 @@ class QwenTTSDaemon:
 
         elif request_type == "list_voice_clones":
             result = self.list_voice_clones()
+            result["id"] = request_id
+            return result
+
+        elif request_type == "rename_voice_clone":
+            old_clone_id = request.get("old_clone_id")
+            if not old_clone_id:
+                return {"id": request_id, "success": False, "error": "Missing old_clone_id"}
+
+            new_clone_id = request.get("new_clone_id")
+            if not new_clone_id:
+                return {"id": request_id, "success": False, "error": "Missing new_clone_id"}
+
+            result = self.rename_voice_clone(old_clone_id, new_clone_id)
             result["id"] = request_id
             return result
 

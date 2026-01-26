@@ -400,6 +400,33 @@ export class QwenTTSService {
   }
 
   /**
+   * Rename a voice clone
+   * @param {string} oldCloneId - Current voice clone ID
+   * @param {string} newCloneId - New voice clone ID
+   * @returns {Promise<{oldCloneId: string, newCloneId: string}>}
+   */
+  async renameVoiceClone(oldCloneId, newCloneId) {
+    if (!oldCloneId) {
+      throw new QwenTTSError('oldCloneId is required');
+    }
+
+    if (!newCloneId) {
+      throw new QwenTTSError('newCloneId is required');
+    }
+
+    const result = await this._sendRequest({
+      type: 'rename_voice_clone',
+      old_clone_id: oldCloneId,
+      new_clone_id: newCloneId,
+    });
+
+    return {
+      oldCloneId: result.old_clone_id,
+      newCloneId: result.new_clone_id,
+    };
+  }
+
+  /**
    * List all voice clones
    * @returns {Promise<{clones: string[]}>}
    */

@@ -11,3 +11,4 @@ out/
 models/
 __pycache__/
 voice_clones/*.pkl
+!voice_clones/Marvis.pkl

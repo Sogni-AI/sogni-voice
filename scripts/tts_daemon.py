@@ -141,15 +141,16 @@ class TTSDaemon:
                 audio_np = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
             else:
                 # Use model.generate() for simpler path when timestamps not needed
-                result = None
+                audio_segments = []
                 for r in self.model.generate(text, voice=voice, speed=speed, lang_code=lang_code):
-                    result = r
+                    if r.audio is not None:
+                        mx.eval(r.audio)
+                        audio_segments.append(np.array(r.audio))
 
-                if result is None:
+                if not audio_segments:
                     return {"success": False, "error": "No audio generated"}
 
-                mx.eval(result.audio)
-                audio_np = np.array(result.audio)
+                audio_np = np.concatenate(audio_segments) if len(audio_segments) > 1 else audio_segments[0]
 
             # Check for NaN values
             if np.isnan(audio_np).any():

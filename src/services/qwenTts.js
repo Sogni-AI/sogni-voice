@@ -19,6 +19,8 @@ export class QwenTTSService {
     this.initPromise = null;
     this.requestIdCounter = 0;
     this.pendingRequests = new Map();
+    this.readlineInterface = null;
+    this.startupTimeoutId = null;
     this.modelInfo = {
       variant: null,
       features: [],
@@ -61,9 +63,9 @@ export class QwenTTSService {
       });
 
       // Handle stdout (JSON responses)
-      const rl = createInterface({ input: this.daemonProcess.stdout });
+      this.readlineInterface = createInterface({ input: this.daemonProcess.stdout });
 
-      rl.on('line', (line) => {
+      this.readlineInterface.on('line', (line) => {
         // Skip empty lines
         if (!line.trim()) return;
 
@@ -85,6 +87,10 @@ export class QwenTTSService {
               voices: response.speakers || response.voices || [],
             };
             this.daemonReady = true;
+            if (this.startupTimeoutId) {
+              clearTimeout(this.startupTimeoutId);
+              this.startupTimeoutId = null;
+            }
             resolve();
             return;
           }
@@ -117,6 +123,10 @@ export class QwenTTSService {
         this.daemonReady = false;
         this.daemonProcess = null;
         this.initPromise = null;
+        if (this.readlineInterface) {
+          this.readlineInterface.close();
+          this.readlineInterface = null;
+        }
 
         // Reject all pending requests
         for (const [id, pending] of this.pendingRequests) {
@@ -137,7 +147,7 @@ export class QwenTTSService {
 
       // Timeout for initialization
       const startupTimeout = config.qwenTts.daemonStartupTimeout || 180000;
-      setTimeout(() => {
+      this.startupTimeoutId = setTimeout(() => {
         if (!this.daemonReady) {
           this.shutdown();
           reject(new QwenTTSError('Qwen TTS daemon initialization timed out'));
@@ -194,7 +204,13 @@ export class QwenTTSService {
         },
       });
 
-      this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
+      try {
+        this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
+      } catch (error) {
+        this.pendingRequests.delete(requestId);
+        clearTimeout(timeoutId);
+        reject(new QwenTTSError(`Failed to write to daemon: ${error.message}`));
+      }
     });
   }
 

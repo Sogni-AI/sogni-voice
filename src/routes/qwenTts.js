@@ -1,6 +1,8 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile, writeFile, unlink } from 'node:fs/promises';
+import { readFile, unlink } from 'node:fs/promises';
+import { createWriteStream } from 'node:fs';
+import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
@@ -316,12 +318,8 @@ export const qwenTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('qwen-clone-');
         const uploadedPath = await tempFileManager.createTempFile(tempDir, 'audio');
 
-        // Write the audio stream to file
-        const chunks = [];
-        for await (const chunk of audio) {
-          chunks.push(chunk);
-        }
-        await writeFile(uploadedPath, Buffer.concat(chunks));
+        // Stream the audio directly to file
+        await pipeline(audio, createWriteStream(uploadedPath));
 
         // Convert to WAV format (24kHz mono) for consistent processing
         const wavPath = await tempFileManager.createTempFile(tempDir, 'wav');

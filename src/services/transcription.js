@@ -12,6 +12,8 @@ let daemonProcess = null;
 let daemonReady = false;
 let initPromise = null;
 let requestIdCounter = 0;
+let readlineInterface = null;
+let startupTimeoutId = null;
 const pendingRequests = new Map();
 
 export class TranscriptionService {
@@ -45,9 +47,9 @@ export class TranscriptionService {
       });
 
       // Handle stdout (JSON responses)
-      const rl = createInterface({ input: daemonProcess.stdout });
+      readlineInterface = createInterface({ input: daemonProcess.stdout });
 
-      rl.on('line', (line) => {
+      readlineInterface.on('line', (line) => {
         try {
           const response = JSON.parse(line);
 
@@ -55,6 +57,10 @@ export class TranscriptionService {
           if (response.status === 'ready') {
             console.log('Parakeet-mlx daemon ready');
             daemonReady = true;
+            if (startupTimeoutId) {
+              clearTimeout(startupTimeoutId);
+              startupTimeoutId = null;
+            }
             resolve();
             return;
           }
@@ -91,6 +97,10 @@ export class TranscriptionService {
         daemonReady = false;
         daemonProcess = null;
         initPromise = null;
+        if (readlineInterface) {
+          readlineInterface.close();
+          readlineInterface = null;
+        }
 
         // Reject all pending requests
         for (const [id, pending] of pendingRequests) {
@@ -111,7 +121,7 @@ export class TranscriptionService {
 
       // Timeout for initialization
       const startupTimeout = config.transcription.daemonStartupTimeout || 120000;
-      setTimeout(() => {
+      startupTimeoutId = setTimeout(() => {
         if (!daemonReady) {
           this.shutdown();
           reject(new TranscriptionError('Daemon initialization timed out'));
@@ -174,7 +184,13 @@ export class TranscriptionService {
         word_timestamps: wordTimestamps,
       });
 
-      daemonProcess.stdin.write(request + '\n');
+      try {
+        daemonProcess.stdin.write(request + '\n');
+      } catch (error) {
+        pendingRequests.delete(requestId);
+        clearTimeout(timeoutId);
+        reject(new TranscriptionError(`Failed to write to daemon: ${error.message}`));
+      }
     });
   }
 

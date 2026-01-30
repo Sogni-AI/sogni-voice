@@ -12,6 +12,8 @@ let daemonProcess = null;
 let daemonReady = false;
 let initPromise = null;
 let requestIdCounter = 0;
+let readlineInterface = null;
+let startupTimeoutId = null;
 const pendingRequests = new Map();
 
 export class TTSService {
@@ -45,9 +47,9 @@ export class TTSService {
       });
 
       // Handle stdout (JSON responses)
-      const rl = createInterface({ input: daemonProcess.stdout });
+      readlineInterface = createInterface({ input: daemonProcess.stdout });
 
-      rl.on('line', (line) => {
+      readlineInterface.on('line', (line) => {
         // Skip empty lines
         if (!line.trim()) return;
 
@@ -65,6 +67,10 @@ export class TTSService {
           if (response.status === 'ready') {
             console.log('Kokoro TTS daemon ready');
             daemonReady = true;
+            if (startupTimeoutId) {
+              clearTimeout(startupTimeoutId);
+              startupTimeoutId = null;
+            }
             resolve();
             return;
           }
@@ -105,6 +111,10 @@ export class TTSService {
         daemonReady = false;
         daemonProcess = null;
         initPromise = null;
+        if (readlineInterface) {
+          readlineInterface.close();
+          readlineInterface = null;
+        }
 
         // Reject all pending requests
         for (const [id, pending] of pendingRequests) {
@@ -125,7 +135,7 @@ export class TTSService {
 
       // Timeout for initialization
       const startupTimeout = config.tts.daemonStartupTimeout || 60000;
-      setTimeout(() => {
+      startupTimeoutId = setTimeout(() => {
         if (!daemonReady) {
           this.shutdown();
           reject(new TTSError('TTS daemon initialization timed out'));
@@ -212,7 +222,13 @@ export class TTSService {
         timestamps,
       });
 
-      daemonProcess.stdin.write(request + '\n');
+      try {
+        daemonProcess.stdin.write(request + '\n');
+      } catch (error) {
+        pendingRequests.delete(requestId);
+        clearTimeout(timeoutId);
+        reject(new TTSError(`Failed to write to daemon: ${error.message}`));
+      }
     });
   }
 

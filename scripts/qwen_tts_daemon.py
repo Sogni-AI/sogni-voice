@@ -37,6 +37,7 @@ import os
 import pickle
 import io
 import contextlib
+from collections import OrderedDict
 
 # Ensure unbuffered output for reliable communication
 sys.stdout.reconfigure(line_buffering=True)
@@ -97,11 +98,30 @@ class QwenTTSDaemon:
         self.model = None
         self.model_variant = os.environ.get('QWEN_TTS_MODEL_VARIANT', 'base-0.6b')
         self.running = True
-        self.voice_clones = {}  # cache of loaded voice clone prompts
+        self.voice_clones = OrderedDict()  # LRU cache of loaded voice clone prompts
+        self.max_cached_clones = int(os.environ.get('QWEN_TTS_MAX_CACHED_CLONES', '10'))
         self.default_voice_prompt = None  # cached default voice prompt for base models
 
         # Ensure voice clones directory exists
         os.makedirs(VOICE_CLONES_DIR, exist_ok=True)
+
+    def _cache_clone(self, clone_id, prompt):
+        """Add a voice clone prompt to the LRU cache, evicting oldest if full."""
+        if clone_id in self.voice_clones:
+            self.voice_clones.move_to_end(clone_id)
+            self.voice_clones[clone_id] = prompt
+        else:
+            if len(self.voice_clones) >= self.max_cached_clones:
+                evicted_id, _ = self.voice_clones.popitem(last=False)
+                print(f"[cache] Evicted voice clone '{evicted_id}' from cache", file=sys.stderr)
+            self.voice_clones[clone_id] = prompt
+
+    def _get_cached_clone(self, clone_id):
+        """Get a voice clone prompt from cache, moving it to most-recent. Returns None if not cached."""
+        if clone_id in self.voice_clones:
+            self.voice_clones.move_to_end(clone_id)
+            return self.voice_clones[clone_id]
+        return None
 
     def load_model(self) -> bool:
         """Load the Qwen3-TTS model. Returns True on success."""
@@ -310,8 +330,8 @@ class QwenTTSDaemon:
                 pickle.dump(prompt, f)
             print(f"[create_voice_clone] Saved to {clone_path}", file=sys.stderr)
 
-            # Cache it
-            self.voice_clones[clone_id] = prompt
+            # Cache it (LRU)
+            self._cache_clone(clone_id, prompt)
 
             return {
                 "success": True,
@@ -336,19 +356,19 @@ class QwenTTSDaemon:
             import soundfile as sf
             import time
 
-            # Load voice prompt from cache or disk
+            # Load voice prompt from LRU cache or disk
             print(f"[generate_voice_clone] Loading voice clone '{clone_id}'...", file=sys.stderr)
-            if clone_id not in self.voice_clones:
+            prompt = self._get_cached_clone(clone_id)
+            if prompt is None:
                 clone_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
                 if not os.path.exists(clone_path):
                     return {"success": False, "error": f"Voice clone '{clone_id}' not found"}
 
                 print(f"[generate_voice_clone] Reading prompt from {clone_path}", file=sys.stderr)
                 with open(clone_path, 'rb') as f:
-                    self.voice_clones[clone_id] = pickle.load(f)
-                print(f"[generate_voice_clone] Prompt loaded successfully", file=sys.stderr)
-
-            prompt = self.voice_clones[clone_id]
+                    prompt = pickle.load(f)
+                self._cache_clone(clone_id, prompt)
+                print(f"[generate_voice_clone] Prompt loaded and cached", file=sys.stderr)
             print(f"[generate_voice_clone] Prompt type: {type(prompt)}", file=sys.stderr)
 
             print(f"[generate_voice_clone] Starting generation: text='{text[:50]}...', language={language}", file=sys.stderr)
@@ -420,7 +440,8 @@ class QwenTTSDaemon:
 
             # Update cache if the old clone was cached
             if old_clone_id in self.voice_clones:
-                self.voice_clones[new_clone_id] = self.voice_clones.pop(old_clone_id)
+                prompt = self.voice_clones.pop(old_clone_id)
+                self._cache_clone(new_clone_id, prompt)
 
             print(f"[rename_voice_clone] Renamed '{old_clone_id}' to '{new_clone_id}'", file=sys.stderr)
 

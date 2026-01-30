@@ -491,6 +491,10 @@
         Kokoro TTS <span class="badge">Fast</span>
       </label>
       <label>
+        <input type="radio" name="ttsModel" value="pocket" id="pocketRadio">
+        Pocket TTS <span class="badge" style="background:#28a745">Fast + Cloning</span>
+      </label>
+      <label>
         <input type="radio" name="ttsModel" value="qwen" id="qwenRadio">
         Qwen3 TTS <span class="badge warning">Voice Cloning</span>
       </label>
@@ -615,6 +619,58 @@
           <p style="color: #666;">No voice clones yet. Create one above!</p>
         </div>
         <button id="refreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- Pocket TTS Voice Cloning Section -->
+  <div class="section hidden" id="pocketVoiceCloningSection">
+    <h2>3. Voice Cloning (Pocket TTS)</h2>
+    <p>Upload a voice sample to create a voice clone. No transcript needed.</p>
+
+    <div id="pocketDisabledMessage" class="result error hidden">
+      Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=true</code> in your environment.
+    </div>
+
+    <div id="pocketVoiceCloningContent">
+      <div class="subsection">
+        <h3>Create New Voice Clone</h3>
+
+        <div class="form-group">
+          <label for="pocketCloneName">Clone Name:</label>
+          <input type="text" id="pocketCloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
+        </div>
+
+        <div class="controls">
+          <button id="pocketRecordCloneBtn">Record Voice Sample</button>
+          <button id="pocketStopCloneBtn" style="display: none;">Stop Recording</button>
+          <span style="color: #666; margin: 0 8px;">or</span>
+          <label for="pocketUploadCloneFile" class="upload-btn" id="pocketUploadCloneLabel">
+            Upload Audio File
+            <input type="file" id="pocketUploadCloneFile" accept="audio/*" style="display: none;">
+          </label>
+        </div>
+
+        <div class="status" id="pocketCloneRecordStatus">Ready to record or upload voice sample</div>
+
+        <label>Reference Audio:</label>
+        <audio id="pocketCloneRecordedAudio" controls style="display: none;"></audio>
+
+        <div class="controls" style="margin-top: 12px;">
+          <button id="pocketCreateCloneBtn" disabled>Create Voice Clone</button>
+        </div>
+
+        <div class="result" id="pocketCloneResult">Record or upload a voice sample to create a clone.</div>
+      </div>
+
+      <div class="divider"></div>
+
+      <div class="subsection">
+        <h3>Your Voice Clones</h3>
+        <div id="pocketVoiceCloneList" class="voice-clone-list">
+          <p style="color: #666;">No voice clones yet. Create one above!</p>
+        </div>
+        <button id="pocketRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
       </div>
     </div>
   </div>
@@ -802,9 +858,12 @@
     let qwenEnabled = false;
     let qwenCustomVoiceEnabled = false;
     let qwenVoiceCloningEnabled = false;
+    let pocketEnabled = false;
     let kokoroVoices = [];
     let qwenVoices = [];
     let qwenClones = [];
+    let pocketVoices = [];
+    let pocketClones = [];
 
     modelRadios.forEach(radio => {
       radio.addEventListener('change', (e) => {
@@ -813,14 +872,26 @@
       });
     });
 
+    const pocketVoiceCloningSection = document.getElementById('pocketVoiceCloningSection');
+
     function updateModelUI() {
       if (currentModel === 'qwen') {
         qwenOptions.classList.remove('hidden');
-        speedControl.classList.add('hidden'); // Qwen doesn't support speed control
+        speedControl.classList.add('hidden');
+        voiceCloningSection.classList.remove('hidden');
+        pocketVoiceCloningSection.classList.add('hidden');
         loadQwenVoices();
+      } else if (currentModel === 'pocket') {
+        qwenOptions.classList.add('hidden');
+        speedControl.classList.add('hidden');
+        voiceCloningSection.classList.add('hidden');
+        pocketVoiceCloningSection.classList.remove('hidden');
+        loadPocketVoices();
       } else {
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
+        voiceCloningSection.classList.remove('hidden');
+        pocketVoiceCloningSection.classList.add('hidden');
         loadKokoroVoices();
       }
       updateStyleInstructUI();
@@ -1101,6 +1172,97 @@
       }
     }
 
+    // Load Pocket TTS voices
+    async function loadPocketVoices(showAuthError = true) {
+      try {
+        const response = await authFetch(`${API_BASE}/pocket-tts/voices`, {}, showAuthError);
+
+        if (!response.ok) {
+          pocketEnabled = false;
+          updatePocketAvailability();
+          return;
+        }
+
+        const data = await response.json();
+        pocketEnabled = true;
+        pocketVoices = data.voices || [];
+        pocketClones = data.clones || [];
+
+        voiceSelect.innerHTML = '';
+
+        // Add built-in voices
+        if (pocketVoices.length > 0) {
+          const optgroup = document.createElement('optgroup');
+          optgroup.label = 'Built-in Voices';
+          pocketVoices.forEach(voice => {
+            const option = document.createElement('option');
+            option.value = voice;
+            option.textContent = voice.charAt(0).toUpperCase() + voice.slice(1);
+            if (voice === data.default) {
+              option.selected = true;
+            }
+            optgroup.appendChild(option);
+          });
+          voiceSelect.appendChild(optgroup);
+        }
+
+        // Add cloned voices
+        if (pocketClones.length > 0) {
+          const cloneGroup = document.createElement('optgroup');
+          cloneGroup.label = 'Your Voice Clones';
+          pocketClones.forEach(clone => {
+            const option = document.createElement('option');
+            option.value = `pocket-clone:${clone}`;
+            option.textContent = clone;
+            cloneGroup.appendChild(option);
+          });
+          voiceSelect.appendChild(cloneGroup);
+        }
+
+        updatePocketAvailability();
+        updatePocketVoiceCloneList();
+      } catch (error) {
+        console.error('Failed to load Pocket voices:', error);
+        pocketEnabled = false;
+        updatePocketAvailability();
+      }
+    }
+
+    function updatePocketAvailability() {
+      const pocketDisabledMessage = document.getElementById('pocketDisabledMessage');
+      const pocketContent = document.getElementById('pocketVoiceCloningContent');
+
+      if (!pocketEnabled) {
+        if (pocketContent) pocketContent.classList.add('hidden');
+        if (pocketDisabledMessage) pocketDisabledMessage.classList.remove('hidden');
+        if (currentModel === 'pocket') {
+          voiceSelect.innerHTML = '<option>Pocket TTS not available</option>';
+        }
+      } else {
+        if (pocketDisabledMessage) pocketDisabledMessage.classList.add('hidden');
+        if (pocketContent) pocketContent.classList.remove('hidden');
+      }
+    }
+
+    function updatePocketVoiceCloneList() {
+      const listContainer = document.getElementById('pocketVoiceCloneList');
+      if (!listContainer) return;
+
+      if (pocketClones.length === 0) {
+        listContainer.innerHTML = '<p style="color: #666;">No voice clones yet. Create one above!</p>';
+        return;
+      }
+
+      listContainer.innerHTML = pocketClones.map(clone => `
+        <div class="voice-clone-item">
+          <span class="clone-name">${escapeHtml(clone)}</span>
+          <div class="clone-actions">
+            <button class="danger small" onclick="confirmDeletePocketClone('${escapeHtml(clone)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
     function updateQwenAvailability() {
       const qwenRadio = document.getElementById('qwenRadio');
       const authRequiredMessage = document.getElementById('authRequiredMessage');
@@ -1180,18 +1342,26 @@
         let response;
         const selectedVoice = voiceSelect.value;
 
-        // Always route cloned voices to Qwen TTS, regardless of selected model
-        if (selectedVoice.startsWith('clone:')) {
+        // Route cloned voices to appropriate TTS backend
+        if (selectedVoice.startsWith('pocket-clone:')) {
+          const cloneId = selectedVoice.replace('pocket-clone:', '');
+          response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text }),
+          });
+        } else if (selectedVoice.startsWith('clone:')) {
           const cloneId = selectedVoice.replace('clone:', '');
           response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify({
-              text: text,
-              language: languageSelect.value,
-            }),
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, language: languageSelect.value }),
+          });
+        } else if (currentModel === 'pocket') {
+          response = await authFetch(`${API_BASE}/pocket-tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, voice: selectedVoice }),
           });
         } else if (currentModel === 'kokoro') {
           // Kokoro TTS
@@ -1252,20 +1422,22 @@
         generatedAudio.style.display = 'block';
         generatedAudio.play();
 
-        const isClone = selectedVoice.startsWith('clone:');
+        const isQwenClone = selectedVoice.startsWith('clone:');
+        const isPocketClone = selectedVoice.startsWith('pocket-clone:');
+        const isClone = isQwenClone || isPocketClone;
         const voiceInfo = isClone
-          ? `Clone: ${selectedVoice.replace('clone:', '')}`
+          ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
-        const modelUsed = isClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : 'Qwen3');
+        const modelUsed = isPocketClone ? 'Pocket (Clone)' : isQwenClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : currentModel === 'pocket' ? 'Pocket' : 'Qwen3');
         const styleInstruct = document.getElementById('styleInstruct').value.trim();
         const usedStyle = currentModel === 'qwen' && styleInstruct && qwenCustomVoiceEnabled;
         let extraInfo = '';
-        if (isClone || currentModel !== 'kokoro') {
+        if (isQwenClone || currentModel === 'qwen') {
           extraInfo = `\nLanguage: ${languageSelect.value}`;
           if (usedStyle) {
             extraInfo += `\nStyle: ${styleInstruct}`;
           }
-        } else {
+        } else if (currentModel === 'kokoro') {
           extraInfo = `\nSpeed: ${speedRange.value}x`;
         }
 
@@ -1571,6 +1743,7 @@
     const confirmYes = document.getElementById('confirmYes');
     const confirmNo = document.getElementById('confirmNo');
     let pendingDeleteCloneId = null;
+    let pendingDeletePocketCloneId = null;
 
     function confirmDeleteClone(cloneId) {
       pendingDeleteCloneId = cloneId;
@@ -1579,7 +1752,10 @@
     }
 
     confirmYes.addEventListener('click', async () => {
-      if (pendingDeleteCloneId) {
+      if (pendingDeletePocketCloneId) {
+        await deletePocketVoiceClone(pendingDeletePocketCloneId);
+        pendingDeletePocketCloneId = null;
+      } else if (pendingDeleteCloneId) {
         await deleteVoiceClone(pendingDeleteCloneId);
       }
       confirmDialog.classList.add('hidden');
@@ -1589,6 +1765,7 @@
     confirmNo.addEventListener('click', () => {
       confirmDialog.classList.add('hidden');
       pendingDeleteCloneId = null;
+      pendingDeletePocketCloneId = null;
     });
 
     async function deleteVoiceClone(cloneId) {
@@ -1602,6 +1779,24 @@
         if (response.ok && data.success) {
           // Refresh the list
           await loadQwenVoices();
+        } else {
+          throw new Error(data.message || 'Failed to delete voice clone');
+        }
+      } catch (error) {
+        alert('Error deleting voice clone: ' + error.message);
+      }
+    }
+
+    async function deletePocketVoiceClone(cloneId) {
+      try {
+        const response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}`, {
+          method: 'DELETE',
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          await loadPocketVoices();
         } else {
           throw new Error(data.message || 'Failed to delete voice clone');
         }
@@ -1695,6 +1890,152 @@
       }
     });
 
+    // ==================== Pocket TTS Voice Cloning ====================
+    let pocketCloneMediaRecorder = null;
+    let pocketCloneAudioChunks = [];
+    let pocketCloneAudioBlob = null;
+
+    const pocketRecordCloneBtn = document.getElementById('pocketRecordCloneBtn');
+    const pocketStopCloneBtn = document.getElementById('pocketStopCloneBtn');
+    const pocketUploadCloneFile = document.getElementById('pocketUploadCloneFile');
+    const pocketCloneRecordStatus = document.getElementById('pocketCloneRecordStatus');
+    const pocketCloneRecordedAudio = document.getElementById('pocketCloneRecordedAudio');
+    const pocketCloneName = document.getElementById('pocketCloneName');
+    const pocketCreateCloneBtn = document.getElementById('pocketCreateCloneBtn');
+    const pocketCloneResult = document.getElementById('pocketCloneResult');
+    const pocketRefreshClonesBtn = document.getElementById('pocketRefreshClonesBtn');
+
+    pocketRecordCloneBtn.addEventListener('click', startPocketCloneRecording);
+    pocketStopCloneBtn.addEventListener('click', stopPocketCloneRecording);
+    pocketUploadCloneFile.addEventListener('change', handlePocketFileUpload);
+    pocketCreateCloneBtn.addEventListener('click', createPocketVoiceClone);
+    pocketRefreshClonesBtn.addEventListener('click', loadPocketVoices);
+
+    function handlePocketFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      if (!file.type.startsWith('audio/')) {
+        pocketCloneResult.className = 'result error';
+        pocketCloneResult.textContent = 'Please select an audio file (WAV, MP3, OGG, etc.)';
+        return;
+      }
+
+      pocketCloneAudioBlob = file;
+      const audioUrl = URL.createObjectURL(file);
+      pocketCloneRecordedAudio.src = audioUrl;
+      pocketCloneRecordedAudio.style.display = 'block';
+      pocketCloneRecordStatus.textContent = `Audio loaded: ${file.name}. Enter a name and create your clone.`;
+      pocketCloneResult.className = 'result success';
+      pocketCloneResult.textContent = 'Ready to create voice clone.';
+      pocketCreateCloneBtn.disabled = false;
+    }
+
+    async function startPocketCloneRecording() {
+      try {
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw new Error('Microphone access requires HTTPS or localhost.');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        pocketCloneMediaRecorder = new MediaRecorder(stream, { mimeType: 'audio/webm' });
+        pocketCloneAudioChunks = [];
+
+        pocketCloneMediaRecorder.ondataavailable = (event) => {
+          if (event.data.size > 0) pocketCloneAudioChunks.push(event.data);
+        };
+
+        pocketCloneMediaRecorder.onstop = () => {
+          pocketCloneAudioBlob = new Blob(pocketCloneAudioChunks, { type: 'audio/webm' });
+          const audioUrl = URL.createObjectURL(pocketCloneAudioBlob);
+          pocketCloneRecordedAudio.src = audioUrl;
+          pocketCloneRecordedAudio.style.display = 'block';
+          pocketCloneRecordStatus.textContent = 'Voice sample recorded. Enter a name and create your clone.';
+          pocketCloneResult.className = 'result success';
+          pocketCloneResult.textContent = 'Ready to create voice clone.';
+          pocketCreateCloneBtn.disabled = false;
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        pocketCloneMediaRecorder.start();
+        pocketRecordCloneBtn.style.display = 'none';
+        pocketStopCloneBtn.style.display = 'inline-block';
+        pocketCloneRecordStatus.textContent = 'Recording voice sample...';
+        pocketCloneResult.textContent = 'Recording...';
+        pocketCreateCloneBtn.disabled = true;
+      } catch (error) {
+        pocketCloneRecordStatus.textContent = 'Error: ' + error.message;
+        pocketCloneResult.className = 'result error';
+        pocketCloneResult.textContent = 'Failed to access microphone: ' + error.message;
+      }
+    }
+
+    function stopPocketCloneRecording() {
+      if (pocketCloneMediaRecorder && pocketCloneMediaRecorder.state !== 'inactive') {
+        pocketCloneMediaRecorder.stop();
+        pocketRecordCloneBtn.style.display = 'inline-block';
+        pocketStopCloneBtn.style.display = 'none';
+      }
+    }
+
+    async function createPocketVoiceClone() {
+      const rawName = pocketCloneName.value.trim();
+      const name = rawName.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, '');
+
+      if (!name) {
+        pocketCloneResult.className = 'result error';
+        pocketCloneResult.textContent = 'Please enter a valid name.';
+        return;
+      }
+
+      if (!pocketCloneAudioBlob) {
+        pocketCloneResult.className = 'result error';
+        pocketCloneResult.textContent = 'Please record or upload a voice sample first.';
+        return;
+      }
+
+      pocketCreateCloneBtn.disabled = true;
+      pocketCloneRecordStatus.textContent = 'Creating voice clone...';
+      pocketCloneResult.innerHTML = '<span class="loading"></span>Creating voice clone...';
+      pocketCloneResult.className = 'result';
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', pocketCloneAudioBlob, 'reference.webm');
+        formData.append('cloneId', name);
+
+        const response = await authFetch(`${API_BASE}/pocket-tts/voices/clone`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          pocketCloneResult.className = 'result success';
+          pocketCloneResult.textContent = `Voice clone "${name}" created successfully!\n\nYou can now select it in the TTS section above.`;
+          pocketCloneRecordStatus.textContent = 'Voice clone created!';
+          pocketCloneName.value = '';
+          pocketCloneAudioBlob = null;
+          pocketCloneRecordedAudio.style.display = 'none';
+          pocketUploadCloneFile.value = '';
+          await loadPocketVoices();
+        } else {
+          throw new Error(data.message || 'Failed to create voice clone');
+        }
+      } catch (error) {
+        pocketCloneResult.className = 'result error';
+        pocketCloneResult.textContent = 'Error: ' + error.message;
+        pocketCloneRecordStatus.textContent = 'Clone creation failed';
+        pocketCreateCloneBtn.disabled = false;
+      }
+    }
+
+    function confirmDeletePocketClone(cloneId) {
+      pendingDeletePocketCloneId = cloneId;
+      confirmMessage.textContent = `Are you sure you want to delete the voice clone "${cloneId}"? This cannot be undone.`;
+      confirmDialog.classList.remove('hidden');
+    }
+
     // ==================== Initialize ====================
     async function initialize() {
       // Check auth status first
@@ -1743,7 +2084,23 @@
         qwenVoiceCloningEnabled = false;
       }
 
+      // Check if Pocket TTS is available
+      try {
+        const pocketResponse = await authFetch(`${API_BASE}/pocket-tts/voices`, {}, false);
+        if (pocketResponse.ok) {
+          const pocketData = await pocketResponse.json();
+          pocketEnabled = true;
+          pocketClones = pocketData.clones || [];
+          updatePocketVoiceCloneList();
+        } else {
+          pocketEnabled = false;
+        }
+      } catch {
+        pocketEnabled = false;
+      }
+
       updateQwenAvailability();
+      updatePocketAvailability();
       updateStyleInstructUI();
     }
 

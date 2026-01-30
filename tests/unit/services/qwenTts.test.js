@@ -10,6 +10,14 @@ vi.mock('node:child_process', () => ({
 // Mock config to ensure consistent test values
 vi.mock('../../../src/config/index.js', () => ({
   config: {
+    pocketTts: {
+      enabled: false,
+      defaultVoice: 'alba',
+      timeout: 60000,
+      daemonStartupTimeout: 60000,
+      preWarmDaemon: false,
+      voiceClonesDir: './pocket_voice_clones',
+    },
     qwenTts: {
       enabled: true,
       baseModelVariant: 'base-0.6b',

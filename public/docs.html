@@ -644,6 +644,172 @@ print(f"Generated {len(data['timestamps'])} subtitle entries")</code></pre>
     <pre><code>curl https://voice.sogni.ai/tts/voices</code></pre>
   </div>
 
+  <!-- Pocket TTS Section -->
+  <div class="section">
+    <h2>4. Pocket TTS (Fast, CPU-only)</h2>
+    <p>Kyutai Pocket TTS is a lightweight 100M-parameter, CPU-only, English-only TTS with ~200ms latency and voice cloning support. Requires <code>POCKET_TTS_ENABLED=true</code>.</p>
+
+    <h3>Generate Speech</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /pocket-tts
+    </div>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Type</th>
+        <th>Default</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>text</code> <span class="required">*</span></td>
+        <td>string</td>
+        <td>-</td>
+        <td>Text to convert to speech (1-10,000 characters)</td>
+      </tr>
+      <tr>
+        <td><code>voice</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>alba</td>
+        <td>Built-in voice: alba, marius, javert, jean, fantine, cosette, eponine, azelma</td>
+      </tr>
+      <tr>
+        <td><code>format</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>wav</td>
+        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON)</td>
+      </tr>
+    </table>
+
+    <h4>cURL Example</h4>
+    <pre><code># Save as WAV file
+curl -X POST https://voice.sogni.ai/pocket-tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!", "voice": "alba"}' \
+  --output output.wav</code></pre>
+
+    <h4>JavaScript Example</h4>
+    <pre><code>const response = await fetch('https://voice.sogni.ai/pocket-tts', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({ text: 'Hello, world!', voice: 'alba' })
+});
+
+const audioBlob = await response.blob();
+const audioUrl = URL.createObjectURL(audioBlob);
+const audio = new Audio(audioUrl);
+audio.play();</code></pre>
+
+    <h4>Python Example</h4>
+    <pre><code>import requests
+
+response = requests.post(
+    'https://voice.sogni.ai/pocket-tts',
+    json={'text': 'Hello, world!', 'voice': 'alba'}
+)
+
+with open('output.wav', 'wb') as f:
+    f.write(response.content)</code></pre>
+
+    <h3>List Voices</h3>
+    <div class="endpoint">
+      <span class="method get">GET</span> /pocket-tts/voices
+    </div>
+
+    <h4>Response</h4>
+    <pre><code>{
+  "voices": ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"],
+  "clones": ["my_clone"],
+  "default": "alba"
+}</code></pre>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl https://voice.sogni.ai/pocket-tts/voices</code></pre>
+
+    <h3>Create Voice Clone</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /pocket-tts/voices/clone
+    </div>
+    <p>Upload a reference audio file to create a voice clone. No transcript needed.</p>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>audio</code> <span class="required">*</span></td>
+        <td>File</td>
+        <td>Reference audio file (WAV, MP3, OGG)</td>
+      </tr>
+      <tr>
+        <td><code>cloneId</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Custom name for the clone (alphanumeric, underscore, hyphen). Auto-generated if omitted.</td>
+      </tr>
+    </table>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl -X POST https://voice.sogni.ai/pocket-tts/voices/clone \
+  -F "audio=@/path/to/reference.wav" \
+  -F "cloneId=my_voice"</code></pre>
+
+    <h4>Response</h4>
+    <pre><code>{
+  "success": true,
+  "cloneId": "my_voice",
+  "message": "Voice clone created successfully"
+}</code></pre>
+
+    <h3>Generate with Cloned Voice</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /pocket-tts/voices/clone/{cloneId}/generate
+    </div>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Type</th>
+        <th>Default</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>text</code> <span class="required">*</span></td>
+        <td>string</td>
+        <td>-</td>
+        <td>Text to convert to speech</td>
+      </tr>
+      <tr>
+        <td><code>format</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>wav</td>
+        <td>Output format: "wav", "opus", or "buffer"</td>
+      </tr>
+    </table>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl -X POST https://voice.sogni.ai/pocket-tts/voices/clone/my_voice/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello from my cloned voice!"}' \
+  --output output.wav</code></pre>
+
+    <h3>Delete Voice Clone</h3>
+    <div class="endpoint">
+      <span class="method" style="background:#dc3545">DELETE</span> /pocket-tts/voices/clone/{cloneId}
+    </div>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl -X DELETE https://voice.sogni.ai/pocket-tts/voices/clone/my_voice</code></pre>
+
+    <h4>Response</h4>
+    <pre><code>{
+  "success": true,
+  "cloneId": "my_voice",
+  "message": "Voice clone deleted successfully"
+}</code></pre>
+  </div>
+
   <div class="back-link">
     <a href="/">Back to Test Page</a>
   </div>

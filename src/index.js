@@ -3,6 +3,7 @@ import { tempFileManager } from './utils/tempFile.js';
 import { transcriptionService } from './services/transcription.js';
 import { ttsService } from './services/tts.js';
 import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTts.js';
+import { pocketTtsService } from './services/pocketTts.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -15,6 +16,7 @@ const gracefulShutdown = async (signal) => {
     ttsService.shutdown(),
     qwenTtsBaseService.shutdown(),
     qwenTtsCustomVoiceService.shutdown(),
+    pocketTtsService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -48,6 +50,11 @@ startServer()
         qwenTtsBaseService.initialize(),
         qwenTtsCustomVoiceService.initialize(),
       );
+    }
+
+    if (config.pocketTts.enabled && config.pocketTts.preWarmDaemon) {
+      console.log('Pre-warming Pocket TTS daemon...');
+      preWarmPromises.push(pocketTtsService.initialize());
     }
 
     await Promise.all(preWarmPromises);

@@ -35,6 +35,18 @@ export class FileUploadError extends Error {
   }
 }
 
+export class PocketTTSError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'PocketTTSError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}
+
 export class QwenTTSError extends Error {
   constructor(message, cause = null) {
     super(message);

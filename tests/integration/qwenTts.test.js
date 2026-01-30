@@ -68,6 +68,14 @@ vi.mock('../../src/config/index.js', () => ({
       preWarmDaemon: false,
     },
     upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+    pocketTts: {
+      enabled: false,
+      defaultVoice: 'alba',
+      timeout: 60000,
+      daemonStartupTimeout: 60000,
+      preWarmDaemon: false,
+      voiceClonesDir: './pocket_voice_clones',
+    },
     qwenTts: {
       enabled: true,
       modelVariant: 'base-1.7b',
@@ -510,6 +518,14 @@ describe('Qwen TTS Routes (disabled)', () => {
           preWarmDaemon: false,
         },
         upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+    pocketTts: {
+      enabled: false,
+      defaultVoice: 'alba',
+      timeout: 60000,
+      daemonStartupTimeout: 60000,
+      preWarmDaemon: false,
+      voiceClonesDir: './pocket_voice_clones',
+    },
         qwenTts: {
           enabled: false,
           modelVariant: 'base-1.7b',

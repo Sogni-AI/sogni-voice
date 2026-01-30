@@ -27,6 +27,14 @@ export const config = {
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
   },
+  pocketTts: {
+    enabled: process.env.POCKET_TTS_ENABLED === 'true',
+    defaultVoice: process.env.POCKET_TTS_DEFAULT_VOICE || 'alba',
+    timeout: parseInt(process.env.POCKET_TTS_TIMEOUT, 10) || 60000,
+    daemonStartupTimeout: parseInt(process.env.POCKET_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 60000,
+    preWarmDaemon: process.env.PREWARM_POCKET_TTS !== 'false',
+    voiceClonesDir: process.env.POCKET_TTS_VOICE_CLONES_DIR || './pocket_voice_clones',
+  },
   qwenTts: {
     enabled: process.env.QWEN_TTS_ENABLED === 'true',
     // Legacy single-model variant (unused in dual-daemon mode)
@@ -38,7 +46,7 @@ export const config = {
     defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
     timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 300000, // 5 minutes for voice cloning
     daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
-    preWarmDaemon: process.env.PREWARM_QWEN_TTS === 'true',
+    preWarmDaemon: process.env.PREWARM_QWEN_TTS !== 'false',
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
   },
 };

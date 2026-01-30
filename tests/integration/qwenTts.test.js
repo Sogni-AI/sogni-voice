@@ -6,7 +6,9 @@ vi.mock('node:child_process', async (importOriginal) => {
   const original = await importOriginal();
   return {
     ...original,
-    execFile: vi.fn((cmd, args, callback) => {
+    execFile: vi.fn((cmd, args, ...rest) => {
+      // Support both (cmd, args, callback) and (cmd, args, options, callback)
+      const callback = typeof rest[rest.length - 1] === 'function' ? rest[rest.length - 1] : rest[0];
       // For ffmpeg conversion, just copy the input to output
       if (cmd === 'ffmpeg' && args.includes('-i')) {
         const inputIndex = args.indexOf('-i') + 1;

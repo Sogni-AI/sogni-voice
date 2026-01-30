@@ -78,7 +78,7 @@ export const qwenTtsRoutes = [
             '-b:a', '32k',
             '-y',
             opusPath,
-          ]);
+          ], { timeout: 300000 });
 
           const opusBuffer = await readFile(opusPath);
           const durationMs = performance.now() - startTime;
@@ -164,7 +164,7 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ]);
+          ], { timeout: 300000 });
           const opusBuffer = await readFile(opusPath);
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS custom-voice request completed in ${(durationMs / 1000).toFixed(3)}s`);
@@ -246,7 +246,7 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ]);
+          ], { timeout: 300000 });
           const opusBuffer = await readFile(opusPath);
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS voice-design request completed in ${(durationMs / 1000).toFixed(3)}s`);
@@ -332,7 +332,7 @@ export const qwenTtsRoutes = [
           '-c:a', 'pcm_s16le', // 16-bit PCM
           '-y',              // Overwrite output
           wavPath,
-        ]);
+        ], { timeout: 300000 });
 
         console.log('Audio conversion completed');
 
@@ -364,7 +364,7 @@ export const qwenTtsRoutes = [
       pre: [{ method: checkEnabled }],
       validate: {
         params: Joi.object({
-          cloneId: Joi.string().required()
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
             .description('Voice clone ID'),
         }),
         payload: Joi.object({
@@ -418,7 +418,7 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ]);
+          ], { timeout: 300000 });
           const opusBuffer = await readFile(opusPath);
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS clone generation completed in ${(durationMs / 1000).toFixed(3)}s`);
@@ -509,7 +509,7 @@ export const qwenTtsRoutes = [
       pre: [{ method: checkEnabled }],
       validate: {
         params: Joi.object({
-          cloneId: Joi.string().required()
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
             .description('Voice clone ID to delete'),
         }),
       },
@@ -546,7 +546,7 @@ export const qwenTtsRoutes = [
       pre: [{ method: checkEnabled }],
       validate: {
         params: Joi.object({
-          cloneId: Joi.string().required()
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
             .description('Current voice clone ID'),
         }),
         payload: Joi.object({

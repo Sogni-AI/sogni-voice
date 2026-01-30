@@ -105,6 +105,13 @@ class QwenTTSDaemon:
         # Ensure voice clones directory exists
         os.makedirs(VOICE_CLONES_DIR, exist_ok=True)
 
+    @staticmethod
+    def _validate_clone_id(clone_id):
+        """Validate clone_id to prevent path traversal."""
+        if not clone_id or '/' in clone_id or '\\' in clone_id or '..' in clone_id:
+            return False
+        return True
+
     def _cache_clone(self, clone_id, prompt):
         """Add a voice clone prompt to the LRU cache, evicting oldest if full."""
         if clone_id in self.voice_clones:
@@ -174,8 +181,8 @@ class QwenTTSDaemon:
                 with open(default_path, 'rb') as f:
                     self.default_voice_prompt = pickle.load(f)
                 return self.default_voice_prompt
-            except Exception:
-                pass
+            except Exception as e:
+                print(f"[warning] Failed to load default voice prompt: {e}", file=sys.stderr)
 
         return None
 
@@ -305,6 +312,9 @@ class QwenTTSDaemon:
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
 
+        if not self._validate_clone_id(clone_id):
+            return {"success": False, "error": "Invalid clone_id"}
+
         model_info = MODEL_VARIANTS.get(self.model_variant, {})
         if 'voice_cloning' not in model_info.get('features', []):
             return {"success": False, "error": f"voice_cloning not supported by model variant '{self.model_variant}'"}
@@ -347,6 +357,9 @@ class QwenTTSDaemon:
         """Generate TTS using a cloned voice."""
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
+
+        if not self._validate_clone_id(clone_id):
+            return {"success": False, "error": "Invalid clone_id"}
 
         model_info = MODEL_VARIANTS.get(self.model_variant, {})
         if 'voice_cloning' not in model_info.get('features', []):
@@ -403,6 +416,9 @@ class QwenTTSDaemon:
 
     def delete_voice_clone(self, clone_id: str) -> dict:
         """Delete a voice clone."""
+        if not self._validate_clone_id(clone_id):
+            return {"success": False, "error": "Invalid clone_id"}
+
         try:
             clone_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
 
@@ -423,6 +439,9 @@ class QwenTTSDaemon:
 
     def rename_voice_clone(self, old_clone_id: str, new_clone_id: str) -> dict:
         """Rename a voice clone."""
+        if not self._validate_clone_id(old_clone_id) or not self._validate_clone_id(new_clone_id):
+            return {"success": False, "error": "Invalid clone_id"}
+
         try:
             old_path = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
             new_path = os.path.join(VOICE_CLONES_DIR, f"{new_clone_id}.pkl")
@@ -628,7 +647,8 @@ class QwenTTSDaemon:
         # Get speakers from model if available
         try:
             speakers = self.model.get_supported_speakers() or []
-        except Exception:
+        except Exception as e:
+            print(f"[warning] Failed to get speakers from model: {e}", file=sys.stderr)
             speakers = SPEAKERS if 'custom_voice' in features else []
 
         # Signal ready with model info

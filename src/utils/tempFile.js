@@ -25,9 +25,9 @@ export class TempFileManager {
   }
 
   async cleanup(tempDir) {
+    this.tempDirs.delete(tempDir);
     try {
       await rm(tempDir, { recursive: true, force: true });
-      this.tempDirs.delete(tempDir);
     } catch (error) {
       console.error(`Failed to cleanup temp dir ${tempDir}:`, error.message);
     }

@@ -77,7 +77,7 @@ export const ttsRoutes = [
               '-b:a', '32k',
               '-y',
               opusPath,
-            ]);
+            ], { timeout: 300000 });
             audioBuffer = await readFile(opusPath);
             audioFormat = 'opus';
           }
@@ -96,7 +96,7 @@ export const ttsRoutes = [
             '-b:a', '32k',
             '-y',
             opusPath,
-          ]);
+          ], { timeout: 300000 });
 
           const opusBuffer = await readFile(opusPath);
           const durationMs = performance.now() - startTime;

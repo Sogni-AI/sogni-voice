@@ -237,6 +237,12 @@
       opacity: 0.5;
       pointer-events: none;
     }
+    .clone-tab-content {
+      display: none;
+    }
+    .clone-tab-content.active {
+      display: block;
+    }
     .divider {
       border-top: 1px solid #dee2e6;
       margin: 24px 0;
@@ -487,12 +493,12 @@
 
     <div class="model-selector">
       <label>
-        <input type="radio" name="ttsModel" value="kokoro" checked>
-        Kokoro TTS <span class="badge">Fast</span>
+        <input type="radio" name="ttsModel" value="pocket" id="pocketRadio" checked>
+        Pocket TTS <span class="badge" style="background:#28a745">Fast + Cloning</span>
       </label>
       <label>
-        <input type="radio" name="ttsModel" value="pocket" id="pocketRadio">
-        Pocket TTS <span class="badge" style="background:#28a745">Fast + Cloning</span>
+        <input type="radio" name="ttsModel" value="kokoro">
+        Kokoro TTS <span class="badge">Fast</span>
       </label>
       <label>
         <input type="radio" name="ttsModel" value="qwen" id="qwenRadio">
@@ -513,7 +519,7 @@
         </select>
       </div>
 
-      <div class="form-group" style="margin-bottom: 0;" id="speedControl">
+      <div class="form-group hidden" style="margin-bottom: 0;" id="speedControl">
         <label for="speedRange">Speed: <span class="speed-value" id="speedValue">1.0</span></label>
         <input type="range" id="speedRange" min="0.5" max="2.0" step="0.1" value="1.0">
       </div>
@@ -561,116 +567,130 @@
     <div class="status" id="ttsTiming"></div>
   </div>
 
-  <!-- Voice Cloning Section (Qwen3 only) -->
+  <!-- Voice Cloning Section (Tabbed) -->
   <div class="section" id="voiceCloningSection">
-    <h2>3. Voice Cloning (Qwen3 TTS)</h2>
-    <p>Record a sample of your voice (3-10 seconds) to create a voice clone that can be used for text-to-speech.</p>
+    <h2>3. Voice Cloning</h2>
+    <p>Record a sample of your voice to create a voice clone that can be used for text-to-speech with any model.</p>
 
-    <div id="qwenDisabledMessage" class="result error hidden">
-      Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=true</code> in your environment.
-    </div>
     <div id="authRequiredMessage" class="result hidden">
       Enter your API key above to access voice cloning features.
     </div>
 
-    <div id="voiceCloningContent">
-      <div class="subsection">
-        <h3>Create New Voice Clone</h3>
-
-        <div class="form-group">
-          <label for="cloneName">Clone Name:</label>
-          <input type="text" id="cloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
-        </div>
-
-        <div class="form-group" id="transcriptGroup" style="display: none;">
-          <label for="cloneTranscript">Detected Transcript: <span id="transcribeStatus" style="font-size: 14px; color: #666; font-weight: normal;">(edit if needed)</span></label>
-          <textarea id="cloneTranscript" placeholder="Edit the transcript if needed..." style="min-height: 60px;"></textarea>
-          <button id="transcribeCloneBtn" class="secondary small" style="margin-top: 8px; display: none;">Retry Transcription</button>
-        </div>
-
-        <div class="controls">
-          <button id="recordCloneBtn">Record Voice Sample</button>
-          <button id="stopCloneBtn" style="display: none;">Stop Recording</button>
-          <span id="uploadOrLabel" style="color: #666; margin: 0 8px;">or</span>
-          <label for="uploadCloneFile" class="upload-btn" id="uploadCloneLabel">
-            Upload Audio File
-            <input type="file" id="uploadCloneFile" accept="audio/*" style="display: none;">
-          </label>
-        </div>
-
-        <div class="status" id="cloneRecordStatus">Ready to record or upload voice sample (3-10 seconds recommended)</div>
-
-        <label>Reference Audio:</label>
-        <audio id="cloneRecordedAudio" controls style="display: none;"></audio>
-        <div id="uploadedFileName" style="display: none; margin-top: 8px; color: #666; font-size: 14px;"></div>
-
-        <div class="controls" style="margin-top: 12px;">
-          <button id="createCloneBtn" disabled>Create Voice Clone</button>
-        </div>
-
-        <div class="result" id="cloneResult">Record or upload a voice sample (3-10 seconds recommended).</div>
-      </div>
-
-      <div class="divider"></div>
-
-      <div class="subsection">
-        <h3>Your Voice Clones</h3>
-        <div id="voiceCloneList" class="voice-clone-list">
-          <p style="color: #666;">No voice clones yet. Create one above!</p>
-        </div>
-        <button id="refreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
-      </div>
-    </div>
-  </div>
-
-  <!-- Pocket TTS Voice Cloning Section -->
-  <div class="section hidden" id="pocketVoiceCloningSection">
-    <h2>3. Voice Cloning (Pocket TTS)</h2>
-    <p>Upload a voice sample to create a voice clone. No transcript needed.</p>
-
-    <div id="pocketDisabledMessage" class="result error hidden">
-      Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=true</code> in your environment.
+    <div class="model-selector">
+      <label>
+        <input type="radio" name="cloneModel" value="pocket" checked>
+        Pocket TTS <span class="badge" style="background:#28a745">Fast</span>
+      </label>
+      <label>
+        <input type="radio" name="cloneModel" value="qwen">
+        Qwen3 TTS <span class="badge warning">Advanced</span>
+      </label>
     </div>
 
-    <div id="pocketVoiceCloningContent">
-      <div class="subsection">
-        <h3>Create New Voice Clone</h3>
-
-        <div class="form-group">
-          <label for="pocketCloneName">Clone Name:</label>
-          <input type="text" id="pocketCloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
-        </div>
-
-        <div class="controls">
-          <button id="pocketRecordCloneBtn">Record Voice Sample</button>
-          <button id="pocketStopCloneBtn" style="display: none;">Stop Recording</button>
-          <span style="color: #666; margin: 0 8px;">or</span>
-          <label for="pocketUploadCloneFile" class="upload-btn" id="pocketUploadCloneLabel">
-            Upload Audio File
-            <input type="file" id="pocketUploadCloneFile" accept="audio/*" style="display: none;">
-          </label>
-        </div>
-
-        <div class="status" id="pocketCloneRecordStatus">Ready to record or upload voice sample</div>
-
-        <label>Reference Audio:</label>
-        <audio id="pocketCloneRecordedAudio" controls style="display: none;"></audio>
-
-        <div class="controls" style="margin-top: 12px;">
-          <button id="pocketCreateCloneBtn" disabled>Create Voice Clone</button>
-        </div>
-
-        <div class="result" id="pocketCloneResult">Record or upload a voice sample to create a clone.</div>
+    <!-- Pocket TTS Cloning Tab -->
+    <div class="clone-tab-content active" id="pocketCloneTabContent">
+      <div id="pocketDisabledMessage" class="result error hidden">
+        Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=true</code> in your environment.
       </div>
 
-      <div class="divider"></div>
+      <div id="pocketVoiceCloningContent">
+        <div class="subsection">
+          <h3>Create New Voice Clone</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">No transcript needed - just provide a voice sample.</p>
 
-      <div class="subsection">
-        <h3>Your Voice Clones</h3>
-        <div id="pocketVoiceCloneList" class="voice-clone-list">
-          <p style="color: #666;">No voice clones yet. Create one above!</p>
+          <div class="form-group">
+            <label for="pocketCloneName">Clone Name:</label>
+            <input type="text" id="pocketCloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
+          </div>
+
+          <div class="controls">
+            <button id="pocketRecordCloneBtn">Record Voice Sample</button>
+            <button id="pocketStopCloneBtn" style="display: none;">Stop Recording</button>
+            <span style="color: #666; margin: 0 8px;">or</span>
+            <label for="pocketUploadCloneFile" class="upload-btn" id="pocketUploadCloneLabel">
+              Upload Audio File
+              <input type="file" id="pocketUploadCloneFile" accept="audio/*" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="pocketCloneRecordStatus">Ready to record or upload voice sample</div>
+
+          <label>Reference Audio:</label>
+          <audio id="pocketCloneRecordedAudio" controls style="display: none;"></audio>
+
+          <div class="controls" style="margin-top: 12px;">
+            <button id="pocketCreateCloneBtn" disabled>Create Voice Clone</button>
+          </div>
+
+          <div class="result" id="pocketCloneResult">Record or upload a voice sample to create a clone.</div>
         </div>
-        <button id="pocketRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Your Pocket TTS Clones</h3>
+          <div id="pocketVoiceCloneList" class="voice-clone-list">
+            <p style="color: #666;">No voice clones yet. Create one above!</p>
+          </div>
+          <button id="pocketRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Qwen3 TTS Cloning Tab -->
+    <div class="clone-tab-content" id="qwenCloneTabContent">
+      <div id="qwenDisabledMessage" class="result error hidden">
+        Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=true</code> in your environment.
+      </div>
+
+      <div id="voiceCloningContent">
+        <div class="subsection">
+          <h3>Create New Voice Clone</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">Requires a transcript of the voice sample (auto-detected).</p>
+
+          <div class="form-group">
+            <label for="cloneName">Clone Name:</label>
+            <input type="text" id="cloneName" placeholder="Enter a name (e.g., 'My_Voice' - letters, numbers, underscores)">
+          </div>
+
+          <div class="form-group" id="transcriptGroup" style="display: none;">
+            <label for="cloneTranscript">Detected Transcript: <span id="transcribeStatus" style="font-size: 14px; color: #666; font-weight: normal;">(edit if needed)</span></label>
+            <textarea id="cloneTranscript" placeholder="Edit the transcript if needed..." style="min-height: 60px;"></textarea>
+            <button id="transcribeCloneBtn" class="secondary small" style="margin-top: 8px; display: none;">Retry Transcription</button>
+          </div>
+
+          <div class="controls">
+            <button id="recordCloneBtn">Record Voice Sample</button>
+            <button id="stopCloneBtn" style="display: none;">Stop Recording</button>
+            <span id="uploadOrLabel" style="color: #666; margin: 0 8px;">or</span>
+            <label for="uploadCloneFile" class="upload-btn" id="uploadCloneLabel">
+              Upload Audio File
+              <input type="file" id="uploadCloneFile" accept="audio/*" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="cloneRecordStatus">Ready to record or upload voice sample (3-10 seconds recommended)</div>
+
+          <label>Reference Audio:</label>
+          <audio id="cloneRecordedAudio" controls style="display: none;"></audio>
+          <div id="uploadedFileName" style="display: none; margin-top: 8px; color: #666; font-size: 14px;"></div>
+
+          <div class="controls" style="margin-top: 12px;">
+            <button id="createCloneBtn" disabled>Create Voice Clone</button>
+          </div>
+
+          <div class="result" id="cloneResult">Record or upload a voice sample (3-10 seconds recommended).</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Your Qwen3 TTS Clones</h3>
+          <div id="voiceCloneList" class="voice-clone-list">
+            <p style="color: #666;">No voice clones yet. Create one above!</p>
+          </div>
+          <button id="refreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+        </div>
       </div>
     </div>
   </div>
@@ -854,7 +874,7 @@
     const voiceCloningContent = document.getElementById('voiceCloningContent');
     const qwenDisabledMessage = document.getElementById('qwenDisabledMessage');
 
-    let currentModel = 'kokoro';
+    let currentModel = 'pocket';
     let qwenEnabled = false;
     let qwenCustomVoiceEnabled = false;
     let qwenVoiceCloningEnabled = false;
@@ -872,30 +892,31 @@
       });
     });
 
-    const pocketVoiceCloningSection = document.getElementById('pocketVoiceCloningSection');
-
     function updateModelUI() {
       if (currentModel === 'qwen') {
         qwenOptions.classList.remove('hidden');
         speedControl.classList.add('hidden');
-        voiceCloningSection.classList.remove('hidden');
-        pocketVoiceCloningSection.classList.add('hidden');
         loadQwenVoices();
       } else if (currentModel === 'pocket') {
         qwenOptions.classList.add('hidden');
         speedControl.classList.add('hidden');
-        voiceCloningSection.classList.add('hidden');
-        pocketVoiceCloningSection.classList.remove('hidden');
         loadPocketVoices();
       } else {
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
-        voiceCloningSection.classList.remove('hidden');
-        pocketVoiceCloningSection.classList.add('hidden');
         loadKokoroVoices();
       }
       updateStyleInstructUI();
     }
+
+    // Clone model switching
+    document.querySelectorAll('input[name="cloneModel"]').forEach(radio => {
+      radio.addEventListener('change', (e) => {
+        const model = e.target.value;
+        document.getElementById('pocketCloneTabContent').classList.toggle('active', model === 'pocket');
+        document.getElementById('qwenCloneTabContent').classList.toggle('active', model === 'qwen');
+      });
+    });
 
     function updateStyleInstructUI() {
       const styleGroup = document.getElementById('styleInstructGroup');
@@ -905,9 +926,18 @@
       const styleBadge = document.getElementById('styleInstructBadge');
       const selectedVoice = voiceSelect.value;
 
+      // Only show style instructions for Qwen3 TTS
+      if (currentModel !== 'qwen') {
+        styleGroup.classList.add('hidden');
+        styleInput.disabled = true;
+        return;
+      }
+
+      styleGroup.classList.remove('hidden');
+
       // Voice clones don't support style instructions
       const isCloneVoice = selectedVoice && selectedVoice.startsWith('clone:');
-      const isAvailable = currentModel === 'qwen' && qwenCustomVoiceEnabled && !isCloneVoice;
+      const isAvailable = qwenCustomVoiceEnabled && !isCloneVoice;
 
       if (isAvailable) {
         styleGroup.classList.remove('style-disabled');
@@ -1096,6 +1126,7 @@
           }
           voiceSelect.appendChild(option);
         });
+
       } catch (error) {
         console.error('Failed to load Kokoro voices:', error);
         voiceSelect.innerHTML = '<option value="af_heart">af_heart (default)</option>';
@@ -1148,7 +1179,7 @@
           voiceSelect.appendChild(optgroup);
         }
 
-        // Add cloned voices (always available with dual-daemon setup)
+        // Add cloned voices
         if (qwenClones.length > 0) {
           const cloneGroup = document.createElement('optgroup');
           cloneGroup.label = 'Your Voice Clones';
@@ -2059,8 +2090,8 @@
       // Auth not required or key is present - enable UI and load data
       setUIDisabledState(false);
 
-      // Load Kokoro voices first (default) - use silent mode for init
-      await loadKokoroVoices(false);
+      // Load Pocket voices first (default) - use silent mode for init
+      await loadPocketVoices(false);
 
       // Check if Qwen is available and load voice clones list
       try {
@@ -2102,6 +2133,7 @@
       updateQwenAvailability();
       updatePocketAvailability();
       updateStyleInstructUI();
+
     }
 
     initialize();

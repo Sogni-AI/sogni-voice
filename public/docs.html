@@ -142,7 +142,7 @@
   <!-- Authentication Section -->
   <div class="section">
     <h2>Authentication (Optional)</h2>
-    <p>API key authentication can be enabled for production deployments. When enabled, all API endpoints (except health check) require authentication.</p>
+    <p>API key authentication can be enabled for production deployments. When enabled, <strong>all API endpoints</strong> (including Kokoro TTS, Pocket TTS, Qwen3 TTS, and Transcription) require authentication, except health check and auth status.</p>
 
     <h3>Check Auth Status</h3>
     <div class="endpoint">
@@ -685,13 +685,17 @@ print(f"Generated {len(data['timestamps'])} subtitle entries")</code></pre>
     <pre><code># Save as WAV file
 curl -X POST https://voice.sogni.ai/pocket-tts \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your_api_key_here" \
   -d '{"text": "Hello, world!", "voice": "alba"}' \
   --output output.wav</code></pre>
 
     <h4>JavaScript Example</h4>
     <pre><code>const response = await fetch('https://voice.sogni.ai/pocket-tts', {
   method: 'POST',
-  headers: { 'Content-Type': 'application/json' },
+  headers: {
+    'Content-Type': 'application/json',
+    'X-API-Key': 'your_api_key_here'
+  },
   body: JSON.stringify({ text: 'Hello, world!', voice: 'alba' })
 });
 
@@ -705,6 +709,7 @@ audio.play();</code></pre>
 
 response = requests.post(
     'https://voice.sogni.ai/pocket-tts',
+    headers={'X-API-Key': 'your_api_key_here'},
     json={'text': 'Hello, world!', 'voice': 'alba'}
 )
 
@@ -724,7 +729,7 @@ with open('output.wav', 'wb') as f:
 }</code></pre>
 
     <h4>cURL Example</h4>
-    <pre><code>curl https://voice.sogni.ai/pocket-tts/voices</code></pre>
+    <pre><code>curl -H "X-API-Key: your_api_key_here" https://voice.sogni.ai/pocket-tts/voices</code></pre>
 
     <h3>Create Voice Clone</h3>
     <div class="endpoint">
@@ -752,6 +757,7 @@ with open('output.wav', 'wb') as f:
 
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/pocket-tts/voices/clone \
+  -H "X-API-Key: your_api_key_here" \
   -F "audio=@/path/to/reference.wav" \
   -F "cloneId=my_voice"</code></pre>
 
@@ -791,6 +797,7 @@ with open('output.wav', 'wb') as f:
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/pocket-tts/voices/clone/my_voice/generate \
   -H "Content-Type: application/json" \
+  -H "X-API-Key: your_api_key_here" \
   -d '{"text": "Hello from my cloned voice!"}' \
   --output output.wav</code></pre>
 
@@ -800,7 +807,8 @@ with open('output.wav', 'wb') as f:
     </div>
 
     <h4>cURL Example</h4>
-    <pre><code>curl -X DELETE https://voice.sogni.ai/pocket-tts/voices/clone/my_voice</code></pre>
+    <pre><code>curl -X DELETE https://voice.sogni.ai/pocket-tts/voices/clone/my_voice \
+  -H "X-API-Key: your_api_key_here"</code></pre>
 
     <h4>Response</h4>
     <pre><code>{

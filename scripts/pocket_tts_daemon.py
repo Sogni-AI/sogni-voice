@@ -101,10 +101,10 @@ class PocketTTSDaemon:
             clone_dir = os.path.join(VOICE_CLONES_DIR, name)
             if not os.path.isdir(clone_dir):
                 continue
-            state_path = os.path.join(clone_dir, "voice_state.safetensors")
-            if os.path.exists(state_path):
+            ref_audio_path = os.path.join(clone_dir, "reference.wav")
+            if os.path.exists(ref_audio_path):
                 try:
-                    state = self.model.get_state_for_audio_prompt(state_path)
+                    state = self.model.get_state_for_audio_prompt(ref_audio_path)
                     self.voice_states[f"clone:{name}"] = state
                     print(f"[load] Loaded voice clone '{name}' from disk", file=sys.stderr)
                 except Exception as e:
@@ -172,11 +172,11 @@ class PocketTTSDaemon:
 
         if state is None:
             # Try loading from disk
-            state_path = os.path.join(VOICE_CLONES_DIR, clone_id, "voice_state.safetensors")
-            if not os.path.exists(state_path):
+            ref_audio_path = os.path.join(VOICE_CLONES_DIR, clone_id, "reference.wav")
+            if not os.path.exists(ref_audio_path):
                 return {"success": False, "error": f"Voice clone '{clone_id}' not found"}
             try:
-                state = self.model.get_state_for_audio_prompt(state_path)
+                state = self.model.get_state_for_audio_prompt(ref_audio_path)
                 self.voice_states[cache_key] = state
             except Exception as e:
                 return {"success": False, "error": f"Failed to load voice clone: {e}"}
@@ -227,18 +227,19 @@ class PocketTTSDaemon:
 
             print(f"[create_voice_clone] Creating clone '{clone_id}' from {audio_path}", file=sys.stderr)
 
-            # Save voice state to disk using model's built-in method
             clone_dir = os.path.join(VOICE_CLONES_DIR, clone_id)
             os.makedirs(clone_dir, exist_ok=True)
-            state_path = os.path.join(clone_dir, "voice_state.safetensors")
 
             start_time = time.time()
-            self.model.save_audio_prompt(audio_path, state_path)
-            elapsed = time.time() - start_time
-            print(f"[create_voice_clone] State saved in {elapsed:.2f}s", file=sys.stderr)
+            # Copy reference audio to clone directory for future state extraction
+            import shutil as _shutil
+            ref_audio_path = os.path.join(clone_dir, "reference.wav")
+            _shutil.copy2(audio_path, ref_audio_path)
 
-            # Load it back into cache
-            state = self.model.get_state_for_audio_prompt(state_path)
+            # Extract voice state from audio and cache it
+            state = self.model.get_state_for_audio_prompt(ref_audio_path)
+            elapsed = time.time() - start_time
+            print(f"[create_voice_clone] State extracted in {elapsed:.2f}s", file=sys.stderr)
 
             # Save metadata
             metadata = {"clone_id": clone_id, "source_audio": os.path.basename(audio_path)}
@@ -288,7 +289,7 @@ class PocketTTSDaemon:
             if os.path.exists(VOICE_CLONES_DIR):
                 for name in os.listdir(VOICE_CLONES_DIR):
                     clone_dir = os.path.join(VOICE_CLONES_DIR, name)
-                    if os.path.isdir(clone_dir) and os.path.exists(os.path.join(clone_dir, "voice_state.safetensors")):
+                    if os.path.isdir(clone_dir) and os.path.exists(os.path.join(clone_dir, "reference.wav")):
                         clones.append(name)
 
             return {

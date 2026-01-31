@@ -12,3 +12,7 @@ models/
 __pycache__/
 voice_clones/*.pkl
 !voice_clones/Marvin.pkl
+# Allow default Pocket TTS voice clone (Marvin)
+!pocket_voice_clones/Marvin/
+!pocket_voice_clones/Marvin/reference.wav
+!pocket_voice_clones/Marvin/metadata.json

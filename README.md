@@ -1,10 +1,42 @@
-# Sogni Transcribe API
+# Sogni Voice TTS & STT API
 
 ![Sogni Voice Banner](https://voice.sogni.ai/sogni-voice-banner.jpg)
 
-A REST API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required.
+A REST API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw / MoltBot / ClawdBot friendly!
 
 > **Apple Silicon Only**: This project uses [MLX](https://github.com/ml-explore/mlx) for ML acceleration and is designed specifically for **Apple Silicon Macs** (M1/M2/M3/M4). It will not work on Intel Macs or other platforms.
+
+## Model Comparison
+
+### Release Timeline
+
+| Model | Release Date | Notes |
+|-------|--------------|-------|
+| Kokoro TTS | Dec 25, 2024 (v0.19) → Jan 27, 2025 (v1.0) | First to market |
+| Pocket TTS | Jan 13, 2026 (v1.0.3) | ~1 year after Kokoro |
+| Qwen3-TTS | Jan 21-22, 2026 | ~8 days after Pocket |
+
+### Licensing
+
+| Model | Software License | Model Weights | Commercial Use |
+|-------|------------------|---------------|----------------|
+| Pocket TTS | MIT | CC-BY-4.0 | ✅ Permitted |
+| Kokoro TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+
+### Feature Comparison
+
+| Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS |
+|---------|------------|------------|-----------|
+| Parameters | 100M | 82M | 0.6B / 1.7B |
+| Languages | English only | 4 (EN, JA, ZH) | 11 languages |
+| Built-in Voices | 8 | 32 | 8 |
+| Latency | ~200ms | Fast | 97ms |
+| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (3s audio) |
+| Emotion Control | ❌ | ❌ | ✅ (CustomVoice) |
+| Voice Design | ❌ | ❌ | ✅ (VoiceDesign) |
+| Hardware | CPU (2-core) | MLX (Apple Silicon) | MPS (Apple Silicon) |
+| Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality |
 
 ## Features
 
@@ -15,6 +47,10 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
   - Word-level timestamp support
   - WAV and Opus output formats
+- **Text-to-Speech (Pocket TTS)**: Compact, CPU-friendly TTS with voice cloning (optional)
+  - 8 built-in English voices
+  - Voice cloning from 5-10 second audio samples
+  - ~200ms latency, 100M parameters, CPU-only
 - **Text-to-Speech (Qwen3-TTS)**: Advanced TTS with [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS) (optional)
   - Voice cloning from reference audio
   - Emotion/style control with custom voice models
@@ -31,11 +67,19 @@ brew install ffmpeg uv
 # 2. Install Node.js dependencies
 npm install
 
-# 3. Copy environment config (optional)
+# 3. Run interactive setup (recommended)
+./setup.sh
+
+# (Setup can optionally predownload all selected models to avoid first-request downloads)
+
+# OR manually copy environment config
 cp .env.example .env
 
-# 4. Start the server
+# 4. Start the server (test)
 npm run dev
+
+# 4. Start the server (prod)
+pm2 start ecosystem.config.cjs
 ```
 
 The server will be available at `http://localhost:3000`.
@@ -85,34 +129,45 @@ cp .env.example .env
 |----------|---------|-------------|
 | TRANSCRIBE_TIMEOUT | 300000 | Transcription timeout (ms) |
 | DAEMON_STARTUP_TIMEOUT | 120000 | Daemon startup timeout (ms) |
-| PREWARM_TRANSCRIPTION | true | Pre-load model on server start |
+| PREWARM_TRANSCRIPTION | 1 | Pre-load model on server start |
 
-#### Kokoro TTS
+#### Kokoro TTS (Optional)
 | Variable | Default | Description |
 |----------|---------|-------------|
+| TTS_ENABLED | 1 | Enable Kokoro TTS (set to '1'). If disabled, /tts routes are unavailable and Kokoro will not pre-warm/download. |
 | TTS_MODEL_ID | mlx-community/Kokoro-82M-bf16 | Kokoro model ID |
 | TTS_DEFAULT_VOICE | af_heart | Default TTS voice |
 | TTS_DEFAULT_SPEED | 1.0 | Default speech speed |
 | TTS_TIMEOUT | 60000 | TTS generation timeout (ms) |
 | TTS_DAEMON_STARTUP_TIMEOUT | 60000 | Daemon startup timeout (ms) |
-| PREWARM_TTS | true | Pre-load model on server start |
+| PREWARM_TTS | 1 | Pre-load model on server start |
+
+#### Pocket TTS (Optional)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| POCKET_TTS_ENABLED | 0 | Enable Pocket TTS (set to '1') |
+| POCKET_TTS_DEFAULT_VOICE | alba | Default TTS voice |
+| POCKET_TTS_TIMEOUT | 60000 | TTS generation timeout (ms) |
+| POCKET_TTS_DAEMON_STARTUP_TIMEOUT | 60000 | Daemon startup timeout (ms) |
+| PREWARM_POCKET_TTS | 0 | Pre-load model on server start |
+| POCKET_TTS_VOICE_CLONES_DIR | ./pocket_voice_clones | Voice clone storage directory |
 
 #### Qwen3-TTS (Optional)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| QWEN_TTS_ENABLED | false | Enable Qwen3-TTS (set to 'true') |
+| QWEN_TTS_ENABLED | 0 | Enable Qwen3-TTS (set to '1') |
 | QWEN_TTS_MODEL_VARIANT | base-0.6b | Model variant (see below) |
 | QWEN_TTS_DEFAULT_VOICE | Chelsie | Default voice |
 | QWEN_TTS_DEFAULT_LANGUAGE | English | Default language |
 | QWEN_TTS_TIMEOUT | 300000 | Request timeout (ms) |
 | QWEN_TTS_DAEMON_STARTUP_TIMEOUT | 180000 | Daemon startup timeout (ms) |
-| PREWARM_QWEN_TTS | false | Pre-load model on server start |
+| PREWARM_QWEN_TTS | 0 | Pre-load model on server start |
 | QWEN_TTS_VOICE_CLONES_DIR | ./voice_clones | Voice clone storage directory |
 
 #### Authentication (Optional)
 | Variable | Default | Description |
 |----------|---------|-------------|
-| AUTH_ENABLED | false | Enable API key authentication |
+| AUTH_ENABLED | 0 | Enable API key authentication |
 | AUTH_API_KEY | (none) | API key for authenticating requests |
 
 **Qwen3-TTS Model Variants:**
@@ -182,7 +237,7 @@ ClawdBot can then access the API at `http://localhost:3000`:
 - **Text-to-Speech**: `POST http://localhost:3000/tts`
 - **Health Check**: `GET http://localhost:3000/health`
 
-For authenticated deployments, set `AUTH_ENABLED=true` and provide the API key in ClawdBot's configuration.
+For authenticated deployments, set `AUTH_ENABLED=1` and provide the API key in ClawdBot's configuration.
 
 ## Authentication
 
@@ -194,7 +249,7 @@ Set the following environment variables:
 
 ```bash
 # .env
-AUTH_ENABLED=true
+AUTH_ENABLED=1
 AUTH_API_KEY=sk_your_secret_key_here
 ```
 
@@ -378,7 +433,7 @@ Response:
 
 ### Qwen3-TTS Endpoints
 
-> **Note**: Qwen3-TTS must be enabled with `QWEN_TTS_ENABLED=true`
+> **Note**: Qwen3-TTS must be enabled with `QWEN_TTS_ENABLED=1`
 
 #### List Voices and Capabilities
 
@@ -539,6 +594,130 @@ curl -X POST http://localhost:3000/qwen-tts/voice-design \
 | text * | string | - | Text to convert to speech |
 | instruct * | string | - | Description of the desired voice characteristics |
 
+### Pocket TTS Endpoints
+
+> **Note**: Pocket TTS must be enabled with `POCKET_TTS_ENABLED=1`
+
+#### List Voices
+
+```bash
+curl http://localhost:3000/pocket-tts/voices
+```
+
+Response:
+```json
+{
+  "voices": ["alba", "marius", "javert", "jean", "fantine", "cosette", "eponine", "azelma"],
+  "clones": ["my-voice"],
+  "default": "alba"
+}
+```
+
+| Field | Description |
+|-------|-------------|
+| voices | Built-in Pocket TTS voices |
+| clones | Custom cloned voices (varies by instance) |
+| default | Default voice if none specified |
+
+#### Generate Speech
+
+Download WAV file:
+```bash
+curl -X POST http://localhost:3000/pocket-tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world", "voice": "alba"}' \
+  --output output.wav
+```
+
+Download Opus file:
+```bash
+curl -X POST http://localhost:3000/pocket-tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world", "voice": "alba", "format": "opus"}' \
+  --output output.opus
+```
+
+Get base64-encoded audio:
+```bash
+curl -X POST http://localhost:3000/pocket-tts \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world", "voice": "alba", "format": "buffer"}'
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech (max 10000 chars) |
+| voice | string | alba | Voice name |
+| format | string | wav | Output format (wav, opus, buffer) |
+
+**JavaScript Example:**
+```javascript
+const response = await fetch('http://localhost:3000/pocket-tts', {
+  method: 'POST',
+  headers: { 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    text: 'Welcome to Pocket TTS!',
+    voice: 'marius'
+  })
+});
+
+const audioBlob = await response.blob();
+const audioUrl = URL.createObjectURL(audioBlob);
+const audio = new Audio(audioUrl);
+audio.play();
+```
+
+**Python Example:**
+```python
+import requests
+
+response = requests.post(
+    'http://localhost:3000/pocket-tts',
+    json={
+        'text': 'Welcome to Pocket TTS!',
+        'voice': 'marius'
+    }
+)
+
+with open('output.wav', 'wb') as f:
+    f.write(response.content)
+```
+
+#### Voice Cloning
+
+Create a voice clone from reference audio (5-10 seconds recommended):
+
+```bash
+curl -X POST http://localhost:3000/pocket-tts/voices/clone \
+  -F "audio=@reference.wav" \
+  -F "cloneId=my-voice"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| audio * | file | - | Reference audio file (WAV, MP3, OGG) |
+| cloneId | string | auto-generated | Custom ID for the voice clone |
+
+Generate speech with a cloned voice:
+
+```bash
+curl -X POST http://localhost:3000/pocket-tts/voices/clone/my-voice/generate \
+  -H "Content-Type: application/json" \
+  -d '{"text": "This will sound like the cloned voice"}' \
+  --output output.wav
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to convert to speech (max 10000 chars) |
+| format | string | wav | Output format (wav, opus, buffer) |
+
+Delete a voice clone:
+
+```bash
+curl -X DELETE http://localhost:3000/pocket-tts/voices/clone/my-voice
+```
+
 ## Testing
 
 ```bash
@@ -560,9 +739,13 @@ On first use, ML models are downloaded automatically:
 |---------|-----------|---------------|
 | Transcription | ~2.5 GB (parakeet-mlx) | 2-5 minutes |
 | Kokoro TTS | ~300 MB | 30-60 seconds |
+| Pocket TTS | ~200 MB | 30-60 seconds |
 | Qwen3-TTS | 1.5-4 GB (varies by variant) | 2-5 minutes |
 
 Models are cached locally after the first download. Subsequent requests will be much faster.
+Only enabled services will download models. For example, if you only use Pocket TTS, set `TTS_ENABLED=0` to avoid Kokoro downloads.
+
+If you ran `./setup.sh`, you can opt to predownload models during setup to avoid downloads on first request.
 
 ## Performance
 
@@ -574,9 +757,10 @@ All services use persistent Python daemons that keep ML models loaded in memory:
 - **Subsequent requests**: 2-5x faster (no model loading overhead)
 
 Daemons start automatically when the server starts and shut down gracefully with the server. To disable pre-loading (lazy load on first request instead), set:
-- `PREWARM_TRANSCRIPTION=false`
-- `PREWARM_TTS=false`
-- `PREWARM_QWEN_TTS=false`
+- `PREWARM_TRANSCRIPTION=0`
+- `PREWARM_TTS=0`
+- `PREWARM_POCKET_TTS=0`
+- `PREWARM_QWEN_TTS=0`
 
 ## Available Voices
 
@@ -610,6 +794,21 @@ Daemons start automatically when the server starts and shut down gracefully with
 #### Chinese Male (zm_*)
 - zm_yunjian, zm_yunxi, zm_yunyang
 
+### Pocket TTS Voices
+
+#### Built-in Voices (8 total)
+- **alba** (default) - English female voice
+- marius - English male voice
+- javert - English male voice
+- jean - English male voice
+- fantine - English female voice
+- cosette - English female voice
+- eponine - English female voice
+- azelma - English female voice
+
+#### Voice Cloning
+Custom voices can be created from 5-10 second audio samples using the voice cloning endpoint.
+
 ### Qwen3-TTS Voices
 
 For CustomVoice models: Chelsie, Ethan, Serena, Vivian, Ryan, Aiden, Eric, Dylan
@@ -627,6 +826,7 @@ sogni-voice/
 ├── scripts/
 │   ├── parakeet_daemon.py     # Transcription daemon
 │   ├── tts_daemon.py          # Kokoro TTS daemon
+│   ├── pocket_tts_daemon.py   # Pocket TTS daemon
 │   └── qwen_tts_daemon.py     # Qwen3-TTS daemon
 ├── src/
 │   ├── index.js               # Entry point
@@ -640,18 +840,21 @@ sogni-voice/
 │   │   ├── health.js          # GET /health
 │   │   ├── transcribe.js      # POST /transcribe
 │   │   ├── tts.js             # Kokoro TTS endpoints
+│   │   ├── pocketTts.js       # Pocket TTS endpoints
 │   │   ├── qwenTts.js         # Qwen3-TTS endpoints
 │   │   └── static.js          # Static file serving
 │   ├── services/
 │   │   ├── transcription.js   # Parakeet daemon integration
 │   │   ├── tts.js             # Kokoro TTS integration
+│   │   ├── pocketTts.js       # Pocket TTS integration
 │   │   └── qwenTts.js         # Qwen3-TTS integration
 │   └── utils/
 │       ├── tempFile.js        # Temp file management
 │       └── errors.js          # Custom error classes
 ├── models/
 │   └── kokoro-tts/            # Kokoro model (auto-downloaded)
-├── voice_clones/              # Voice clone storage
+├── voice_clones/              # Qwen TTS voice clone storage
+├── pocket_voice_clones/       # Pocket TTS voice clone storage
 ├── public/                    # Static files (demo UI)
 └── tests/
     ├── unit/                  # Unit tests

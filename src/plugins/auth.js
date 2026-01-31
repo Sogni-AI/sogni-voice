@@ -62,7 +62,7 @@ export const authPlugin = {
     // Only set up strategy and default if auth is enabled
     if (authConfig.enabled) {
       if (!authConfig.apiKey) {
-        console.warn('WARNING: AUTH_ENABLED is true but AUTH_API_KEY is not set. Authentication will fail for all requests.');
+        console.warn('WARNING: AUTH_ENABLED is 1 but AUTH_API_KEY is not set. Authentication will fail for all requests.');
       }
 
       // Create the strategy
@@ -73,7 +73,7 @@ export const authPlugin = {
 
       console.log('API key authentication enabled');
     } else {
-      console.log('API key authentication disabled (set AUTH_ENABLED=true to enable)');
+      console.log('API key authentication disabled (set AUTH_ENABLED=1 to enable)');
     }
   },
 };

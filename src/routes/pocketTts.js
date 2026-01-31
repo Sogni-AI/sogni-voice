@@ -14,7 +14,7 @@ const execFileAsync = promisify(execFile);
 
 const checkEnabled = (request, h) => {
   if (!config.pocketTts.enabled) {
-    throw Boom.notFound('Pocket TTS is not enabled. Set POCKET_TTS_ENABLED=true to enable.');
+    throw Boom.notFound('Pocket TTS is not enabled. Set POCKET_TTS_ENABLED=1 to enable.');
   }
   return h.continue;
 };

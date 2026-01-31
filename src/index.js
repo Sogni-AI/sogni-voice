@@ -34,12 +34,12 @@ startServer()
     // Optionally pre-warm the daemons
     const preWarmPromises = [];
 
-    if (config.transcription.preWarmDaemon) {
+    if (config.transcription.enabled && config.transcription.preWarmDaemon) {
       console.log('Pre-warming transcription daemon...');
       preWarmPromises.push(transcriptionService.initialize());
     }
 
-    if (config.tts.preWarmDaemon) {
+    if (config.tts.enabled && config.tts.preWarmDaemon) {
       console.log('Pre-warming TTS daemon...');
       preWarmPromises.push(ttsService.initialize());
     }

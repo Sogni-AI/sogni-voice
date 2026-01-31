@@ -9,11 +9,19 @@ import { tempFileManager } from '../utils/tempFile.js';
 
 const execFileAsync = promisify(execFile);
 
+const checkEnabled = (request, h) => {
+  if (!config.tts.enabled) {
+    throw Boom.notFound('Kokoro TTS is not enabled. Set TTS_ENABLED=1 to enable.');
+  }
+  return h.continue;
+};
+
 export const ttsRoutes = [
   {
     method: 'POST',
     path: '/tts',
     options: {
+      pre: [{ method: checkEnabled }],
       validate: {
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
@@ -127,6 +135,7 @@ export const ttsRoutes = [
     method: 'GET',
     path: '/tts/voices',
     options: {
+      pre: [{ method: checkEnabled }],
       description: 'List available TTS voices',
       tags: ['api', 'tts'],
     },

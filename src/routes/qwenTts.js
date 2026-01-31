@@ -15,7 +15,7 @@ const execFileAsync = promisify(execFile);
 // Helper to check if Qwen TTS is enabled
 const checkEnabled = (request, h) => {
   if (!config.qwenTts.enabled) {
-    throw Boom.notFound('Qwen TTS is not enabled. Set QWEN_TTS_ENABLED=true to enable.');
+    throw Boom.notFound('Qwen TTS is not enabled. Set QWEN_TTS_ENABLED=1 to enable.');
   }
   return h.continue;
 };

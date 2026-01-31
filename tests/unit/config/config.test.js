@@ -107,8 +107,8 @@ describe('config', () => {
       expect(config.tts.preWarmDaemon).toBe(true);
     });
 
-    it('should disable pre-warm when PREWARM_TTS is false', async () => {
-      process.env.PREWARM_TTS = 'false';
+  it('should disable pre-warm when PREWARM_TTS is 0', async () => {
+    process.env.PREWARM_TTS = '0';
       const { config } = await import('../../../src/config/index.js');
       expect(config.tts.preWarmDaemon).toBe(false);
     });

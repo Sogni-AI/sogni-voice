@@ -2,6 +2,7 @@ import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
+import { stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { tempFileManager } from '../utils/tempFile.js';
@@ -34,6 +35,10 @@ export const transcribeRoutes = [
       let tempDir = null;
 
       try {
+        if (!config.transcription.enabled) {
+          throw Boom.serviceUnavailable('Transcription is disabled');
+        }
+
         const { file, timestamps: timestampsParam, wordTimestamps: wordTimestampsParam } = request.payload;
         const timestamps = timestampsParam === 'true';
         const wordTimestamps = wordTimestampsParam === 'true';
@@ -52,6 +57,11 @@ export const transcribeRoutes = [
         // Write uploaded file to temp location
         const writeStream = createWriteStream(tempFilePath);
         await pipeline(file, writeStream);
+
+        const { size } = await stat(tempFilePath);
+        if (size === 0) {
+          throw Boom.badRequest('Uploaded audio file is empty');
+        }
 
         // Perform transcription
         const result = await transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps });

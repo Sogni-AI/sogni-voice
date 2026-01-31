@@ -13,9 +13,9 @@
     "pm2:delete": "pm2 delete sogni-transcribe",
     "pm2:logs": "pm2 logs sogni-transcribe",
     "pm2:status": "pm2 status",
-    "test": "vitest",
-    "test:run": "vitest run",
-    "test:coverage": "vitest run --coverage"
+    "test": "node scripts/run-tests.js",
+    "test:run": "node scripts/run-tests.js run",
+    "test:coverage": "node scripts/run-tests.js run --coverage"
   },
   "keywords": [
     "transcription",

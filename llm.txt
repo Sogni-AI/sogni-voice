@@ -1,0 +1,127 @@
+You are OpenClaw running on the user's Mac. Your job:
+
+A) Check whether this Mac + network supports using https://voice.sogni.ai/
+B) If supported, set up the local Sogni Voice server on this Mac (Apple Silicon only) and verify it works.
+
+Rules:
+- Be cautious: before running any command that installs software, starts daemons, opens ports, or edits config files, show the exact command(s) you will run and ask for confirmation ("OK to run?").
+- Prefer non-destructive checks first.
+- If anything fails, capture errors and propose the next most likely fix.
+- Keep a short "Status / Next step" section after each phase.
+
+========================================
+PHASE 1 — Quick compatibility & network checks
+========================================
+
+1) Confirm macOS + CPU architecture:
+- Run:
+  - sw_vers
+  - uname -m
+If uname -m is NOT "arm64", explain that local Sogni Voice will not work here (Apple Silicon only). Offer fallback: use hosted https://voice.sogni.ai/ only.
+
+2) Confirm required tools exist (don't install yet):
+- Run:
+  - which git && git --version
+  - node -v || true
+  - npm -v || true
+  - brew --version || true
+  - curl --version
+Report what's missing.
+
+3) Check hosted endpoint reachability (best-effort):
+- Run:
+  - curl -sS -D - https://voice.sogni.ai/health -o /dev/null || true
+  - curl -sS https://voice.sogni.ai/health || true
+  - curl -sS https://voice.sogni.ai/auth/status || true
+If /health doesn't respond, try:
+  - curl -sS -I https://voice.sogni.ai/ || true
+Summarize: DNS/TLS/HTTP status + whether endpoint appears alive from this network.
+
+If PHASE 1 looks good (Apple Silicon + network ok), proceed.
+
+========================================
+PHASE 2 — Install Sogni Voice locally on this Mac
+========================================
+
+Target: install under ~/Developer/sogni-voice (create folder if missing).
+
+4) Clone repo (ask before running):
+- Command:
+  - mkdir -p ~/Developer && cd ~/Developer
+  - (if folder exists, don't delete—ask what to do)
+  - git clone https://github.com/Sogni-AI/sogni-voice.git
+  - cd sogni-voice
+
+5) Install system deps (ask before running):
+Sogni Voice requires ffmpeg + uv via Homebrew. (Per repo quick start/requirements.)
+- Commands:
+  - brew install ffmpeg uv
+
+If Homebrew is missing, propose installing Homebrew, but ask first.
+
+6) Install Node dependencies (ask before running):
+- Command:
+  - cd ~/Developer/sogni-voice
+  - npm install
+
+7) Configure environment:
+Prefer the project's interactive setup:
+- Command:
+  - ./setup.sh
+If setup.sh fails or user prefers manual, do:
+  - cp .env.example .env
+Then open .env and explain key options (keep defaults unless user asks):
+- AUTH_ENABLED (default 0)
+- QWEN_TTS_ENABLED (default 0; optional heavier model)
+Do not enable auth unless user wants it.
+
+========================================
+PHASE 3 — Run as a service with PM2 + verify endpoints
+========================================
+
+8) Start server:
+Option A (recommended): PM2 (ask before installing PM2 globally)
+- Commands:
+  - npm install -g pm2
+  - npm run pm2:start
+Option B: simple foreground dev run:
+- Command:
+  - npm run dev
+
+9) Verify local health + core endpoints:
+- Commands:
+  - curl -sS http://localhost:3000/health
+  - curl -sS http://localhost:3000/auth/status || true
+  - curl -sS http://localhost:3000/tts/voices || true
+
+If server is healthy, summarize:
+- Base URL: http://localhost:3000
+- Health: /health
+- TTS: POST /tts
+- STT: POST /transcribe
+
+10) (Optional) Enable start-on-boot for PM2 (ask first):
+- Commands:
+  - pm2 startup
+  - pm2 save
+
+========================================
+PHASE 4 — Integrate with OpenClaw
+========================================
+
+11) Locate OpenClaw's voice / TTS / STT configuration.
+- Search for config files or env vars that specify TTS/STT base URL.
+- Set it to use:
+  - TTS base: http://localhost:3000
+  - STT base: http://localhost:3000
+If OpenClaw supports a "health check" for providers, run it.
+
+12) Final validation:
+- Run a short end-to-end test in OpenClaw:
+  - Ask OpenClaw to synthesize "Hello from Sogni Voice" via the local endpoint.
+  - If STT is configured, test by transcribing a short audio clip if available.
+
+Deliverable:
+- A concise summary of what you changed (paths, services, config keys), and how to start/stop:
+  - pm2 status / logs / restart / stop
+- Include troubleshooting tips if anything failed (ports, missing brew, arm64 requirement, etc.).

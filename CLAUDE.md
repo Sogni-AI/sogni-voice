@@ -49,7 +49,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - Auto-restart if daemon dies unexpectedly
 
 **Services**:
-- `transcription.js` → `scripts/parakeet_daemon.py`: Uses parakeet-mlx for transcription
+- `transcription.js` → `scripts/parakeet_daemon.py`: Uses Parakeet TDT (parakeet-mlx) for transcription
   - Supports sentence-level and word-level timestamp extraction
 - `tts.js` → `scripts/tts_daemon.py`: Uses mlx-audio library with Kokoro model for TTS
   - Model stored locally at `models/kokoro-tts/`, auto-downloaded from HuggingFace on first run
@@ -113,7 +113,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 ## External Dependencies
 
 - **Python 3.10+** with virtual environment at `.venv/`
-- **parakeet-mlx**: Audio transcription (~2.5GB model, auto-downloads on first use)
+- **Parakeet TDT** (parakeet-mlx): Audio transcription (~2.5GB model, auto-downloads on first use)
 - **mlx-audio**: TTS via Kokoro model (~300MB, auto-downloads to `models/kokoro-tts/`)
 - **qwen-tts**: Qwen3-TTS for advanced features (optional, enabled via `QWEN_TTS_ENABLED`)
 - **ffmpeg**: Required for audio processing (`brew install ffmpeg`)

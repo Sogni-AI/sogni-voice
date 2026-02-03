@@ -736,6 +736,28 @@
           </div>
           <button id="refreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
         </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Import Voice Clone</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">Import a previously exported Qwen3 voice clone (.zip file).</p>
+
+          <div class="form-group">
+            <label for="qwenImportCloneId">Clone Name (optional):</label>
+            <input type="text" id="qwenImportCloneId" placeholder="Leave blank to use name from ZIP file">
+          </div>
+
+          <div class="controls">
+            <label for="qwenImportFile" class="upload-btn" style="background: #17a2b8;">
+              Select ZIP File
+              <input type="file" id="qwenImportFile" accept=".zip,application/zip" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="qwenImportStatus">Select a ZIP file to import</div>
+          <div class="result" id="qwenImportResult" style="display: none;"></div>
+        </div>
       </div>
     </div>
   </div>
@@ -2204,6 +2226,65 @@
         pocketImportStatus.textContent = 'Import failed';
         pocketImportResult.className = 'result error';
         pocketImportResult.textContent = 'Error: ' + error.message;
+      }
+    }
+
+    // ==================== Qwen TTS Import ====================
+    const qwenImportFile = document.getElementById('qwenImportFile');
+    const qwenImportCloneId = document.getElementById('qwenImportCloneId');
+    const qwenImportStatus = document.getElementById('qwenImportStatus');
+    const qwenImportResult = document.getElementById('qwenImportResult');
+
+    qwenImportFile.addEventListener('change', handleQwenImport);
+
+    async function handleQwenImport(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      if (!file.name.endsWith('.zip') && file.type !== 'application/zip') {
+        qwenImportStatus.textContent = 'Please select a ZIP file';
+        qwenImportResult.className = 'result error';
+        qwenImportResult.textContent = 'Invalid file type. Please select a .zip file.';
+        qwenImportResult.style.display = 'block';
+        return;
+      }
+
+      qwenImportStatus.textContent = 'Importing voice clone...';
+      qwenImportResult.innerHTML = '<span class="loading"></span>Importing voice clone...';
+      qwenImportResult.className = 'result';
+      qwenImportResult.style.display = 'block';
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const customCloneId = qwenImportCloneId.value.trim();
+        if (customCloneId) {
+          formData.append('cloneId', customCloneId.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
+        }
+
+        const response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/import`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          qwenImportStatus.textContent = 'Import successful!';
+          qwenImportResult.className = 'result success';
+          qwenImportResult.textContent = `Voice clone "${data.cloneId}" imported successfully!`;
+          qwenImportCloneId.value = '';
+          qwenImportFile.value = '';
+          // Refresh the voices list
+          await loadQwenVoices();
+        } else {
+          throw new Error(data.message || 'Import failed');
+        }
+      } catch (error) {
+        qwenImportStatus.textContent = 'Import failed';
+        qwenImportResult.className = 'result error';
+        qwenImportResult.textContent = 'Error: ' + error.message;
       }
     }
 

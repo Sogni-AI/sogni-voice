@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { access } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { PocketTTSError } from '../utils/errors.js';
 
@@ -315,6 +316,20 @@ export class PocketTTSService {
     return this.voiceInfo.voices.length > 0
       ? this.voiceInfo.voices
       : ['alba', 'marius', 'javert', 'jean', 'fantine', 'cosette', 'eponine', 'azelma'];
+  }
+
+  getVoiceClonePath(cloneId) {
+    return join(config.pocketTts.voiceClonesDir, cloneId);
+  }
+
+  async voiceCloneExists(cloneId) {
+    const clonePath = this.getVoiceClonePath(cloneId);
+    try {
+      await access(clonePath);
+      return true;
+    } catch {
+      return false;
+    }
   }
 }
 

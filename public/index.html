@@ -34,6 +34,24 @@
       color: #333;
       text-align: center;
     }
+    .demo-notice {
+      background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
+      border: 1px solid #ffc107;
+      border-left: 4px solid #ff9800;
+      border-radius: 6px;
+      padding: 12px 16px;
+      margin-bottom: 24px;
+      font-size: 14px;
+      color: #856404;
+      line-height: 1.5;
+    }
+    .demo-notice a {
+      color: #0056b3;
+      font-weight: 500;
+    }
+    .demo-notice a:hover {
+      text-decoration: underline;
+    }
     .section {
       background: white;
       border-radius: 8px;
@@ -426,6 +444,11 @@
   </a>
   <h1>Sogni Transcribe Test Page</h1>
 
+  <!-- Demo Notice -->
+  <div class="demo-notice">
+    <strong>Demo Console</strong> — This is a live demo for testing the API. Voice clones may be cleared periodically. For production use, <a href="https://github.com/Sogni-AI/sogni-voice" target="_blank">clone the repo</a> and run on your own hardware.
+  </div>
+
   <!-- Authentication Section -->
   <div class="auth-section" id="authSection">
     <div class="auth-banner">
@@ -633,6 +656,28 @@
             <p style="color: #666;">No voice clones yet. Create one above!</p>
           </div>
           <button id="pocketRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Import Voice Clone</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">Import a previously exported voice clone (.zip file).</p>
+
+          <div class="form-group">
+            <label for="pocketImportCloneId">Clone Name (optional):</label>
+            <input type="text" id="pocketImportCloneId" placeholder="Leave blank to use name from ZIP file">
+          </div>
+
+          <div class="controls">
+            <label for="pocketImportFile" class="upload-btn" style="background: #17a2b8;">
+              Select ZIP File
+              <input type="file" id="pocketImportFile" accept=".zip,application/zip" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="pocketImportStatus">Select a ZIP file to import</div>
+          <div class="result" id="pocketImportResult" style="display: none;"></div>
         </div>
       </div>
     </div>
@@ -1288,10 +1333,46 @@
         <div class="voice-clone-item">
           <span class="clone-name">${escapeHtml(clone)}</span>
           <div class="clone-actions">
+            <button class="secondary small" onclick="downloadPocketClone('${escapeHtml(clone)}')">Download</button>
             <button class="danger small" onclick="confirmDeletePocketClone('${escapeHtml(clone)}')">Delete</button>
           </div>
         </div>
       `).join('');
+    }
+
+    function downloadPocketClone(cloneId) {
+      // Create a temporary link to trigger download
+      const url = `${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/download`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `${cloneId}.zip`;
+      // Add auth header via fetch if needed
+      if (authEnabled && apiKey) {
+        // For authenticated downloads, use fetch and create blob URL
+        authFetch(url)
+          .then(response => {
+            if (!response.ok) throw new Error('Download failed');
+            return response.blob();
+          })
+          .then(blob => {
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `${cloneId}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+          })
+          .catch(error => {
+            alert('Failed to download voice clone: ' + error.message);
+          });
+      } else {
+        // No auth needed, direct download
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
     }
 
     function updateQwenAvailability() {
@@ -2065,6 +2146,65 @@
       pendingDeletePocketCloneId = cloneId;
       confirmMessage.textContent = `Are you sure you want to delete the voice clone "${cloneId}"? This cannot be undone.`;
       confirmDialog.classList.remove('hidden');
+    }
+
+    // ==================== Pocket TTS Import ====================
+    const pocketImportFile = document.getElementById('pocketImportFile');
+    const pocketImportCloneId = document.getElementById('pocketImportCloneId');
+    const pocketImportStatus = document.getElementById('pocketImportStatus');
+    const pocketImportResult = document.getElementById('pocketImportResult');
+
+    pocketImportFile.addEventListener('change', handlePocketImport);
+
+    async function handlePocketImport(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+
+      if (!file.name.endsWith('.zip') && file.type !== 'application/zip') {
+        pocketImportStatus.textContent = 'Please select a ZIP file';
+        pocketImportResult.className = 'result error';
+        pocketImportResult.textContent = 'Invalid file type. Please select a .zip file.';
+        pocketImportResult.style.display = 'block';
+        return;
+      }
+
+      pocketImportStatus.textContent = 'Importing voice clone...';
+      pocketImportResult.innerHTML = '<span class="loading"></span>Importing voice clone...';
+      pocketImportResult.className = 'result';
+      pocketImportResult.style.display = 'block';
+
+      try {
+        const formData = new FormData();
+        formData.append('file', file);
+
+        const customCloneId = pocketImportCloneId.value.trim();
+        if (customCloneId) {
+          formData.append('cloneId', customCloneId.replace(/\s+/g, '_').replace(/[^a-zA-Z0-9_-]/g, ''));
+        }
+
+        const response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/import`, {
+          method: 'POST',
+          body: formData,
+        });
+
+        const data = await response.json();
+
+        if (response.ok && data.success) {
+          pocketImportStatus.textContent = 'Import successful!';
+          pocketImportResult.className = 'result success';
+          pocketImportResult.textContent = `Voice clone "${data.cloneId}" imported successfully!`;
+          pocketImportCloneId.value = '';
+          pocketImportFile.value = '';
+          // Refresh the voices list
+          await loadPocketVoices();
+        } else {
+          throw new Error(data.message || 'Import failed');
+        }
+      } catch (error) {
+        pocketImportStatus.textContent = 'Import failed';
+        pocketImportResult.className = 'result error';
+        pocketImportResult.textContent = 'Error: ' + error.message;
+      }
     }
 
     // ==================== Initialize ====================

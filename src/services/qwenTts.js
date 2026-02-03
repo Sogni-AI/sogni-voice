@@ -270,11 +270,15 @@ export class QwenTTSService {
       throw new QwenTTSError('outputPath is required');
     }
 
+    if (!instruct) {
+      throw new QwenTTSError('instruct is required');
+    }
+
     const result = await this._sendRequest({
       type: 'generate_custom_voice',
       text,
       speaker,
-      instruct: instruct || '',
+      instruct,
       output_path: outputPath,
     });
 

@@ -1,11 +1,12 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, readdir, stat } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
+import { join, basename } from 'node:path';
 import { config } from '../config/index.js';
 import { pocketTtsService } from '../services/pocketTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
@@ -312,6 +313,190 @@ export const pocketTtsRoutes = [
         }
         console.error('Pocket TTS delete clone error:', error);
         throw Boom.badImplementation('Failed to delete voice clone');
+      }
+    },
+  },
+
+  // Download voice clone as ZIP
+  {
+    method: 'GET',
+    path: '/pocket-tts/voices/clone/{cloneId}/download',
+    options: {
+      pre: [{ method: checkEnabled }],
+      validate: {
+        params: Joi.object({
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('Voice clone ID to download'),
+        }),
+      },
+      description: 'Download a voice clone as a ZIP file',
+      tags: ['api', 'pocket-tts'],
+    },
+    handler: async (request, h) => {
+      let tempDir = null;
+
+      try {
+        const { cloneId } = request.params;
+
+        // Check if clone exists
+        const exists = await pocketTtsService.voiceCloneExists(cloneId);
+        if (!exists) {
+          throw Boom.notFound(`Voice clone '${cloneId}' not found`);
+        }
+
+        const clonePath = pocketTtsService.getVoiceClonePath(cloneId);
+
+        // Create temp directory for the ZIP
+        tempDir = await tempFileManager.createTempDir('pocket-download-');
+        const zipPath = join(tempDir, `${cloneId}.zip`);
+
+        // Create ZIP using system zip command
+        await execFileAsync('zip', ['-j', zipPath, join(clonePath, 'reference.wav'), join(clonePath, 'metadata.json')], {
+          timeout: 60000,
+        });
+
+        const zipBuffer = await readFile(zipPath);
+
+        return h.response(zipBuffer)
+          .type('application/zip')
+          .header('Content-Disposition', `attachment; filename="${cloneId}.zip"`);
+      } catch (error) {
+        if (error.isBoom) throw error;
+        console.error('Pocket TTS download clone error:', error);
+        throw Boom.badImplementation('Failed to download voice clone');
+      } finally {
+        if (tempDir) {
+          await tempFileManager.cleanup(tempDir);
+        }
+      }
+    },
+  },
+
+  // Import voice clone from ZIP
+  {
+    method: 'POST',
+    path: '/pocket-tts/voices/clone/import',
+    options: {
+      pre: [{ method: checkEnabled }],
+      payload: {
+        maxBytes: config.upload.maxFileSizeBytes,
+        output: 'stream',
+        parse: true,
+        multipart: true,
+        allow: 'multipart/form-data',
+      },
+      validate: {
+        payload: Joi.object({
+          file: Joi.any().required()
+            .description('ZIP file containing voice clone (reference.wav and optionally metadata.json)'),
+          cloneId: Joi.string().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('Optional custom name for the imported voice clone'),
+        }),
+      },
+      description: 'Import a voice clone from a ZIP file',
+      tags: ['api', 'pocket-tts'],
+    },
+    handler: async (request, h) => {
+      let tempDir = null;
+
+      try {
+        const { file, cloneId: userCloneId } = request.payload;
+
+        await pocketTtsService.initialize();
+
+        // Create temp directory for extraction
+        tempDir = await tempFileManager.createTempDir('pocket-import-');
+        const zipPath = join(tempDir, 'upload.zip');
+        const extractDir = join(tempDir, 'extracted');
+
+        // Save uploaded ZIP
+        await pipeline(file, createWriteStream(zipPath));
+
+        // Create extraction directory
+        await mkdir(extractDir, { recursive: true });
+
+        // Extract ZIP using system unzip command
+        await execFileAsync('unzip', ['-o', zipPath, '-d', extractDir], {
+          timeout: 60000,
+        });
+
+        // Find reference.wav in extracted contents (may be in root or subdirectory)
+        const extractedFiles = await readdir(extractDir);
+        let referenceWavPath = null;
+        let metadataPath = null;
+        let extractedCloneId = null;
+
+        // Check if files are directly in extractDir or in a subdirectory
+        for (const item of extractedFiles) {
+          const itemPath = join(extractDir, item);
+          const itemStat = await stat(itemPath);
+
+          if (itemStat.isDirectory()) {
+            // Check inside subdirectory
+            const subFiles = await readdir(itemPath);
+            if (subFiles.includes('reference.wav')) {
+              referenceWavPath = join(itemPath, 'reference.wav');
+              extractedCloneId = item; // Use directory name as clone ID
+              if (subFiles.includes('metadata.json')) {
+                metadataPath = join(itemPath, 'metadata.json');
+              }
+              break;
+            }
+          } else if (item === 'reference.wav') {
+            referenceWavPath = itemPath;
+          } else if (item === 'metadata.json') {
+            metadataPath = itemPath;
+          }
+        }
+
+        if (!referenceWavPath) {
+          throw Boom.badRequest('Invalid ZIP file: must contain reference.wav');
+        }
+
+        // Determine clone ID: user provided > metadata > extracted directory name > ZIP filename
+        let cloneId = userCloneId;
+        if (!cloneId && metadataPath) {
+          try {
+            const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+            cloneId = metadata.clone_id;
+          } catch {
+            // Ignore metadata parsing errors
+          }
+        }
+        if (!cloneId) {
+          cloneId = extractedCloneId || `imported_${randomBytes(4).toString('hex')}`;
+        }
+
+        // Sanitize clone ID
+        cloneId = cloneId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        // Convert audio to correct format (24000 Hz, mono, 16-bit PCM)
+        const convertedWavPath = join(tempDir, 'converted.wav');
+        await execFileAsync('ffmpeg', [
+          '-i', referenceWavPath,
+          '-ar', '24000',
+          '-ac', '1',
+          '-c:a', 'pcm_s16le',
+          '-y',
+          convertedWavPath,
+        ], { timeout: 300000 });
+
+        // Create voice clone using the service (this will copy to the clones directory)
+        const result = await pocketTtsService.createVoiceClone(convertedWavPath, cloneId);
+
+        return {
+          success: true,
+          cloneId: result.cloneId,
+          message: 'Voice clone imported successfully',
+        };
+      } catch (error) {
+        if (error.isBoom) throw error;
+        console.error('Pocket TTS import clone error:', error);
+        throw Boom.badImplementation('Failed to import voice clone');
+      } finally {
+        if (tempDir) {
+          await tempFileManager.cleanup(tempDir);
+        }
       }
     },
   },

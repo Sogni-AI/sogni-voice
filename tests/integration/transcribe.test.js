@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
+import dotenv from 'dotenv';
+
+// Load .env before mocking
+dotenv.config();
 
 // Create mock function before mocking module
 const mockTranscribe = vi.hoisted(() => vi.fn());
 
-// Mock config to disable auth and set test values
+// Mock config using environment variables
 vi.mock('../../src/config/index.js', () => ({
   config: {
     server: { port: 3000, host: '0.0.0.0' },
@@ -13,38 +17,40 @@ vi.mock('../../src/config/index.js', () => ({
       excludePaths: ['/health', '/auth/status'],
     },
     tts: {
-      modelId: 'test-model',
-      defaultVoice: 'af_heart',
-      defaultSpeed: 1.0,
+      enabled: process.env.TTS_ENABLED === '1',
+      modelId: process.env.TTS_MODEL_ID || 'test-model',
+      defaultVoice: process.env.TTS_DEFAULT_VOICE || 'af_heart',
+      defaultSpeed: parseFloat(process.env.TTS_DEFAULT_SPEED) || 1.0,
       timeout: 60000,
       daemonStartupTimeout: 60000,
       preWarmDaemon: false,
     },
     transcription: {
+      enabled: process.env.TRANSCRIPTION_ENABLED === '1',
       timeout: 300000,
       daemonStartupTimeout: 120000,
       preWarmDaemon: false,
     },
     upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
     pocketTts: {
-      enabled: false,
-      defaultVoice: 'alba',
+      enabled: process.env.POCKET_TTS_ENABLED === '1',
+      defaultVoice: process.env.POCKET_TTS_DEFAULT_VOICE || 'alba',
       timeout: 60000,
       daemonStartupTimeout: 60000,
       preWarmDaemon: false,
-      voiceClonesDir: './pocket_voice_clones',
+      voiceClonesDir: process.env.POCKET_TTS_VOICE_CLONES_DIR || './pocket_voice_clones',
     },
     qwenTts: {
-      enabled: false,
-      modelVariant: 'base-0.6b',
+      enabled: process.env.QWEN_TTS_ENABLED === '1',
+      modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',
-      defaultVoice: 'Chelsie',
-      defaultLanguage: 'English',
+      defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+      defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
       timeout: 120000,
       daemonStartupTimeout: 180000,
       preWarmDaemon: false,
-      voiceClonesDir: './voice_clones',
+      voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
     },
   },
 }));

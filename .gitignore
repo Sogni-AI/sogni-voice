@@ -12,7 +12,11 @@ models/
 __pycache__/
 voice_clones/*.pkl
 !voice_clones/Marvin.pkl
+# Ignore all Pocket TTS voice clones except specific ones
+pocket_voice_clones/*
 # Allow default Pocket TTS voice clone (Marvin)
 !pocket_voice_clones/Marvin/
-!pocket_voice_clones/Marvin/reference.wav
-!pocket_voice_clones/Marvin/metadata.json
+# Allow Motivator voice clone
+!pocket_voice_clones/Motivator/
+!pocket_voice_clones/Motivator/reference.wav
+!pocket_voice_clones/Motivator/metadata.json

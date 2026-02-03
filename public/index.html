@@ -1356,6 +1356,7 @@
           <span class="clone-name">${escapeHtml(clone)}</span>
           <div class="clone-actions">
             <button class="secondary small" onclick="downloadPocketClone('${escapeHtml(clone)}')">Download</button>
+            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(clone)}', 'pocket')">Rename</button>
             <button class="danger small" onclick="confirmDeletePocketClone('${escapeHtml(clone)}')">Delete</button>
           </div>
         </div>
@@ -1367,7 +1368,7 @@
       const url = `${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/download`;
       const link = document.createElement('a');
       link.href = url;
-      link.download = `${cloneId}.zip`;
+      link.download = `pocket-tts-${cloneId}.zip`;
       // Add auth header via fetch if needed
       if (authEnabled && apiKey) {
         // For authenticated downloads, use fetch and create blob URL
@@ -1380,7 +1381,42 @@
             const blobUrl = URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = blobUrl;
-            a.download = `${cloneId}.zip`;
+            a.download = `pocket-tts-${cloneId}.zip`;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(blobUrl);
+          })
+          .catch(error => {
+            alert('Failed to download voice clone: ' + error.message);
+          });
+      } else {
+        // No auth needed, direct download
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+      }
+    }
+
+    function downloadQwenClone(cloneId) {
+      // Create a temporary link to trigger download
+      const url = `${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(cloneId)}/download`;
+      const link = document.createElement('a');
+      link.href = url;
+      link.download = `qwen-tts-${cloneId}.zip`;
+      // Add auth header via fetch if needed
+      if (authEnabled && apiKey) {
+        // For authenticated downloads, use fetch and create blob URL
+        authFetch(url)
+          .then(response => {
+            if (!response.ok) throw new Error('Download failed');
+            return response.blob();
+          })
+          .then(blob => {
+            const blobUrl = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = blobUrl;
+            a.download = `qwen-tts-${cloneId}.zip`;
             document.body.appendChild(a);
             a.click();
             document.body.removeChild(a);
@@ -1858,7 +1894,8 @@
         <div class="voice-clone-item">
           <span class="clone-name">${escapeHtml(clone)}</span>
           <div class="clone-actions">
-            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(clone)}')">Rename</button>
+            <button class="secondary small" onclick="downloadQwenClone('${escapeHtml(clone)}')">Download</button>
+            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(clone)}', 'qwen')">Rename</button>
             <button class="danger small" onclick="confirmDeleteClone('${escapeHtml(clone)}')">Delete</button>
           </div>
         </div>
@@ -1947,9 +1984,11 @@
     const renameConfirm = document.getElementById('renameConfirm');
     const renameCancel = document.getElementById('renameCancel');
     let pendingRenameCloneId = null;
+    let pendingRenameService = null; // 'qwen' or 'pocket'
 
-    function openRenameDialog(cloneId) {
+    function openRenameDialog(cloneId, service = 'qwen') {
       pendingRenameCloneId = cloneId;
+      pendingRenameService = service;
       renameOldName.textContent = cloneId;
       renameNewName.value = cloneId;
       renameError.style.display = 'none';
@@ -1982,7 +2021,8 @@
       renameConfirm.textContent = 'Renaming...';
 
       try {
-        const response = await authFetch(`${API_BASE}/qwen-tts/voices/clone/${encodeURIComponent(pendingRenameCloneId)}`, {
+        const apiBase = pendingRenameService === 'pocket' ? 'pocket-tts' : 'qwen-tts';
+        const response = await authFetch(`${API_BASE}/${apiBase}/voices/clone/${encodeURIComponent(pendingRenameCloneId)}`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
@@ -1995,8 +2035,13 @@
         if (response.ok && data.success) {
           renameDialog.classList.add('hidden');
           pendingRenameCloneId = null;
-          // Refresh the list
-          await loadQwenVoices();
+          pendingRenameService = null;
+          // Refresh the appropriate list
+          if (apiBase === 'pocket-tts') {
+            await loadPocketVoices();
+          } else {
+            await loadQwenVoices();
+          }
         } else {
           throw new Error(data.message || 'Failed to rename voice clone');
         }
@@ -2012,6 +2057,7 @@
     renameCancel.addEventListener('click', () => {
       renameDialog.classList.add('hidden');
       pendingRenameCloneId = null;
+      pendingRenameService = null;
     });
 
     // Handle Enter key in rename input

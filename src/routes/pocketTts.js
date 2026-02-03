@@ -317,6 +317,54 @@ export const pocketTtsRoutes = [
     },
   },
 
+  // Rename voice clone
+  {
+    method: 'PATCH',
+    path: '/pocket-tts/voices/clone/{cloneId}',
+    options: {
+      pre: [{ method: checkEnabled }],
+      validate: {
+        params: Joi.object({
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('Current voice clone ID'),
+        }),
+        payload: Joi.object({
+          newCloneId: Joi.string().required().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('New name for the voice clone (alphanumeric, underscore, hyphen only)'),
+        }),
+      },
+      description: 'Rename a voice clone',
+      tags: ['api', 'pocket-tts'],
+    },
+    handler: async (request, h) => {
+      try {
+        const { cloneId } = request.params;
+        const { newCloneId } = request.payload;
+
+        await pocketTtsService.initialize();
+
+        const result = await pocketTtsService.renameVoiceClone(cloneId, newCloneId);
+
+        return {
+          success: true,
+          oldCloneId: result.oldCloneId,
+          newCloneId: result.newCloneId,
+          message: 'Voice clone renamed successfully',
+        };
+      } catch (error) {
+        if (error.isBoom) throw error;
+        if (error.message?.includes('not found')) {
+          throw Boom.notFound(`Voice clone '${request.params.cloneId}' not found`);
+        }
+        if (error.message?.includes('already exists')) {
+          throw Boom.conflict(`Voice clone '${request.payload.newCloneId}' already exists`);
+        }
+        console.error('Pocket TTS rename clone error:', error);
+        throw Boom.badImplementation('Failed to rename voice clone');
+      }
+    },
+  },
+
   // Download voice clone as ZIP
   {
     method: 'GET',

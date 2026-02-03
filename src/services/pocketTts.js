@@ -270,6 +270,27 @@ export class PocketTTSService {
     };
   }
 
+  async renameVoiceClone(oldCloneId, newCloneId) {
+    if (!oldCloneId) {
+      throw new PocketTTSError('oldCloneId is required');
+    }
+
+    if (!newCloneId) {
+      throw new PocketTTSError('newCloneId is required');
+    }
+
+    const result = await this._sendRequest({
+      type: 'rename_voice_clone',
+      old_clone_id: oldCloneId,
+      new_clone_id: newCloneId,
+    });
+
+    return {
+      oldCloneId: result.old_clone_id,
+      newCloneId: result.new_clone_id,
+    };
+  }
+
   async listVoices() {
     const result = await this._sendRequest({
       type: 'list_voices',

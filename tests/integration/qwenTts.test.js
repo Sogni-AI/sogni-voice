@@ -168,6 +168,7 @@ vi.mock('../../src/services/qwenTts.js', () => {
       };
     }),
     deleteVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'clone_test123' }),
+    renameVoiceClone: vi.fn().mockResolvedValue({ oldCloneId: 'clone_test123', newCloneId: 'renamed_clone' }),
     listVoiceClones: vi.fn().mockResolvedValue({ clones: ['clone_test123', 'clone_test456'] }),
     listVoices: vi.fn().mockReturnValue(['Chelsie', 'Ethan', 'Serena', 'Vivian']),
     getModelInfo: vi.fn().mockReturnValue({
@@ -178,6 +179,10 @@ vi.mock('../../src/services/qwenTts.js', () => {
     supportsFeature: vi.fn().mockImplementation((feature) => features.includes(feature)),
     shutdown: vi.fn().mockResolvedValue(undefined),
     isEnabled: vi.fn().mockReturnValue(true),
+    voiceCloneExists: vi.fn().mockResolvedValue(true),
+    getVoiceClonePath: vi.fn().mockImplementation((cloneId) => `./voice_clones/${cloneId}.pkl`),
+    validateVoiceClone: vi.fn().mockResolvedValue({ valid: true }),
+    importVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'imported_clone' }),
   });
 
   return {
@@ -492,6 +497,73 @@ describe('Qwen TTS Routes', () => {
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
       expect(payload.cloneId).toBe('clone_test123');
+    });
+  });
+
+  describe('GET /qwen-tts/voices/clone/:cloneId/download', () => {
+    it('should return 404 for non-existent clone', async () => {
+      // Override voiceCloneExists to return false for this test
+      qwenTtsBaseService.voiceCloneExists.mockResolvedValueOnce(false);
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/qwen-tts/voices/clone/nonexistent_clone/download',
+      });
+
+      expect(response.statusCode).toBe(404);
+      const payload = JSON.parse(response.payload);
+      expect(payload.message).toContain('not found');
+    });
+
+    it('should validate clone ID format', async () => {
+      const response = await server.inject({
+        method: 'GET',
+        url: '/qwen-tts/voices/clone/invalid..clone/download',
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+  });
+
+  describe('POST /qwen-tts/voices/clone/import', () => {
+    it('should return 400 for missing file', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/qwen-tts/voices/clone/import',
+        headers: {
+          'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary',
+        },
+        payload:
+          '------WebKitFormBoundary\r\n' +
+          'Content-Disposition: form-data; name="cloneId"\r\n\r\n' +
+          'my-clone\r\n' +
+          '------WebKitFormBoundary--\r\n',
+      });
+
+      expect(response.statusCode).toBe(400);
+    });
+
+    it('should validate clone ID format', async () => {
+      const fakeZipBuffer = Buffer.from('PK..fake zip content');
+
+      const response = await server.inject({
+        method: 'POST',
+        url: '/qwen-tts/voices/clone/import',
+        headers: {
+          'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary',
+        },
+        payload:
+          '------WebKitFormBoundary\r\n' +
+          'Content-Disposition: form-data; name="cloneId"\r\n\r\n' +
+          'invalid..clone/id\r\n' +
+          '------WebKitFormBoundary\r\n' +
+          'Content-Disposition: form-data; name="file"; filename="clone.zip"\r\n' +
+          'Content-Type: application/zip\r\n\r\n' +
+          fakeZipBuffer.toString('binary') + '\r\n' +
+          '------WebKitFormBoundary--\r\n',
+      });
+
+      expect(response.statusCode).toBe(400);
     });
   });
 });

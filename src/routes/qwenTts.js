@@ -1,11 +1,12 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile, unlink } from 'node:fs/promises';
+import { readFile, unlink, mkdir, writeFile, readdir, stat } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
+import { join, basename } from 'node:path';
 import { config } from '../config/index.js';
 import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
@@ -587,6 +588,209 @@ export const qwenTtsRoutes = [
         }
         console.error('Qwen TTS rename clone error:', error);
         throw Boom.badImplementation('Failed to rename voice clone');
+      }
+    },
+  },
+
+  // Download voice clone as ZIP
+  {
+    method: 'GET',
+    path: '/qwen-tts/voices/clone/{cloneId}/download',
+    options: {
+      pre: [{ method: checkEnabled }],
+      validate: {
+        params: Joi.object({
+          cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('Voice clone ID to download'),
+        }),
+      },
+      description: 'Download a voice clone as a ZIP file',
+      tags: ['api', 'qwen-tts'],
+    },
+    handler: async (request, h) => {
+      let tempDir = null;
+
+      try {
+        const { cloneId } = request.params;
+
+        // Check if clone exists
+        const exists = await qwenTtsBaseService.voiceCloneExists(cloneId);
+        if (!exists) {
+          throw Boom.notFound(`Voice clone '${cloneId}' not found`);
+        }
+
+        const clonePath = qwenTtsBaseService.getVoiceClonePath(cloneId);
+
+        // Create temp directory for the ZIP
+        tempDir = await tempFileManager.createTempDir('qwen-download-');
+        const zipDir = join(tempDir, 'package');
+        await mkdir(zipDir, { recursive: true });
+
+        // Create metadata.json
+        const metadata = {
+          clone_id: cloneId,
+          format_version: '1.0',
+          service: 'qwen-tts',
+          created_at: new Date().toISOString(),
+        };
+        await writeFile(join(zipDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
+
+        // Copy the pickle file to the package directory
+        await execFileAsync('cp', [clonePath, join(zipDir, `${cloneId}.pkl`)], { timeout: 60000 });
+
+        // Create ZIP
+        const zipPath = join(tempDir, `${cloneId}.zip`);
+        await execFileAsync('zip', ['-j', zipPath, join(zipDir, `${cloneId}.pkl`), join(zipDir, 'metadata.json')], {
+          timeout: 60000,
+        });
+
+        const zipBuffer = await readFile(zipPath);
+
+        return h.response(zipBuffer)
+          .type('application/zip')
+          .header('Content-Disposition', `attachment; filename="${cloneId}.zip"`);
+      } catch (error) {
+        if (error.isBoom) throw error;
+        console.error('Qwen TTS download clone error:', error);
+        throw Boom.badImplementation('Failed to download voice clone');
+      } finally {
+        if (tempDir) {
+          await tempFileManager.cleanup(tempDir);
+        }
+      }
+    },
+  },
+
+  // Import voice clone from ZIP
+  {
+    method: 'POST',
+    path: '/qwen-tts/voices/clone/import',
+    options: {
+      pre: [{ method: checkEnabled }],
+      payload: {
+        maxBytes: config.upload.maxFileSizeBytes,
+        output: 'stream',
+        parse: true,
+        multipart: true,
+        allow: 'multipart/form-data',
+      },
+      validate: {
+        payload: Joi.object({
+          file: Joi.any().required()
+            .description('ZIP file containing voice clone (.pkl file and optionally metadata.json)'),
+          cloneId: Joi.string().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
+            .description('Optional custom name for the imported voice clone'),
+        }),
+      },
+      description: 'Import a voice clone from a ZIP file',
+      tags: ['api', 'qwen-tts'],
+    },
+    handler: async (request, h) => {
+      let tempDir = null;
+
+      try {
+        const { file, cloneId: userCloneId } = request.payload;
+
+        // Use the Base daemon for voice cloning operations
+        await qwenTtsBaseService.initialize();
+
+        if (!qwenTtsBaseService.supportsFeature('voice_cloning')) {
+          throw Boom.badRequest('voice_cloning feature requires a Base model variant');
+        }
+
+        // Create temp directory for extraction
+        tempDir = await tempFileManager.createTempDir('qwen-import-');
+        const zipPath = join(tempDir, 'upload.zip');
+        const extractDir = join(tempDir, 'extracted');
+
+        // Save uploaded ZIP
+        await pipeline(file, createWriteStream(zipPath));
+
+        // Create extraction directory
+        await mkdir(extractDir, { recursive: true });
+
+        // Extract ZIP using system unzip command
+        await execFileAsync('unzip', ['-o', zipPath, '-d', extractDir], {
+          timeout: 60000,
+        });
+
+        // Find .pkl file in extracted contents
+        const extractedFiles = await readdir(extractDir);
+        let pklPath = null;
+        let metadataPath = null;
+        let extractedCloneId = null;
+
+        // Check if files are directly in extractDir or in a subdirectory
+        for (const item of extractedFiles) {
+          const itemPath = join(extractDir, item);
+          const itemStat = await stat(itemPath);
+
+          if (itemStat.isDirectory()) {
+            // Check inside subdirectory
+            const subFiles = await readdir(itemPath);
+            for (const subFile of subFiles) {
+              if (subFile.endsWith('.pkl')) {
+                pklPath = join(itemPath, subFile);
+                extractedCloneId = basename(subFile, '.pkl');
+              } else if (subFile === 'metadata.json') {
+                metadataPath = join(itemPath, subFile);
+              }
+            }
+            if (pklPath) break;
+          } else if (item.endsWith('.pkl')) {
+            pklPath = itemPath;
+            extractedCloneId = basename(item, '.pkl');
+          } else if (item === 'metadata.json') {
+            metadataPath = itemPath;
+          }
+        }
+
+        if (!pklPath) {
+          throw Boom.badRequest('Invalid ZIP file: must contain a .pkl file');
+        }
+
+        // Determine clone ID: user provided > metadata > filename > random
+        let cloneId = userCloneId;
+        if (!cloneId && metadataPath) {
+          try {
+            const metadata = JSON.parse(await readFile(metadataPath, 'utf-8'));
+            cloneId = metadata.clone_id;
+          } catch {
+            // Ignore metadata parsing errors
+          }
+        }
+        if (!cloneId) {
+          cloneId = extractedCloneId || `imported_${randomBytes(4).toString('hex')}`;
+        }
+
+        // Sanitize clone ID
+        cloneId = cloneId.replace(/[^a-zA-Z0-9_-]/g, '_');
+
+        // Validate the pickle file via daemon
+        const validation = await qwenTtsBaseService.validateVoiceClone(pklPath);
+        if (!validation.valid) {
+          throw Boom.badRequest(`Invalid voice clone file: ${validation.error || 'unknown error'}`);
+        }
+
+        // Import via daemon (copy + cache)
+        const result = await qwenTtsBaseService.importVoiceClone(pklPath, cloneId);
+
+        return {
+          success: true,
+          cloneId: result.cloneId,
+          message: 'Voice clone imported successfully',
+        };
+      } catch (error) {
+        if (error.isBoom) throw error;
+        if (error.message?.includes('already exists')) {
+          throw Boom.conflict(`Voice clone already exists`);
+        }
+        console.error('Qwen TTS import clone error:', error);
+        throw Boom.badImplementation('Failed to import voice clone');
+      } finally {
+        if (tempDir) {
+          await tempFileManager.cleanup(tempDir);
+        }
       }
     },
   },

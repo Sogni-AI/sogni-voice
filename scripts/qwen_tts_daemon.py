@@ -489,6 +489,76 @@ class QwenTTSDaemon:
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e)}
 
+    def validate_voice_clone(self, pkl_path: str) -> dict:
+        """Validate a voice clone pickle file.
+
+        Checks that the file contains a valid voice prompt structure.
+        WARNING: Pickle files can execute arbitrary code during deserialization.
+        Only validate files from trusted sources.
+        """
+        try:
+            if not os.path.exists(pkl_path):
+                return {"success": True, "valid": False, "error": "File not found"}
+
+            print(f"[validate_voice_clone] Validating {pkl_path}", file=sys.stderr)
+
+            with open(pkl_path, 'rb') as f:
+                prompt = pickle.load(f)
+
+            # Check if it's a valid voice prompt type
+            # Voice prompts from qwen-tts are typically tensors, dicts, or sequences
+            import torch
+            if isinstance(prompt, (torch.Tensor, dict, list, tuple)):
+                print(f"[validate_voice_clone] Valid prompt type: {type(prompt)}", file=sys.stderr)
+                return {"success": True, "valid": True}
+            else:
+                return {"success": True, "valid": False, "error": f"Unexpected type: {type(prompt).__name__}"}
+
+        except Exception as e:
+            print(f"Validate voice clone error: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return {"success": True, "valid": False, "error": str(e)}
+
+    def import_voice_clone(self, pkl_path: str, clone_id: str) -> dict:
+        """Import a voice clone from an external pickle file.
+
+        Copies the pickle file to the voice clones directory and loads it into cache.
+        """
+        if not self._validate_clone_id(clone_id):
+            return {"success": False, "error": "Invalid clone_id"}
+
+        try:
+            if not os.path.exists(pkl_path):
+                return {"success": False, "error": "Source file not found"}
+
+            import shutil
+
+            # Destination path
+            dest_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
+
+            # Check if destination already exists
+            if os.path.exists(dest_path):
+                return {"success": False, "error": f"Voice clone '{clone_id}' already exists"}
+
+            print(f"[import_voice_clone] Copying {pkl_path} to {dest_path}", file=sys.stderr)
+
+            # Copy the file
+            shutil.copy2(pkl_path, dest_path)
+
+            # Load into cache
+            with open(dest_path, 'rb') as f:
+                prompt = pickle.load(f)
+            self._cache_clone(clone_id, prompt)
+
+            print(f"[import_voice_clone] Imported and cached '{clone_id}'", file=sys.stderr)
+
+            return {"success": True, "clone_id": clone_id}
+
+        except Exception as e:
+            print(f"Import voice clone error: {e}", file=sys.stderr)
+            traceback.print_exc(file=sys.stderr)
+            return {"success": False, "error": str(e)}
+
     def send_response(self, response: dict):
         """Send JSON response to stdout."""
         print(json.dumps(response), flush=True)
@@ -619,6 +689,28 @@ class QwenTTSDaemon:
                 return {"id": request_id, "success": False, "error": "Missing new_clone_id"}
 
             result = self.rename_voice_clone(old_clone_id, new_clone_id)
+            result["id"] = request_id
+            return result
+
+        elif request_type == "validate_voice_clone":
+            pkl_path = request.get("pkl_path")
+            if not pkl_path:
+                return {"id": request_id, "success": False, "error": "Missing pkl_path"}
+
+            result = self.validate_voice_clone(pkl_path)
+            result["id"] = request_id
+            return result
+
+        elif request_type == "import_voice_clone":
+            pkl_path = request.get("pkl_path")
+            if not pkl_path:
+                return {"id": request_id, "success": False, "error": "Missing pkl_path"}
+
+            clone_id = request.get("clone_id")
+            if not clone_id:
+                return {"id": request_id, "success": False, "error": "Missing clone_id"}
+
+            result = self.import_voice_clone(pkl_path, clone_id)
             result["id"] = request_id
             return result
 

@@ -85,6 +85,8 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `POST /qwen-tts/voices/clone/{cloneId}/generate` - Generate with cloned voice
 - `GET /qwen-tts/voices` - List voices, clones, and capabilities
 - `DELETE /qwen-tts/voices/clone/{cloneId}` - Delete voice clone
+- `GET /qwen-tts/voices/clone/{cloneId}/download` - Download voice clone as ZIP
+- `POST /qwen-tts/voices/clone/import` - Import voice clone from ZIP
 
 ## Configuration
 

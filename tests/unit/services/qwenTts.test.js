@@ -509,4 +509,104 @@ describe('QwenTTSService', () => {
       consoleSpy.mockRestore();
     });
   });
+
+  describe('voice clone helper methods', () => {
+    describe('getVoiceClonePath', () => {
+      it('should return the path to the pickle file', () => {
+        const path = service.getVoiceClonePath('my-voice');
+        expect(path).toContain('my-voice.pkl');
+        expect(path).toContain('voice_clones');
+      });
+    });
+
+    describe('voiceCloneExists', () => {
+      beforeEach(async () => {
+        // Reset modules to mock fs/promises
+        vi.resetModules();
+      });
+
+      it('should return false when file does not exist', async () => {
+        // Service uses access which will throw for non-existent files
+        const exists = await service.voiceCloneExists('nonexistent_clone');
+        expect(exists).toBe(false);
+      });
+    });
+
+    describe('validateVoiceClone', () => {
+      beforeEach(async () => {
+        const initPromise = service.initialize();
+        setTimeout(() => {
+          mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":[]}\n');
+        }, 10);
+        await initPromise;
+      });
+
+      it('should send validate request to daemon', async () => {
+        const validatePromise = service.validateVoiceClone('/tmp/test.pkl');
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const request = JSON.parse(mockStdin.lastWrite);
+        expect(request.type).toBe('validate_voice_clone');
+        expect(request.pkl_path).toBe('/tmp/test.pkl');
+
+        mockStdout.push(`{"id":"${request.id}","success":true,"valid":true}\n`);
+
+        const result = await validatePromise;
+        expect(result.valid).toBe(true);
+      });
+
+      it('should return invalid for bad pickle file', async () => {
+        const validatePromise = service.validateVoiceClone('/tmp/bad.pkl');
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const request = JSON.parse(mockStdin.lastWrite);
+
+        mockStdout.push(`{"id":"${request.id}","success":true,"valid":false,"error":"Unexpected type: str"}\n`);
+
+        const result = await validatePromise;
+        expect(result.valid).toBe(false);
+        expect(result.error).toBe('Unexpected type: str');
+      });
+
+      it('should require pklPath', async () => {
+        await expect(service.validateVoiceClone(null))
+          .rejects.toThrow('pklPath is required');
+      });
+    });
+
+    describe('importVoiceClone', () => {
+      beforeEach(async () => {
+        const initPromise = service.initialize();
+        setTimeout(() => {
+          mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":[]}\n');
+        }, 10);
+        await initPromise;
+      });
+
+      it('should send import request to daemon', async () => {
+        const importPromise = service.importVoiceClone('/tmp/test.pkl', 'my-voice');
+
+        await new Promise(resolve => setTimeout(resolve, 10));
+        const request = JSON.parse(mockStdin.lastWrite);
+        expect(request.type).toBe('import_voice_clone');
+        expect(request.pkl_path).toBe('/tmp/test.pkl');
+        expect(request.clone_id).toBe('my-voice');
+
+        mockStdout.push(`{"id":"${request.id}","success":true,"clone_id":"my-voice"}\n`);
+
+        const result = await importPromise;
+        expect(result.cloneId).toBe('my-voice');
+      });
+
+      it('should require pklPath', async () => {
+        await expect(service.importVoiceClone(null, 'id'))
+          .rejects.toThrow('pklPath is required');
+      });
+
+      it('should require cloneId', async () => {
+        await expect(service.importVoiceClone('/tmp/test.pkl', null))
+          .rejects.toThrow('cloneId is required');
+      });
+    });
+  });
 });

@@ -578,6 +578,36 @@ Delete a voice clone:
 curl -X DELETE http://localhost:3000/qwen-tts/voices/clone/my-voice
 ```
 
+#### Download Voice Clone
+
+Download a voice clone as a ZIP file for backup or transfer to another system:
+
+```bash
+curl http://localhost:3000/qwen-tts/voices/clone/my-voice/download \
+  --output my-voice.zip
+```
+
+The ZIP file contains:
+- `{cloneId}.pkl` - The voice embedding pickle file
+- `metadata.json` - Clone metadata (ID, creation date, service info)
+
+#### Import Voice Clone
+
+Import a previously exported voice clone from a ZIP file:
+
+```bash
+curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
+  -F "file=@my-voice.zip" \
+  -F "cloneId=imported-voice"
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| file * | file | - | ZIP file containing the voice clone |
+| cloneId | string | from metadata/filename | Custom ID for the imported clone |
+
+> **Security Warning**: Pickle files can execute arbitrary code during deserialization. Only import voice clones from trusted sources. The server validates pickle contents before importing, but this cannot guarantee safety against all malicious files.
+
 #### Voice Design (Create Voice from Description)
 
 Requires `voice-design` model variant:

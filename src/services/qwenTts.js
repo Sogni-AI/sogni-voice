@@ -2,6 +2,7 @@ import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { access } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { QwenTTSError } from '../utils/errors.js';
 
@@ -453,6 +454,76 @@ export class QwenTTSService {
 
     return {
       clones: result.clones || [],
+    };
+  }
+
+  /**
+   * Get the path to a voice clone file
+   * @param {string} cloneId - Voice clone ID
+   * @returns {string} Path to the pickle file
+   */
+  getVoiceClonePath(cloneId) {
+    return join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
+  }
+
+  /**
+   * Check if a voice clone exists
+   * @param {string} cloneId - Voice clone ID
+   * @returns {Promise<boolean>}
+   */
+  async voiceCloneExists(cloneId) {
+    try {
+      await access(this.getVoiceClonePath(cloneId));
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Validate a voice clone pickle file
+   * @param {string} pklPath - Path to the pickle file
+   * @returns {Promise<{valid: boolean, error?: string}>}
+   */
+  async validateVoiceClone(pklPath) {
+    if (!pklPath) {
+      throw new QwenTTSError('pklPath is required');
+    }
+
+    const result = await this._sendRequest({
+      type: 'validate_voice_clone',
+      pkl_path: pklPath,
+    });
+
+    return {
+      valid: result.valid,
+      error: result.error,
+    };
+  }
+
+  /**
+   * Import a voice clone from a pickle file
+   * @param {string} pklPath - Path to the pickle file
+   * @param {string} cloneId - Clone ID to assign
+   * @returns {Promise<{cloneId: string}>}
+   */
+  async importVoiceClone(pklPath, cloneId) {
+    if (!pklPath) {
+      throw new QwenTTSError('pklPath is required');
+    }
+
+    if (!cloneId) {
+      throw new QwenTTSError('cloneId is required');
+    }
+
+    const result = await this._sendRequest({
+      type: 'import_voice_clone',
+      pkl_path: pklPath,
+      clone_id: cloneId,
+    });
+
+    return {
+      cloneId: result.clone_id,
     };
   }
 

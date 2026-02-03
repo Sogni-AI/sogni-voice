@@ -359,7 +359,7 @@ export const pocketTtsRoutes = [
 
         return h.response(zipBuffer)
           .type('application/zip')
-          .header('Content-Disposition', `attachment; filename="${cloneId}.zip"`);
+          .header('Content-Disposition', `attachment; filename="pocket-tts-${cloneId}.zip"`);
       } catch (error) {
         if (error.isBoom) throw error;
         console.error('Pocket TTS download clone error:', error);

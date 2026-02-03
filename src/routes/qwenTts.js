@@ -648,7 +648,7 @@ export const qwenTtsRoutes = [
 
         return h.response(zipBuffer)
           .type('application/zip')
-          .header('Content-Disposition', `attachment; filename="${cloneId}.zip"`);
+          .header('Content-Disposition', `attachment; filename="qwen-tts-${cloneId}.zip"`);
       } catch (error) {
         if (error.isBoom) throw error;
         console.error('Qwen TTS download clone error:', error);

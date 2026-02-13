@@ -1,7 +1,7 @@
 module.exports = {
   apps: [
     {
-      name: 'sogni-transcribe',
+      name: 'sogni-voice',
       script: 'src/index.js',
       exec_mode: 'fork',
       instances: 1,

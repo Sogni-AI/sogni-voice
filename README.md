@@ -2,7 +2,7 @@
 
 ![Sogni Voice Banner](https://voice.sogni.ai/sogni-voice-banner.jpg)
 
-A REST API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw / MoltBot / ClawdBot friendly!
+A REST API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw setup steps in [llm.txt](llm.txt)!
 
 > **Apple Silicon Only**: This project uses [MLX](https://github.com/ml-explore/mlx) for ML acceleration and is designed specifically for **Apple Silicon Macs** (M1/M2/M3/M4). It will not work on Intel Macs or other platforms.
 

@@ -17,7 +17,7 @@ PHASE 1 — Quick compatibility & network checks
 - Run:
   - sw_vers
   - uname -m
-If uname -m is NOT "arm64", explain that local Sogni Voice will not work here (Apple Silicon only). Offer fallback: use hosted https://voice.sogni.ai/ only.
+If uname -m is NOT "arm64", explain that local Sogni Voice will not work here (Apple Silicon only). Offer fallback: use hosted https://voice.sogni.ai/ only - though this endpoint should only be used for testing.
 
 2) Confirm required tools exist (don't install yet):
 - Run:
@@ -43,11 +43,11 @@ If PHASE 1 looks good (Apple Silicon + network ok), proceed.
 PHASE 2 — Install Sogni Voice locally on this Mac
 ========================================
 
-Target: install under ~/Developer/sogni-voice (create folder if missing).
+Target: install under ~/repoos/sogni-voice (create folder if missing).
 
 4) Clone repo (ask before running):
 - Command:
-  - mkdir -p ~/Developer && cd ~/Developer
+  - mkdir -p ~/repoos && cd ~/repoos
   - (if folder exists, don't delete—ask what to do)
   - git clone https://github.com/Sogni-AI/sogni-voice.git
   - cd sogni-voice
@@ -61,7 +61,7 @@ If Homebrew is missing, propose installing Homebrew, but ask first.
 
 6) Install Node dependencies (ask before running):
 - Command:
-  - cd ~/Developer/sogni-voice
+  - cd ~/repoos/sogni-voice
   - npm install
 
 7) Configure environment:

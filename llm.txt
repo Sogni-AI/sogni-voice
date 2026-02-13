@@ -14,11 +14,11 @@ Check network: `curl -sS https://voice.sogni.ai/health || curl -sS -I https://vo
 
 ## Phase 2: Install
 
-Install dir: ~/repoos/sogni-voice (if exists, ask user).
+Install dir: ~/repos/sogni-voice (if exists, ask user).
 
 ```
-mkdir -p ~/repoos && git clone https://github.com/Sogni-AI/sogni-voice.git ~/repoos/sogni-voice
-cd ~/repoos/sogni-voice
+mkdir -p ~/repos && git clone https://github.com/Sogni-AI/sogni-voice.git ~/repos/sogni-voice
+cd ~/repos/sogni-voice
 brew install ffmpeg uv        # install Homebrew first if missing
 npm install
 ./setup.sh                    # or: cp .env.example .env (defaults are fine; don't enable AUTH_ENABLED or QWEN_TTS_ENABLED unless asked)

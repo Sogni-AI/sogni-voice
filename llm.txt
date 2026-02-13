@@ -21,7 +21,13 @@ mkdir -p ~/repos && git clone https://github.com/Sogni-AI/sogni-voice.git ~/repo
 cd ~/repos/sogni-voice
 brew install ffmpeg uv        # install Homebrew first if missing
 npm install
-./setup.sh                    # or: cp .env.example .env (defaults are fine; don't enable AUTH_ENABLED or QWEN_TTS_ENABLED unless asked)
+./setup.sh --non-interactive  # localhost profile: Pocket TTS only + Parakeet enabled + AUTH disabled; predownloads enabled models to reduce cold-start latency
+```
+
+If users want additional TTS engines (Kokoro/Qwen), voice cloning setup, or API auth, tell them to run interactive setup manually:
+
+```
+./setup.sh
 ```
 
 ## Phase 3: Run & Verify

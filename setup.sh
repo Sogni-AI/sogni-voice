@@ -11,9 +11,20 @@
 # - Dependency installation
 #
 # Usage: ./setup.sh
+#        ./setup.sh --non-interactive  (localhost defaults: Pocket TTS + Parakeet, no auth)
 ################################################################################
 
 set -e  # Exit on error
+
+# Modes
+NON_INTERACTIVE=0
+for arg in "$@"; do
+    case "$arg" in
+        --non-interactive|--non-interactive-localhost)
+            NON_INTERACTIVE=1
+            ;;
+    esac
+done
 
 # Colors for output
 RED='\033[0;31m'
@@ -352,6 +363,25 @@ select_tts_engines() {
     echo ""
     print_header "Step 2: Select TTS Engines"
 
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        # Localhost-safe defaults for automated setup:
+        # - Pocket TTS only
+        # - Parakeet enabled
+        # - No auth (configured in setup_api_key)
+        ENABLE_POCKET=1
+        ENABLE_KOKORO=0
+        ENABLE_QWEN=0
+        ENABLE_PARAKEET=1
+        QWEN_VARIANT="base-0.6b"
+
+        print_info "Non-interactive mode: using defaults"
+        print_info "- Pocket TTS: enabled"
+        print_info "- Kokoro TTS: disabled"
+        print_info "- Qwen3-TTS: disabled"
+        print_info "- Parakeet STT: enabled"
+        return
+    fi
+
     # Checkbox menu for TTS engines
     local tts_options=(
         "Pocket TTS (Fast, CPU-only, 8 English voices, voice cloning) - Recommended"
@@ -509,8 +539,10 @@ configure_environment() {
 
     print_success "Updated .env configuration"
 
-    echo ""
-    read -p "Press Enter to continue..."
+    if [ "$NON_INTERACTIVE" != "1" ]; then
+        echo ""
+        read -p "Press Enter to continue..."
+    fi
 }
 
 ################################################################################
@@ -519,6 +551,15 @@ configure_environment() {
 
 setup_api_key() {
     print_header "Step 4: API Key Setup"
+
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        # Localhost default: no authentication
+        upsert_env_key "AUTH_ENABLED" "0"
+        # Keep AUTH_API_KEY untouched if present; AUTH is disabled anyway.
+        rm -f .env.bak
+        print_info "Non-interactive mode: authentication disabled (localhost use)"
+        return
+    fi
 
     if [ "$RECONFIGURE" = false ]; then
         print_info "Keeping existing .env (authentication settings can still be updated)"
@@ -585,23 +626,27 @@ install_dependencies() {
 
     # Node.js dependencies
     if [ -d node_modules ]; then
-        echo ""
-        local npm_options=(
-            "Skip (use existing node_modules)"
-            "Reinstall dependencies"
-        )
-
-        show_radio_menu "node_modules/ already exists" 0 "${npm_options[@]}"
-        local npm_choice=$MENU_RESULT
-
-        if [ "$npm_choice" = "1" ]; then
-            print_info "Removing node_modules/..."
-            rm -rf node_modules
-            print_info "Running npm install..."
-            npm install
-            print_success "Node.js dependencies installed"
+        if [ "$NON_INTERACTIVE" = "1" ]; then
+            print_info "node_modules/ exists; non-interactive mode keeps existing dependencies"
         else
-            print_info "Skipping npm install"
+            echo ""
+            local npm_options=(
+                "Skip (use existing node_modules)"
+                "Reinstall dependencies"
+            )
+
+            show_radio_menu "node_modules/ already exists" 0 "${npm_options[@]}"
+            local npm_choice=$MENU_RESULT
+
+            if [ "$npm_choice" = "1" ]; then
+                print_info "Removing node_modules/..."
+                rm -rf node_modules
+                print_info "Running npm install..."
+                npm install
+                print_success "Node.js dependencies installed"
+            else
+                print_info "Skipping npm install"
+            fi
         fi
     else
         print_info "Running npm install..."
@@ -672,8 +717,10 @@ install_dependencies() {
     deactivate
     print_success "All dependencies installed"
 
-    echo ""
-    read -p "Press Enter to continue..."
+    if [ "$NON_INTERACTIVE" != "1" ]; then
+        echo ""
+        read -p "Press Enter to continue..."
+    fi
 }
 
 ################################################################################
@@ -686,6 +733,14 @@ setup_pocket_voice_cloning() {
     fi
 
     print_header "Step 6: Pocket TTS Voice Cloning Access"
+
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        POCKET_CLONE_READY=0
+        print_info "Non-interactive mode: skipping Hugging Face login for voice cloning"
+        print_warning "To use Pocket voice cloning later, create a free Hugging Face account, accept the Pocket TTS model terms, then run: uvx hf auth login"
+        print_info "You can run ./setup.sh interactively anytime to configure this"
+        return
+    fi
 
     echo "Pocket TTS voice cloning requires extra access to download cloning weights."
     echo "To use the default project voice clone (or create new clones), complete:"
@@ -740,6 +795,106 @@ setup_pocket_voice_cloning() {
 
 predownload_models() {
     print_header "Step 7: Predownload Models"
+
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        PRELOAD_MODELS=true
+        print_info "Non-interactive mode: predownloading enabled models now (Pocket TTS + Parakeet)"
+        print_info "This keeps first requests fast by avoiding cold-start downloads"
+
+        source .venv/bin/activate
+
+        export ENABLE_PARAKEET
+        export ENABLE_KOKORO
+        export ENABLE_POCKET
+        export ENABLE_QWEN
+
+        if [ "$ENABLE_QWEN" = "1" ]; then
+            export QWEN_TTS_MODEL_VARIANT="$QWEN_VARIANT"
+        fi
+
+        python - <<'PY'
+import os
+import sys
+import traceback
+from importlib.util import spec_from_file_location, module_from_spec
+from pathlib import Path
+
+ROOT = Path.cwd()
+
+def load_module(path: Path, name: str):
+    spec = spec_from_file_location(name, str(path))
+    mod = module_from_spec(spec)
+    spec.loader.exec_module(mod)  # type: ignore[attr-defined]
+    return mod
+
+def run_step(title, fn):
+    print(f"\n==> {title}")
+    try:
+        fn()
+        print(f"==> {title}: done")
+        return True
+    except Exception as exc:
+        print(f"==> {title}: failed ({exc})", file=sys.stderr)
+        traceback.print_exc()
+        return False
+
+def download_parakeet():
+    from parakeet_mlx import from_pretrained
+    from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
+
+def download_kokoro():
+    tts_path = ROOT / "scripts" / "tts_daemon.py"
+    tts_mod = load_module(tts_path, "tts_daemon")
+    from huggingface_hub import snapshot_download
+    model_path = Path(tts_mod.MODEL_PATH)
+    snapshot_download(tts_mod.MODEL_REPO, local_dir=str(model_path))
+
+def download_pocket():
+    from pocket_tts import TTSModel
+    TTSModel.load_model()
+
+def download_qwen():
+    qwen_path = ROOT / "scripts" / "qwen_tts_daemon.py"
+    qwen_mod = load_module(qwen_path, "qwen_tts_daemon")
+    variant = os.environ.get("QWEN_TTS_MODEL_VARIANT", "base-0.6b")
+    if variant not in qwen_mod.MODEL_VARIANTS:
+        raise RuntimeError(f"Unknown Qwen3-TTS model variant: {variant}")
+    model_repo = qwen_mod.MODEL_VARIANTS[variant]["repo"]
+    import torch
+    with qwen_mod.suppress_flash_attn_warning():
+        from qwen_tts import Qwen3TTSModel
+    device = "mps" if torch.backends.mps.is_available() else "cpu"
+    Qwen3TTSModel.from_pretrained(model_repo, device_map=device, dtype=torch.float32)
+
+enable_parakeet = os.environ.get("ENABLE_PARAKEET") == "1"
+enable_kokoro = os.environ.get("ENABLE_KOKORO") == "1"
+enable_pocket = os.environ.get("ENABLE_POCKET") == "1"
+enable_qwen = os.environ.get("ENABLE_QWEN") == "1"
+
+if enable_parakeet:
+    run_step("Parakeet (STT)", download_parakeet)
+else:
+    print("\n==> Parakeet (STT): skipped (disabled)")
+
+if enable_kokoro:
+    run_step("Kokoro (TTS)", download_kokoro)
+else:
+    print("\n==> Kokoro (TTS): skipped (disabled)")
+
+if enable_pocket:
+    run_step("Pocket TTS", download_pocket)
+else:
+    print("\n==> Pocket TTS: skipped (disabled)")
+
+if enable_qwen:
+    run_step("Qwen3-TTS", download_qwen)
+else:
+    print("\n==> Qwen3-TTS: skipped (disabled)")
+PY
+
+        deactivate
+        return
+    fi
 
     local predownload_options=(
         "Download models now (recommended)"
@@ -973,7 +1128,9 @@ print_summary() {
 ################################################################################
 
 main() {
-    clear
+    if [ "$NON_INTERACTIVE" != "1" ]; then
+        clear
+    fi
     echo ""
     echo "╔════════════════════════════════════════════════════════════════════════════════╗"
     echo "║                                                                                ║"

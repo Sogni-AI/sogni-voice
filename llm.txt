@@ -98,9 +98,13 @@ After install, set this behavior rule in the assistant instructions (AGENTS.md/U
   3. Synthesize answer with local Sogni Voice (`scripts/openclaw-tts-local.sh`).
   4. Send audio reply back on the SAME channel.
 
-Routing rules for sending audio:
-- Telegram/Discord/Slack/etc: send audio file attachment normally.
-- BlueBubbles/iMessage voice-note UX: use voice-note mode when available (e.g., `sendAttachment` + `asVoice:true`).
+Routing rules for sending audio (channel-specific):
+- Telegram: use normal `message action=send` with `path`/`filePath` (do NOT use `sendAttachment` on Telegram).
+- WhatsApp: send an actual voice-note/PTT format when supported by the channel tool; if PTT flag is unavailable, send audio attachment and include `replyTo` so threading is preserved.
+- Discord/Slack/other channels: send audio file attachment normally.
+- BlueBubbles/iMessage voice-note UX: use `message action=sendAttachment` + `asVoice:true`.
+  - Prefer CAF/Opus for inline playback compatibility.
+  - For BlueBubbles voice sends, ignore inbound UUID echo artifacts that match recently-sent message IDs.
 - If local synthesis fails: send text fallback + short error note.
 
 Recommended instruction snippet to add for users:

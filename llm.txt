@@ -1,127 +1,41 @@
-You are OpenClaw running on the user's Mac. Your job:
+You are OpenClaw on the user's Mac. Install the local Sogni Voice server (Apple Silicon only) and verify it works.
 
-A) Check whether this Mac + network supports using https://voice.sogni.ai/
-B) If supported, set up the local Sogni Voice server on this Mac (Apple Silicon only) and verify it works.
+Rules: Confirm before running any install/config/daemon command. Prefer non-destructive checks first. On failure, capture errors and propose fixes.
 
-Rules:
-- Be cautious: before running any command that installs software, starts daemons, opens ports, or edits config files, show the exact command(s) you will run and ask for confirmation ("OK to run?").
-- Prefer non-destructive checks first.
-- If anything fails, capture errors and propose the next most likely fix.
-- Keep a short "Status / Next step" section after each phase.
+## Phase 1: Compatibility
 
-========================================
-PHASE 1 — Quick compatibility & network checks
-========================================
+Check: `sw_vers && uname -m`
+- If NOT arm64: stop, explain Apple Silicon required. Fallback: hosted https://voice.sogni.ai/ (testing only).
 
-1) Confirm macOS + CPU architecture:
-- Run:
-  - sw_vers
-  - uname -m
-If uname -m is NOT "arm64", explain that local Sogni Voice will not work here (Apple Silicon only). Offer fallback: use hosted https://voice.sogni.ai/ only - though this endpoint should only be used for testing.
+Check tools exist (don't install): `git --version; node -v; npm -v; brew --version; curl --version`
+Report missing.
 
-2) Confirm required tools exist (don't install yet):
-- Run:
-  - which git && git --version
-  - node -v || true
-  - npm -v || true
-  - brew --version || true
-  - curl --version
-Report what's missing.
+Check network: `curl -sS https://voice.sogni.ai/health || curl -sS -I https://voice.sogni.ai/`
 
-3) Check hosted endpoint reachability (best-effort):
-- Run:
-  - curl -sS -D - https://voice.sogni.ai/health -o /dev/null || true
-  - curl -sS https://voice.sogni.ai/health || true
-  - curl -sS https://voice.sogni.ai/auth/status || true
-If /health doesn't respond, try:
-  - curl -sS -I https://voice.sogni.ai/ || true
-Summarize: DNS/TLS/HTTP status + whether endpoint appears alive from this network.
+## Phase 2: Install
 
-If PHASE 1 looks good (Apple Silicon + network ok), proceed.
+Install dir: ~/repoos/sogni-voice (if exists, ask user).
 
-========================================
-PHASE 2 — Install Sogni Voice locally on this Mac
-========================================
+```
+mkdir -p ~/repoos && git clone https://github.com/Sogni-AI/sogni-voice.git ~/repoos/sogni-voice
+cd ~/repoos/sogni-voice
+brew install ffmpeg uv        # install Homebrew first if missing
+npm install
+./setup.sh                    # or: cp .env.example .env (defaults are fine; don't enable AUTH_ENABLED or QWEN_TTS_ENABLED unless asked)
+```
 
-Target: install under ~/repoos/sogni-voice (create folder if missing).
+## Phase 3: Run & Verify
 
-4) Clone repo (ask before running):
-- Command:
-  - mkdir -p ~/repoos && cd ~/repoos
-  - (if folder exists, don't delete—ask what to do)
-  - git clone https://github.com/Sogni-AI/sogni-voice.git
-  - cd sogni-voice
+Start (pick one, confirm first):
+- PM2 (recommended): `npm install -g pm2 && npm run pm2:start`
+- Dev mode: `npm run dev`
 
-5) Install system deps (ask before running):
-Sogni Voice requires ffmpeg + uv via Homebrew. (Per repo quick start/requirements.)
-- Commands:
-  - brew install ffmpeg uv
+Verify: `curl -sS http://localhost:3000/health`
 
-If Homebrew is missing, propose installing Homebrew, but ask first.
+Endpoints: GET /health, POST /tts, POST /transcribe, GET /tts/voices
 
-6) Install Node dependencies (ask before running):
-- Command:
-  - cd ~/repoos/sogni-voice
-  - npm install
+Optional (ask first): `pm2 startup && pm2 save` for start-on-boot.
 
-7) Configure environment:
-Prefer the project's interactive setup:
-- Command:
-  - ./setup.sh
-If setup.sh fails or user prefers manual, do:
-  - cp .env.example .env
-Then open .env and explain key options (keep defaults unless user asks):
-- AUTH_ENABLED (default 0)
-- QWEN_TTS_ENABLED (default 0; optional heavier model)
-Do not enable auth unless user wants it.
+## Phase 4: Integrate with OpenClaw
 
-========================================
-PHASE 3 — Run as a service with PM2 + verify endpoints
-========================================
-
-8) Start server:
-Option A (recommended): PM2 (ask before installing PM2 globally)
-- Commands:
-  - npm install -g pm2
-  - npm run pm2:start
-Option B: simple foreground dev run:
-- Command:
-  - npm run dev
-
-9) Verify local health + core endpoints:
-- Commands:
-  - curl -sS http://localhost:3000/health
-  - curl -sS http://localhost:3000/auth/status || true
-  - curl -sS http://localhost:3000/tts/voices || true
-
-If server is healthy, summarize:
-- Base URL: http://localhost:3000
-- Health: /health
-- TTS: POST /tts
-- STT: POST /transcribe
-
-10) (Optional) Enable start-on-boot for PM2 (ask first):
-- Commands:
-  - pm2 startup
-  - pm2 save
-
-========================================
-PHASE 4 — Integrate with OpenClaw
-========================================
-
-11) Locate OpenClaw's voice / TTS / STT configuration.
-- Search for config files or env vars that specify TTS/STT base URL.
-- Set it to use:
-  - TTS base: http://localhost:3000
-  - STT base: http://localhost:3000
-If OpenClaw supports a "health check" for providers, run it.
-
-12) Final validation:
-- Run a short end-to-end test in OpenClaw:
-  - Ask OpenClaw to synthesize "Hello from Sogni Voice" via the local endpoint.
-  - If STT is configured, test by transcribing a short audio clip if available.
-
-Deliverable:
-- A concise summary of what you changed (paths, services, config keys), and how to start/stop:
-  - pm2 status / logs / restart / stop
-- Include troubleshooting tips if anything failed (ports, missing brew, arm64 requirement, etc.).
+Set OpenClaw TTS/STT base URL to http://localhost:3000. Test with a synthesize request. Summarize changes, paths, and start/stop commands (pm2 status/logs/restart/stop).

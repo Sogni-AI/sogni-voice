@@ -71,17 +71,6 @@ class PocketTTSDaemon:
 
             self.sample_rate = self.model.sample_rate or DEFAULT_SAMPLE_RATE
 
-            # Pre-cache built-in voice states
-            for voice in BUILT_IN_VOICES:
-                try:
-                    state = self.model.get_state_for_audio_prompt(voice)
-                    self.voice_states[voice] = state
-                except Exception as e:
-                    print(f"[warning] Failed to cache built-in voice '{voice}': {e}", file=sys.stderr)
-
-            # Load any saved voice clones from disk
-            self._load_saved_clones()
-
             return True
         except ImportError as e:
             print(f"pocket-tts not installed: {e}", file=sys.stderr)

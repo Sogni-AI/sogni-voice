@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Sogni Voice - AI Transcription & Text-to-Speech</title>
+  <title>Sogni Voice Playground</title>
   <meta name="description" content="REST API for audio transcription and text-to-speech synthesis, powered by MLX on Sogni Supernet. Features voice cloning, multiple TTS models, and word-level timestamps.">
 
   <!-- Open Graph / Facebook -->
@@ -20,27 +20,50 @@
   <meta name="twitter:description" content="REST API for audio transcription and text-to-speech synthesis, powered by MLX on Sogni Supernet. Features voice cloning, multiple TTS models, and word-level timestamps.">
   <meta name="twitter:image" content="https://voice.sogni.ai/sogni-voice-banner.jpg">
   <style>
+    :root {
+      --bg: #eff4fa;
+      --surface: #ffffff;
+      --surface-muted: #f8fafc;
+      --border: #d6dce4;
+      --text: #1f2937;
+      --text-muted: #5f6b7a;
+      --primary: #0b6bcb;
+      --primary-strong: #0958a8;
+      --danger: #dc3545;
+      --danger-strong: #c82333;
+      --radius: 10px;
+      --shadow: 0 10px 30px rgba(15, 23, 42, 0.08);
+    }
     * {
       box-sizing: border-box;
     }
     body {
       font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-      max-width: 800px;
+      width: min(1080px, 100%);
       margin: 0 auto;
-      padding: 20px;
-      background: #f5f5f5;
+      padding: clamp(14px, 2.4vw, 28px);
+      background: radial-gradient(circle at top right, #dceaf8 0%, rgba(220, 234, 248, 0) 55%), var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      text-rendering: optimizeLegibility;
     }
     h1 {
-      color: #333;
+      color: #1e293b;
       text-align: center;
+      margin: 6px 0 18px;
+      font-size: clamp(1.45rem, 1.1rem + 1.35vw, 2rem);
+      line-height: 1.2;
+      letter-spacing: -0.01em;
+      padding: 0 28px;
     }
     .demo-notice {
       background: linear-gradient(135deg, #fff3cd 0%, #ffeeba 100%);
       border: 1px solid #ffc107;
       border-left: 4px solid #ff9800;
-      border-radius: 6px;
+      border-radius: var(--radius);
       padding: 12px 16px;
-      margin-bottom: 24px;
+      margin-bottom: 20px;
       font-size: 14px;
       color: #856404;
       line-height: 1.5;
@@ -52,23 +75,68 @@
     .demo-notice a:hover {
       text-decoration: underline;
     }
+    .how-it-works {
+      text-align: center;
+      font-size: 14px;
+      color: var(--text-muted);
+      margin-bottom: 20px;
+      line-height: 1.6;
+    }
+    details.section summary {
+      cursor: pointer;
+      list-style: none;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+    details.section summary::-webkit-details-marker {
+      display: none;
+    }
+    details.section summary::after {
+      content: '+';
+      font-size: 24px;
+      font-weight: 300;
+      color: var(--primary);
+      flex-shrink: 0;
+      margin-left: 12px;
+    }
+    details.section[open] summary::after {
+      content: '\2212';
+    }
+    details.section summary:hover {
+      opacity: 0.8;
+    }
+    details.section summary h2 {
+      margin: 0;
+      border-bottom: none;
+      padding-bottom: 0;
+    }
+    details.section summary p {
+      margin: 4px 0 0;
+      font-size: 14px;
+      color: var(--text-muted);
+    }
+    details.section .clone-section-content {
+      margin-top: 16px;
+    }
     .section {
-      background: white;
-      border-radius: 8px;
+      background: var(--surface);
+      border: 1px solid rgba(15, 23, 42, 0.08);
+      border-radius: 12px;
       padding: 24px;
-      margin-bottom: 24px;
-      box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+      margin-bottom: 20px;
+      box-shadow: var(--shadow);
     }
     h2 {
       margin-top: 0;
-      color: #444;
-      border-bottom: 2px solid #007bff;
+      color: #334155;
+      border-bottom: 2px solid var(--primary);
       padding-bottom: 8px;
     }
     h3 {
       margin-top: 20px;
       margin-bottom: 12px;
-      color: #555;
+      color: #475569;
       font-size: 16px;
     }
     .controls {
@@ -79,17 +147,22 @@
       align-items: center;
     }
     button {
-      background: #007bff;
+      background: var(--primary);
       color: white;
       border: none;
       padding: 12px 24px;
       border-radius: 6px;
       cursor: pointer;
       font-size: 16px;
-      transition: background 0.2s;
+      line-height: 1.2;
+      min-height: 44px;
+      transition: background 0.2s ease, transform 0.12s ease;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     button:hover:not(:disabled) {
-      background: #0056b3;
+      background: var(--primary-strong);
+      transform: translateY(-1px);
     }
     button:disabled {
       background: #ccc;
@@ -100,12 +173,12 @@
       animation: pulse 1s infinite;
     }
     button.danger {
-      background: #dc3545;
+      background: var(--danger);
       padding: 8px 16px;
       font-size: 14px;
     }
     button.danger:hover:not(:disabled) {
-      background: #c82333;
+      background: var(--danger-strong);
     }
     button.secondary {
       background: #6c757d;
@@ -116,6 +189,14 @@
     button.small {
       padding: 8px 16px;
       font-size: 14px;
+    }
+    button:focus-visible,
+    input:focus-visible,
+    textarea:focus-visible,
+    select:focus-visible,
+    .upload-btn:focus-visible {
+      outline: 2px solid rgba(11, 107, 203, 0.45);
+      outline-offset: 2px;
     }
     @keyframes pulse {
       0%, 100% { opacity: 1; }
@@ -129,6 +210,7 @@
       min-height: 60px;
       white-space: pre-wrap;
       word-wrap: break-word;
+      overflow-wrap: anywhere;
     }
     .result.error {
       background: #f8d7da;
@@ -140,7 +222,7 @@
       border-color: #c3e6cb;
       color: #155724;
     }
-    textarea, input[type="text"] {
+    textarea, input[type="text"], input[type="password"] {
       width: 100%;
       padding: 12px;
       border: 1px solid #ced4da;
@@ -165,7 +247,7 @@
       padding: 8px;
       border: 1px solid #ced4da;
       border-radius: 4px;
-      font-size: 14px;
+      font-size: 16px;
     }
     .form-group {
       margin-bottom: 16px;
@@ -206,19 +288,50 @@
       padding: 12px;
       background: #e9ecef;
       border-radius: 6px;
+      flex-wrap: wrap;
     }
     .model-selector label {
       display: flex;
-      align-items: center;
-      gap: 6px;
+      align-items: flex-start;
+      gap: 8px;
       cursor: pointer;
       margin-bottom: 0;
       font-weight: normal;
+      background: rgba(255, 255, 255, 0.82);
+      border: 1px solid rgba(148, 163, 184, 0.3);
+      border-radius: 8px;
+      padding: 10px 12px;
     }
     .model-selector input[type="radio"] {
       width: 16px;
       height: 16px;
       cursor: pointer;
+      margin-top: 3px;
+    }
+    .model-label-content {
+      display: flex;
+      flex-direction: column;
+    }
+    .model-name {
+      display: flex;
+      align-items: center;
+      flex-wrap: wrap;
+    }
+    .model-desc {
+      font-size: 12px;
+      color: var(--text-muted);
+      margin-top: 2px;
+      line-height: 1.4;
+    }
+    .model-unavailable {
+      opacity: 0.5;
+    }
+    .model-unavailable .model-name::after {
+      content: '(not available)';
+      font-size: 11px;
+      color: #999;
+      margin-left: 8px;
+      font-weight: normal;
     }
     .voice-clone-list {
       margin-top: 16px;
@@ -227,6 +340,7 @@
       display: flex;
       align-items: center;
       justify-content: space-between;
+      gap: 10px;
       padding: 12px;
       background: #f8f9fa;
       border: 1px solid #dee2e6;
@@ -236,10 +350,13 @@
     .voice-clone-item .clone-name {
       font-weight: 500;
       color: #333;
+      overflow-wrap: anywhere;
     }
     .voice-clone-item .clone-actions {
       display: flex;
       gap: 8px;
+      flex-wrap: wrap;
+      justify-content: flex-end;
     }
     .hidden {
       display: none !important;
@@ -309,6 +426,7 @@
       padding: 24px;
       border-radius: 8px;
       max-width: 400px;
+      width: min(92vw, 400px);
       text-align: center;
     }
     .confirm-dialog-content p {
@@ -329,6 +447,10 @@
       font-size: 16px;
       transition: background 0.2s;
       display: inline-block;
+      min-height: 44px;
+      line-height: 1.2;
+      touch-action: manipulation;
+      -webkit-tap-highlight-color: transparent;
     }
     .upload-btn:hover {
       background: #218838;
@@ -343,9 +465,10 @@
     .auth-section {
       background: #e7f3ff;
       border: 1px solid #b6d4fe;
-      border-radius: 8px;
-      margin-bottom: 24px;
+      border-radius: 12px;
+      margin-bottom: 20px;
       overflow: hidden;
+      box-shadow: var(--shadow);
     }
     .auth-section.auth-disabled {
       background: #f8f9fa;
@@ -375,6 +498,7 @@
     .auth-buttons {
       display: flex;
       gap: 8px;
+      flex-wrap: wrap;
     }
     .auth-status {
       font-size: 13px;
@@ -407,6 +531,8 @@
       display: flex;
       align-items: center;
       justify-content: center;
+      min-height: 44px;
+      min-width: 44px;
     }
     .password-toggle:hover {
       background: #f8f9fa;
@@ -424,12 +550,231 @@
       20%, 60% { transform: rotate(-25deg); }
       40%, 80% { transform: rotate(10deg); }
     }
+    @media (min-width: 701px) and (max-width: 1024px) {
+      body {
+        width: min(980px, 100%);
+      }
+      .section {
+        padding: 20px;
+      }
+      .controls {
+        align-items: flex-end;
+      }
+      .controls .form-group {
+        flex: 1 1 240px;
+      }
+      .controls button,
+      .controls .upload-btn {
+        flex: 0 0 auto;
+      }
+      .model-selector label {
+        flex: 1 1 calc(50% - 8px);
+      }
+      .voice-clone-item {
+        align-items: flex-start;
+      }
+    }
+    @media (max-width: 900px) {
+      h1 {
+        padding-right: 52px;
+      }
+      .section {
+        padding: 20px;
+      }
+      .voice-clone-item .clone-actions button {
+        padding-left: 12px;
+        padding-right: 12px;
+      }
+    }
+    @media (max-width: 700px) {
+      body {
+        padding-top: max(12px, env(safe-area-inset-top));
+        padding-right: max(12px, env(safe-area-inset-right));
+        padding-bottom: max(16px, env(safe-area-inset-bottom));
+        padding-left: max(12px, env(safe-area-inset-left));
+      }
+      h1 {
+        margin-top: 8px;
+        margin-bottom: 14px;
+        padding: 0 44px 0 4px;
+      }
+      .section {
+        padding: 16px;
+        margin-bottom: 14px;
+      }
+      .controls {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .controls > * {
+        width: 100%;
+      }
+      .controls .form-group {
+        margin-left: 0 !important;
+      }
+      .controls > span {
+        text-align: center;
+        color: #64748b !important;
+        font-size: 13px;
+        margin: 0 !important;
+      }
+      .controls button,
+      .controls .upload-btn,
+      .controls select,
+      .controls input[type="text"],
+      .controls input[type="password"],
+      .controls input[type="range"] {
+        width: 100%;
+      }
+      #subtitlesGroup {
+        margin-left: 0 !important;
+      }
+      .model-selector {
+        gap: 8px;
+        padding: 10px;
+      }
+      .model-selector label {
+        width: 100%;
+      }
+      .auth-input-row {
+        align-items: stretch;
+      }
+      .auth-buttons {
+        flex-direction: column;
+      }
+      .auth-buttons button {
+        width: 100%;
+      }
+      .auth-input-row {
+        gap: 6px;
+      }
+      .auth-input-row input {
+        min-width: 0;
+      }
+      .voice-clone-item {
+        flex-direction: column;
+        align-items: stretch;
+      }
+      .voice-clone-item .clone-actions {
+        display: grid;
+        gap: 8px;
+        width: 100%;
+        grid-template-columns: repeat(3, minmax(0, 1fr));
+      }
+      .voice-clone-item .clone-actions button {
+        width: 100%;
+      }
+      .confirm-dialog-content .buttons {
+        flex-direction: column;
+      }
+      .confirm-dialog-content .buttons button {
+        width: 100%;
+      }
+      .status {
+        margin-top: 6px;
+      }
+      #recordedAudio,
+      #generatedAudio,
+      #cloneRecordedAudio,
+      #pocketCloneRecordedAudio {
+        margin-top: 10px;
+      }
+      .confirm-dialog {
+        padding: 12px;
+      }
+    }
     @media (max-width: 500px) {
+      h1 {
+        font-size: clamp(1.28rem, 1.16rem + 1vw, 1.5rem);
+        padding-right: 42px;
+      }
+      .section {
+        border-radius: 10px;
+        padding: 14px;
+      }
+      .subsection {
+        padding: 12px;
+      }
+      button,
+      .upload-btn {
+        font-size: 15px;
+      }
+      .model-selector {
+        padding: 8px;
+      }
+      .model-selector label {
+        padding: 9px 10px;
+      }
+      .badge {
+        margin-left: 6px;
+      }
+      .voice-clone-item .clone-actions {
+        grid-template-columns: 1fr;
+      }
       .github-corner:hover .octo-arm {
         animation: none;
       }
       .github-corner .octo-arm {
         animation: octocat-wave 560ms ease-in-out;
+      }
+      .github-corner svg {
+        width: 64px;
+        height: 64px;
+      }
+    }
+    @media (max-width: 430px) {
+      body {
+        padding-top: max(10px, env(safe-area-inset-top));
+        padding-right: max(10px, env(safe-area-inset-right));
+        padding-bottom: max(14px, env(safe-area-inset-bottom));
+        padding-left: max(10px, env(safe-area-inset-left));
+      }
+      h1 {
+        padding-right: 38px;
+      }
+      .github-corner svg {
+        width: 56px;
+        height: 56px;
+      }
+      .voice-clone-item {
+        padding: 10px;
+      }
+      .result {
+        padding: 12px;
+      }
+    }
+    @media (max-width: 390px) {
+      button,
+      .upload-btn {
+        padding: 10px 12px;
+      }
+      .confirm-dialog-content {
+        padding: 16px;
+      }
+      textarea, input[type="text"], input[type="password"] {
+        padding: 10px;
+      }
+    }
+    @media (max-height: 500px) and (orientation: landscape) {
+      .confirm-dialog {
+        align-items: flex-start;
+        overflow-y: auto;
+        padding: 12px;
+      }
+      .confirm-dialog-content {
+        margin-top: 8px;
+        margin-bottom: 12px;
+      }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      * {
+        animation-duration: 0.01ms !important;
+        animation-iteration-count: 1 !important;
+        transition-duration: 0.01ms !important;
+        scroll-behavior: auto !important;
+      }
+      button:hover:not(:disabled) {
+        transform: none;
       }
     }
   </style>
@@ -442,12 +787,14 @@
       <path d="M115.0,115.0 C114.9,115.1 118.7,116.5 119.8,115.4 L133.7,101.6 C136.9,99.2 139.9,98.4 142.2,98.6 C133.8,88.0 127.5,74.4 143.8,58.0 C148.5,53.4 154.0,51.2 159.7,51.0 C160.3,49.4 163.2,43.6 171.4,40.1 C171.4,40.1 176.1,42.5 178.8,56.2 C183.1,58.6 187.2,61.8 190.9,65.4 C194.5,69.0 197.7,73.2 200.1,77.6 C213.8,80.2 216.3,84.9 216.3,84.9 C212.7,93.1 206.9,96.0 205.4,96.6 C205.1,102.4 203.0,107.8 198.3,112.5 C181.9,128.9 168.3,122.5 157.7,114.1 C157.9,116.9 156.7,120.9 152.7,124.9 L141.0,136.5 C139.9,137.5 141.1,141.5 141.0,141.0 Z" fill="currentColor" class="octo-body"></path>
     </svg>
   </a>
-  <h1>Sogni Transcribe Test Page</h1>
+  <h1>Sogni Voice Playground</h1>
 
   <!-- Demo Notice -->
   <div class="demo-notice">
     <strong>Demo Console:</strong> This is a live demo for testing the API. Voice clones may be cleared periodically. For production use, <a href="https://github.com/Sogni-AI/sogni-voice" target="_blank">clone the repo</a> and run on your own Mac hardware. <a href="https://github.com/Sogni-AI/sogni-voice/blob/main/llm.txt" target="_blank">For OpenClaw follow these steps.</a>
   </div>
+
+  <div class="how-it-works">Record voice &rarr; get text &nbsp;&middot;&nbsp; Type text &rarr; hear it spoken &nbsp;&middot;&nbsp; Clone a voice &rarr; speak as anyone</div>
 
   <!-- Authentication Section -->
   <div class="auth-section" id="authSection">
@@ -517,20 +864,29 @@
     <div class="model-selector">
       <label>
         <input type="radio" name="ttsModel" value="pocket" id="pocketRadio" checked>
-        Pocket TTS <span class="badge" style="background:#28a745">Fast + Cloning</span>
+        <span class="model-label-content">
+          <span class="model-name">Pocket TTS <span class="badge" style="background:#28a745">Fast + Cloning</span></span>
+          <span class="model-desc">Lightweight English model. ~200ms, 8 voices, voice cloning.</span>
+        </span>
       </label>
       <label>
-        <input type="radio" name="ttsModel" value="kokoro">
-        Kokoro TTS <span class="badge">Fast</span>
+        <input type="radio" name="ttsModel" value="kokoro" id="kokoroRadio">
+        <span class="model-label-content">
+          <span class="model-name">Kokoro TTS <span class="badge">Fast</span></span>
+          <span class="model-desc">32 voices, 4 languages. Apple Silicon optimized. Speed control + timestamps.</span>
+        </span>
       </label>
       <label>
         <input type="radio" name="ttsModel" value="qwen" id="qwenRadio">
-        Qwen3 TTS <span class="badge warning">Voice Cloning</span>
+        <span class="model-label-content">
+          <span class="model-name">Qwen3 TTS <span class="badge warning">Voice Cloning</span></span>
+          <span class="model-desc">11 languages, voice cloning, emotion/style control. Largest model.</span>
+        </span>
       </label>
     </div>
 
     <div class="form-group">
-      <label for="ttsText">Text to speak:</label>
+      <label for="ttsText">Text to speak: <a href="#" id="trySampleLink" style="font-weight: normal; font-size: 13px; margin-left: 8px;">Try another example</a> <span id="sampleLangLabel" style="font-size: 12px; color: var(--primary); font-weight: normal; opacity: 0; transition: opacity 0.3s;"></span></label>
       <textarea id="ttsText" placeholder="Enter the text you want to convert to speech...">Hello! This is a test of the text to speech system. How does it sound?</textarea>
     </div>
 
@@ -591,9 +947,14 @@
   </div>
 
   <!-- Voice Cloning Section (Tabbed) -->
-  <div class="section" id="voiceCloningSection">
-    <h2>3. Voice Cloning</h2>
-    <p>Record a sample of your voice to create a voice clone that can be used for text-to-speech with any model.</p>
+  <details class="section" id="voiceCloningSection">
+    <summary>
+      <div>
+        <h2>3. Voice Cloning</h2>
+        <p>Record a sample of your voice to create a voice clone that can be used for text-to-speech with any model.</p>
+      </div>
+    </summary>
+    <div class="clone-section-content">
 
     <div id="authRequiredMessage" class="result hidden">
       Enter your API key above to access voice cloning features.
@@ -760,7 +1121,9 @@
         </div>
       </div>
     </div>
-  </div>
+
+    </div><!-- .clone-section-content -->
+  </details>
 
   <!-- Confirmation Dialog -->
   <div id="confirmDialog" class="confirm-dialog hidden">
@@ -975,6 +1338,29 @@
       }
       updateStyleInstructUI();
     }
+
+    // ==================== Try Another Example ====================
+    const sampleTexts = [
+      { text: 'Hello! This is a test of the text to speech system. How does it sound?', lang: 'English' },
+      { text: 'The quick brown fox jumps over the lazy dog on a warm summer afternoon.', lang: 'English' },
+      { text: '\u3053\u3093\u306b\u3061\u306f\u3001\u4eca\u65e5\u306f\u3044\u3044\u5929\u6c17\u3067\u3059\u306d\u3002\u6563\u6b69\u306b\u884c\u304d\u307e\u305b\u3093\u304b\uff1f', lang: 'Japanese' },
+      { text: '\u4eca\u5929\u5929\u6c14\u771f\u597d\uff0c\u6211\u4eec\u4e00\u8d77\u53bb\u516c\u56ed\u6563\u6b65\u5427\u3002', lang: 'Chinese' },
+      { text: 'Hola, buenos d\u00edas. \u00bfC\u00f3mo est\u00e1s hoy? Espero que tengas un d\u00eda maravilloso.', lang: 'Spanish' },
+      { text: 'Bonjour! Comment allez-vous aujourd\u2019hui? Il fait un temps magnifique dehors.', lang: 'French' },
+    ];
+    let sampleIndex = 0;
+
+    document.getElementById('trySampleLink').addEventListener('click', (e) => {
+      e.preventDefault();
+      sampleIndex = (sampleIndex + 1) % sampleTexts.length;
+      const sample = sampleTexts[sampleIndex];
+      ttsText.value = sample.text;
+
+      const langLabel = document.getElementById('sampleLangLabel');
+      langLabel.textContent = sample.lang;
+      langLabel.style.opacity = '1';
+      setTimeout(() => { langLabel.style.opacity = '0'; }, 2000);
+    });
 
     // Clone model switching
     document.querySelectorAll('input[name="cloneModel"]').forEach(radio => {
@@ -1340,6 +1726,8 @@
         if (pocketDisabledMessage) pocketDisabledMessage.classList.add('hidden');
         if (pocketContent) pocketContent.classList.remove('hidden');
       }
+      const pocketLabel = document.getElementById('pocketRadio')?.closest('label');
+      if (pocketLabel) pocketLabel.classList.toggle('model-unavailable', !pocketEnabled);
     }
 
     function updatePocketVoiceCloneList() {
@@ -1458,6 +1846,8 @@
         voiceCloningContent.classList.remove('hidden');
         updateVoiceCloningUI();
       }
+      const qwenLabel = document.getElementById('qwenRadio')?.closest('label');
+      if (qwenLabel) qwenLabel.classList.toggle('model-unavailable', !qwenEnabled);
     }
 
     function updateVoiceCloningUI() {
@@ -2406,8 +2796,14 @@
     initialize();
   </script>
 
-  <div style="text-align: center; margin-top: 40px; padding: 20px; border-top: 1px solid #ddd;">
-    <a href="/docs.html" style="color: #007bff; text-decoration: none; font-size: 14px;">API Documentation</a>
-  </div>
+  <footer style="text-align: center; margin-top: 40px; padding: 20px 20px 8px; border-top: 1px solid #ddd; font-size: 14px; color: var(--text-muted);">
+    <div style="margin-bottom: 8px;">Proudly open-sourced by <a href="https://sogni.ai" target="_blank" style="color: var(--primary); text-decoration: none; font-weight: 500;">Sogni.ai</a></div>
+    <div style="margin-bottom: 8px;">
+      <a href="/docs.html" style="color: var(--primary); text-decoration: none;">API Documentation</a>
+      <span style="margin: 0 8px; color: #ccc;">&middot;</span>
+      <a href="https://github.com/Sogni-AI/sogni-voice" target="_blank" style="color: var(--primary); text-decoration: none;">GitHub</a>
+    </div>
+    <div style="font-size: 12px; color: #aaa;">v1.0.0</div>
+  </footer>
 </body>
 </html>

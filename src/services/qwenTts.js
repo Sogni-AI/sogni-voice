@@ -263,16 +263,12 @@ export class QwenTTSService {
   async generateCustomVoice(text, options = {}) {
     const {
       speaker = config.qwenTts.defaultVoice,
-      instruct,
+      instruct = '',
       outputPath,
     } = options;
 
     if (!outputPath) {
       throw new QwenTTSError('outputPath is required');
-    }
-
-    if (!instruct) {
-      throw new QwenTTSError('instruct is required');
     }
 
     const result = await this._sendRequest({

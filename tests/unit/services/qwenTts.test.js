@@ -248,10 +248,20 @@ describe('QwenTTSService', () => {
       expect(result.instruct).toBe('Very happy and excited');
     });
 
-    it('should require instruct parameter', async () => {
-      await expect(service.generateCustomVoice('Hello world', {
+    it('should default instruct to empty string when not provided', async () => {
+      const generatePromise = service.generateCustomVoice('Hello world', {
         outputPath: '/tmp/output.wav',
-      })).rejects.toThrow('instruct is required');
+      });
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const request = JSON.parse(mockStdin.lastWrite);
+      expect(request.type).toBe('generate_custom_voice');
+      expect(request.instruct).toBe('');
+
+      mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.5}\n`);
+
+      const result = await generatePromise;
+      expect(result.instruct).toBe('');
     });
   });
 

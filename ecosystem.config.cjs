@@ -7,6 +7,7 @@ module.exports = {
       instances: 1,
       autorestart: true,
       watch: false,
+      cron_restart: '0 0 * * *', // Restart once every 24 hours (midnight)
       // max_memory_restart: '1G', // Disabled - TTS model needs more memory
       env: {
         NODE_ENV: 'development',

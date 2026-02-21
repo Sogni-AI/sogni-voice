@@ -186,7 +186,7 @@ class QwenTTSDaemon:
 
         return None
 
-    def generate(self, text: str, language: str, output_path: str, ref_audio: str = None, ref_text: str = None) -> dict:
+    def generate(self, text: str, language: str, output_path: str, ref_audio: str = None, ref_text: str = None, voice: str = None) -> dict:
         """Standard TTS generation using voice cloning (Base models require reference audio)."""
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
@@ -217,6 +217,14 @@ class QwenTTSDaemon:
                         ref_audio=ref_audio,
                         ref_text=ref_text or "",
                     )
+            elif 'custom_voice' in features:
+                # CustomVoice models can handle plain generate via generate_custom_voice with empty instruct
+                speaker = voice or os.environ.get('QWEN_TTS_DEFAULT_VOICE', 'Chelsie')
+                wavs, sr = self.model.generate_custom_voice(
+                    text=text,
+                    speaker=speaker.lower(),
+                    instruct="",
+                )
             else:
                 return {"success": False, "error": f"Model variant '{self.model_variant}' does not support standard TTS"}
 
@@ -589,10 +597,11 @@ class QwenTTSDaemon:
                 return {"id": request_id, "success": False, "error": "Missing output_path"}
 
             language = request.get("language", "english")
+            voice = request.get("voice")
             ref_audio = request.get("ref_audio")
             ref_text = request.get("ref_text")
 
-            result = self.generate(text, language, output_path, ref_audio, ref_text)
+            result = self.generate(text, language, output_path, ref_audio, ref_text, voice=voice)
             result["id"] = request_id
             return result
 

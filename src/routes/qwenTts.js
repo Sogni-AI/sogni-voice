@@ -53,7 +53,10 @@ export const qwenTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, { speaker: voice, instruct: '', outputPath });
+        const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, {
+          speaker: voice,
+          outputPath,
+        });
 
         const wavBuffer = await readFile(outputPath);
 

@@ -1567,7 +1567,7 @@
         }
         const data = await response.json();
 
-        kokoroVoices = data.voices || [];
+        kokoroVoices = (data.voices || []).sort((a, b) => a.localeCompare(b));
 
         voiceSelect.innerHTML = '';
         kokoroVoices.forEach(voice => {
@@ -1601,8 +1601,8 @@
 
         const data = await response.json();
         qwenEnabled = true;
-        qwenVoices = data.voices || [];
-        qwenClones = data.clones || [];
+        qwenVoices = (data.voices || []).sort((a, b) => a.localeCompare(b));
+        qwenClones = (data.clones || []).sort((a, b) => a.localeCompare(b));
 
         // Check which features are available
         const features = data.features || [];
@@ -1669,8 +1669,8 @@
 
         const data = await response.json();
         pocketEnabled = true;
-        pocketVoices = data.voices || [];
-        pocketClones = data.clones || [];
+        pocketVoices = (data.voices || []).sort((a, b) => a.localeCompare(b));
+        pocketClones = (data.clones || []).sort((a, b) => a.localeCompare(b));
 
         voiceSelect.innerHTML = '';
 

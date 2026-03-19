@@ -172,7 +172,7 @@ export class QwenTTSService {
   /**
    * Send a request to the daemon and wait for response
    */
-  async _sendRequest(request) {
+  async _sendRequest(request, { timeout: customTimeout } = {}) {
     await this._ensureDaemon();
 
     if (!this.daemonProcess || !this.daemonReady) {
@@ -182,7 +182,7 @@ export class QwenTTSService {
     const requestId = `req-${++this.requestIdCounter}`;
     request.id = requestId;
 
-    const timeout = config.qwenTts.timeout || 300000;
+    const timeout = customTimeout || config.qwenTts.timeout || 300000;
     console.log(`[qwen-tts-${this.variant}] Sending request ${requestId}: type=${request.type}, timeout=${timeout}ms`);
 
     return new Promise((resolve, reject) => {
@@ -382,7 +382,7 @@ export class QwenTTSService {
       clone_id: cloneId,
       language,
       output_path: outputPath,
-    });
+    }, { timeout: 600000 });
 
     return {
       outputPath: result.output_path,

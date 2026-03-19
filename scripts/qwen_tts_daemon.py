@@ -232,8 +232,14 @@ class QwenTTSDaemon:
                 return {"success": False, "error": "No audio generated"}
 
             audio = wavs[0]
-            sf.write(output_path, audio, sr)
             duration = len(audio) / sr
+
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                print(f"[generate] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
+                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
+
+            sf.write(output_path, audio, sr)
 
             return {
                 "success": True,
@@ -268,8 +274,14 @@ class QwenTTSDaemon:
                 return {"success": False, "error": "No audio generated"}
 
             audio = wavs[0]
-            sf.write(output_path, audio, sr)
             duration = len(audio) / sr
+
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                print(f"[generate_custom_voice] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
+                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
+
+            sf.write(output_path, audio, sr)
 
             return {
                 "success": True,
@@ -302,8 +314,14 @@ class QwenTTSDaemon:
                 return {"success": False, "error": "No audio generated"}
 
             audio = wavs[0]
-            sf.write(output_path, audio, sr)
             duration = len(audio) / sr
+
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                print(f"[generate_voice_design] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
+                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
+
+            sf.write(output_path, audio, sr)
 
             return {
                 "success": True,
@@ -408,9 +426,16 @@ class QwenTTSDaemon:
                 return {"success": False, "error": "No audio generated"}
 
             audio = wavs[0]
+            duration = len(audio) / sr
+
+            # Check if output directory still exists (caller may have timed out and cleaned up)
+            output_dir = os.path.dirname(output_path)
+            if not os.path.exists(output_dir):
+                print(f"[generate_voice_clone] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
+                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
+
             print(f"[generate_voice_clone] Writing audio to {output_path}, samples={len(audio)}, sr={sr}", file=sys.stderr)
             sf.write(output_path, audio, sr)
-            duration = len(audio) / sr
 
             return {
                 "success": True,

@@ -28,6 +28,10 @@ export const pocketTtsRoutes = [
     options: {
       pre: [{ method: checkEnabled }],
       validate: {
+        query: Joi.object({
+          format: Joi.string().valid('wav', 'opus', 'buffer')
+            .description('Output format override via query string'),
+        }).unknown(true),
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
             .description('Text to convert to speech'),
@@ -45,7 +49,8 @@ export const pocketTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, voice, format } = request.payload;
+        const { text, voice, format: payloadFormat } = request.payload;
+        const format = request.query.format || payloadFormat;
 
         await pocketTtsService.initialize();
 

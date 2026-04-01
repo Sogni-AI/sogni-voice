@@ -23,6 +23,10 @@ export const ttsRoutes = [
     options: {
       pre: [{ method: checkEnabled }],
       validate: {
+        query: Joi.object({
+          format: Joi.string().valid('wav', 'opus', 'buffer')
+            .description('Output format override via query string'),
+        }).unknown(true),
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
             .description('Text to convert to speech'),
@@ -44,7 +48,8 @@ export const ttsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, voice, speed, format, timestamps } = request.payload;
+        const { text, voice, speed, format: payloadFormat, timestamps } = request.payload;
+        const format = request.query.format || payloadFormat;
 
         // Create temp directory and file for TTS output
         tempDir = await tempFileManager.createTempDir('tts-');

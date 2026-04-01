@@ -380,11 +380,13 @@ curl -X POST http://localhost:3000/tts \
 
 #### Download Opus file
 ```bash
-curl -X POST http://localhost:3000/tts \
+curl -X POST 'http://localhost:3000/tts?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "format": "opus"}' \
+  -d '{"text": "Hello world"}' \
   --output output.opus
 ```
+
+You can still send `format` in the JSON body, but the top-level TTS endpoints also accept `?format=opus` in the query string. If both are provided, the query string wins.
 
 #### Get base64-encoded audio with timestamps
 ```bash
@@ -415,7 +417,7 @@ Response:
 | text | string | required | Text to convert (max 10000 chars) |
 | voice | string | af_heart | Voice name |
 | speed | number | 1.0 | Speed (0.5-2.0) |
-| format | string | wav | Output format (wav, opus, buffer) |
+| format | string | wav | Output format (wav, opus, buffer). Top-level TTS routes also accept `?format=` in the query string. |
 | timestamps | boolean | false | Include word-level timestamps |
 
 ### List Kokoro Voices
@@ -476,11 +478,21 @@ curl -X POST http://localhost:3000/qwen-tts \
   --output output.wav
 ```
 
+Download Opus with query-string format override:
+
+```bash
+curl -X POST 'http://localhost:3000/qwen-tts?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello world", "voice": "Chelsie"}' \
+  --output output.opus
+```
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
 | voice | string | Chelsie | Speaker voice name |
 | language | string | English | Language for synthesis |
+| format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 #### Custom Voice (Emotion/Style Control)
 
@@ -493,11 +505,21 @@ curl -X POST http://localhost:3000/qwen-tts/custom-voice \
   --output output.wav
 ```
 
+To get Opus instead:
+
+```bash
+curl -X POST 'http://localhost:3000/qwen-tts/custom-voice?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Speak with excitement and joy"}' \
+  --output output.opus
+```
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
 | speaker | string | Chelsie | Speaker voice name |
 | instruct | string | - | Style/emotion instruction (e.g., "Speak softly with a gentle tone") |
+| format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 **Example style instructions:**
 - "Speak with excitement and enthusiasm"
@@ -619,10 +641,20 @@ curl -X POST http://localhost:3000/qwen-tts/voice-design \
   --output output.wav
 ```
 
+To get Opus instead:
+
+```bash
+curl -X POST 'http://localhost:3000/qwen-tts/voice-design?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello there!", "instruct": "A warm, friendly female voice with a slight British accent"}' \
+  --output output.opus
+```
+
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
 | instruct * | string | - | Description of the desired voice characteristics |
+| format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 ### Pocket TTS Endpoints
 
@@ -661,9 +693,9 @@ curl -X POST http://localhost:3000/pocket-tts \
 
 Download Opus file:
 ```bash
-curl -X POST http://localhost:3000/pocket-tts \
+curl -X POST 'http://localhost:3000/pocket-tts?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "voice": "alba", "format": "opus"}' \
+  -d '{"text": "Hello world", "voice": "alba"}' \
   --output output.opus
 ```
 
@@ -678,7 +710,7 @@ curl -X POST http://localhost:3000/pocket-tts \
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech (max 10000 chars) |
 | voice | string | alba | Voice name |
-| format | string | wav | Output format (wav, opus, buffer) |
+| format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 **JavaScript Example:**
 ```javascript

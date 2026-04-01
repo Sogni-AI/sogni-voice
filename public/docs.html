@@ -425,7 +425,7 @@ print(data['transcript'])</code></pre>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>wav</td>
-        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON)</td>
+        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON). Also accepted as <code>?format=</code> on this endpoint.</td>
       </tr>
       <tr>
         <td><code>timestamps</code> <span class="optional">(optional)</span></td>
@@ -452,6 +452,12 @@ print(data['transcript'])</code></pre>
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!", "voice": "af_heart", "speed": 1.0}' \
   --output output.wav</code></pre>
+
+    <h4>Opus via query-string format override</h4>
+    <pre><code>curl -X POST 'https://voice.sogni.ai/tts?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!", "voice": "af_heart", "speed": 1.0}' \
+  --output output.opus</code></pre>
 
     <h3>JavaScript Example</h3>
     <pre><code>const response = await fetch('https://voice.sogni.ai/tts', {
@@ -527,7 +533,7 @@ with open('output.wav', 'wb') as f:
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>wav</td>
-        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON)</td>
+        <td>Output format: "wav", "opus" (returns audio file) or "buffer" (returns base64 JSON). Also accepted as <code>?format=</code> on this endpoint.</td>
       </tr>
     </table>
 
@@ -536,6 +542,12 @@ with open('output.wav', 'wb') as f:
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!", "voice": "alba"}' \
   --output output.wav</code></pre>
+
+    <h4>Opus via query-string format override</h4>
+    <pre><code>curl -X POST 'https://voice.sogni.ai/pocket-tts?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!", "voice": "alba"}' \
+  --output output.opus</code></pre>
 
     <h3>List Voices</h3>
     <div class="endpoint">
@@ -747,7 +759,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>wav</td>
-        <td>Output format: "wav", "opus", or "buffer" (base64 JSON)</td>
+        <td>Output format: "wav", "opus", or "buffer" (base64 JSON). Also accepted as <code>?format=</code> on this endpoint.</td>
       </tr>
     </table>
 
@@ -756,6 +768,12 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
   -H "Content-Type: application/json" \
   -d '{"text": "Hello, world!", "voice": "Chelsie"}' \
   --output output.wav</code></pre>
+
+    <h4>Opus via query-string format override</h4>
+    <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Hello, world!", "voice": "Chelsie"}' \
+  --output output.opus</code></pre>
 
     <h3>Custom Voice (Emotion/Style Control)</h3>
     <div class="endpoint">
@@ -787,7 +805,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
       <tr>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Output format: "wav", "opus", or "buffer"</td>
+        <td>Output format: "wav", "opus", or "buffer". Also accepted as <code>?format=</code> on this endpoint.</td>
       </tr>
     </table>
 
@@ -796,6 +814,12 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
   -H "Content-Type: application/json" \
   -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Very happy and enthusiastic"}' \
   --output excited.wav</code></pre>
+
+    <h4>Opus via query-string format override</h4>
+    <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts/custom-voice?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Very happy and enthusiastic"}' \
+  --output excited.opus</code></pre>
 
     <h3>Voice Design (Create Voice from Description)</h3>
     <div class="endpoint">
@@ -822,7 +846,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
       <tr>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Output format: "wav", "opus", or "buffer"</td>
+        <td>Output format: "wav", "opus", or "buffer". Also accepted as <code>?format=</code> on this endpoint.</td>
       </tr>
     </table>
 
@@ -831,6 +855,12 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
   -H "Content-Type: application/json" \
   -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone"}' \
   --output designed_voice.wav</code></pre>
+
+    <h4>Opus via query-string format override</h4>
+    <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts/voice-design?format=opus' \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone"}' \
+  --output designed_voice.opus</code></pre>
 
     <h3>List Voices</h3>
     <div class="endpoint">

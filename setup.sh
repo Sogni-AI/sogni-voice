@@ -102,6 +102,31 @@ version_ge() {
     printf '%s\n%s' "$2" "$1" | sort -V -C
 }
 
+python_is_stable_release() {
+    local python_cmd="$1"
+    "$python_cmd" - <<'PY' >/dev/null 2>&1
+import sys
+raise SystemExit(0 if sys.version_info.releaselevel == "final" else 1)
+PY
+}
+
+venv_is_healthy() {
+    [ -x .venv/bin/python ] || return 1
+
+    .venv/bin/python - <<'PY' >/dev/null 2>&1
+import sys
+
+if sys.version_info.releaselevel != "final":
+    raise SystemExit(1)
+
+# Sanity-check pip's vendored packaging parser. This catches broken
+# prerelease/Python combinations that fail on any pip install.
+from pip._vendor.packaging.version import Version
+
+Version("1.0")
+PY
+}
+
 ################################################################################
 # Interactive Menu Functions
 ################################################################################
@@ -299,20 +324,23 @@ check_system_requirements() {
 
     # Check Python (prefer Homebrew versions over system Python)
     PYTHON_CMD=""
-    if command -v python3.13 >/dev/null 2>&1; then
-        PYTHON_CMD="python3.13"
-    elif command -v python3.12 >/dev/null 2>&1; then
-        PYTHON_CMD="python3.12"
-    elif command -v python3.11 >/dev/null 2>&1; then
-        PYTHON_CMD="python3.11"
-    elif command -v python3.10 >/dev/null 2>&1; then
-        PYTHON_CMD="python3.10"
-    elif command -v python3 >/dev/null 2>&1; then
-        PYTHON_CMD="python3"
-    fi
+    local python_version=""
+    local python_candidates=("python3.13" "python3.12" "python3.11" "python3.10" "python3")
+    local candidate=""
+    for candidate in "${python_candidates[@]}"; do
+        if command -v "$candidate" >/dev/null 2>&1; then
+            local candidate_version
+            candidate_version=$("$candidate" --version 2>&1 | awk '{print $2}')
+            if python_is_stable_release "$candidate"; then
+                PYTHON_CMD="$candidate"
+                python_version="$candidate_version"
+                break
+            fi
+            print_warning "Ignoring prerelease Python $candidate_version ($candidate)"
+        fi
+    done
 
     if [ -n "$PYTHON_CMD" ]; then
-        local python_version=$($PYTHON_CMD --version | awk '{print $2}')
         if version_ge "$python_version" "3.10.0"; then
             print_success "Python $python_version ($PYTHON_CMD) (≥3.10 required)"
         else
@@ -321,7 +349,7 @@ check_system_requirements() {
             all_good=false
         fi
     else
-        print_error "Python 3 not found"
+        print_error "No stable Python 3.10+ interpreter found"
         print_info "Install via: brew install python@3.11"
         all_good=false
     fi
@@ -655,9 +683,15 @@ install_dependencies() {
     fi
 
     # Python virtual environment
+    if [ -d .venv ] && ! venv_is_healthy; then
+        local venv_backup=".venv.backup.$(date +%Y%m%d_%H%M%S)"
+        print_warning "Existing .venv is incompatible or broken; moving it to $venv_backup"
+        mv .venv "$venv_backup"
+    fi
+
     if [ ! -d .venv ]; then
         print_info "Creating Python virtual environment at .venv/..."
-        $PYTHON_CMD -m venv .venv
+        uv venv --seed --python "$PYTHON_CMD" .venv
         print_success "Python virtual environment created"
     else
         print_info "Python virtual environment already exists at .venv/"

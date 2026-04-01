@@ -29,6 +29,10 @@ export const qwenTtsRoutes = [
     options: {
       pre: [{ method: checkEnabled }],
       validate: {
+        query: Joi.object({
+          format: Joi.string().valid('wav', 'opus', 'buffer')
+            .description('Output format override via query string'),
+        }).unknown(true),
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
             .description('Text to convert to speech'),
@@ -48,7 +52,8 @@ export const qwenTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, voice, language, format } = request.payload;
+        const { text, voice, language, format: payloadFormat } = request.payload;
+        const format = request.query.format || payloadFormat;
 
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
@@ -116,6 +121,10 @@ export const qwenTtsRoutes = [
     options: {
       pre: [{ method: checkEnabled }],
       validate: {
+        query: Joi.object({
+          format: Joi.string().valid('wav', 'opus', 'buffer')
+            .description('Output format override via query string'),
+        }).unknown(true),
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
             .description('Text to convert to speech'),
@@ -135,7 +144,8 @@ export const qwenTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, speaker, instruct, format } = request.payload;
+        const { text, speaker, instruct, format: payloadFormat } = request.payload;
+        const format = request.query.format || payloadFormat;
 
         // Use the CustomVoice daemon for style instructions
         await qwenTtsCustomVoiceService.initialize();
@@ -201,6 +211,10 @@ export const qwenTtsRoutes = [
     options: {
       pre: [{ method: checkEnabled }],
       validate: {
+        query: Joi.object({
+          format: Joi.string().valid('wav', 'opus', 'buffer')
+            .description('Output format override via query string'),
+        }).unknown(true),
         payload: Joi.object({
           text: Joi.string().required().min(1).max(10000)
             .description('Text to convert to speech'),
@@ -218,7 +232,8 @@ export const qwenTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, instruct, format } = request.payload;
+        const { text, instruct, format: payloadFormat } = request.payload;
+        const format = request.query.format || payloadFormat;
 
         // VoiceDesign requires a specific model variant (not Base or CustomVoice)
         await qwenTtsBaseService.initialize();

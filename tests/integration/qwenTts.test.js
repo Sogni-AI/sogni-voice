@@ -233,6 +233,20 @@ describe('Qwen TTS Routes', () => {
       expect(response.headers['content-type']).toBe('audio/wav');
     });
 
+    it('should support query-string format=opus', async () => {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/qwen-tts?format=opus',
+        payload: {
+          text: 'Hello world',
+          format: 'wav',
+        },
+      });
+
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toBe('audio/opus');
+    });
+
     it('should return base64 when format is buffer', async () => {
       const response = await server.inject({
         method: 'POST',

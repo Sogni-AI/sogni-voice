@@ -746,6 +746,11 @@ install_dependencies() {
         else
             print_info "qwen-tts already installed"
         fi
+        if ! pip show safetensors >/dev/null 2>&1; then
+            print_info "Installing safetensors..."
+            pip install --quiet safetensors
+            print_success "safetensors installed"
+        fi
     fi
 
     deactivate

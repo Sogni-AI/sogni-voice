@@ -454,41 +454,57 @@ export class QwenTTSService {
   }
 
   /**
-   * Get the path to a voice clone file
+   * Get the path to a voice clone file (safetensors format)
    * @param {string} cloneId - Voice clone ID
-   * @returns {string} Path to the pickle file
+   * @returns {string} Path to the safetensors file
    */
   getVoiceClonePath(cloneId) {
-    return join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
+    return join(config.qwenTts.voiceClonesDir, `${cloneId}.safetensors`);
   }
 
   /**
-   * Check if a voice clone exists
+   * Get the actual path to a voice clone file, checking both formats
+   * @param {string} cloneId - Voice clone ID
+   * @returns {Promise<string|null>} Path to the file, or null if not found
+   */
+  async resolveVoiceClonePath(cloneId) {
+    const stPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.safetensors`);
+    const pklPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
+    try {
+      await access(stPath);
+      return stPath;
+    } catch {
+      try {
+        await access(pklPath);
+        return pklPath;
+      } catch {
+        return null;
+      }
+    }
+  }
+
+  /**
+   * Check if a voice clone exists (either format)
    * @param {string} cloneId - Voice clone ID
    * @returns {Promise<boolean>}
    */
   async voiceCloneExists(cloneId) {
-    try {
-      await access(this.getVoiceClonePath(cloneId));
-      return true;
-    } catch {
-      return false;
-    }
+    return (await this.resolveVoiceClonePath(cloneId)) !== null;
   }
 
   /**
-   * Validate a voice clone pickle file
-   * @param {string} pklPath - Path to the pickle file
+   * Validate a voice clone file (.safetensors or .pkl)
+   * @param {string} filePath - Path to the voice clone file
    * @returns {Promise<{valid: boolean, error?: string}>}
    */
-  async validateVoiceClone(pklPath) {
-    if (!pklPath) {
-      throw new QwenTTSError('pklPath is required');
+  async validateVoiceClone(filePath) {
+    if (!filePath) {
+      throw new QwenTTSError('filePath is required');
     }
 
     const result = await this._sendRequest({
       type: 'validate_voice_clone',
-      pkl_path: pklPath,
+      file_path: filePath,
     });
 
     return {
@@ -498,14 +514,14 @@ export class QwenTTSService {
   }
 
   /**
-   * Import a voice clone from a pickle file
-   * @param {string} pklPath - Path to the pickle file
+   * Import a voice clone from a .safetensors or .pkl file
+   * @param {string} filePath - Path to the source file
    * @param {string} cloneId - Clone ID to assign
    * @returns {Promise<{cloneId: string}>}
    */
-  async importVoiceClone(pklPath, cloneId) {
-    if (!pklPath) {
-      throw new QwenTTSError('pklPath is required');
+  async importVoiceClone(filePath, cloneId) {
+    if (!filePath) {
+      throw new QwenTTSError('filePath is required');
     }
 
     if (!cloneId) {
@@ -514,7 +530,7 @@ export class QwenTTSService {
 
     const result = await this._sendRequest({
       type: 'import_voice_clone',
-      pkl_path: pklPath,
+      file_path: filePath,
       clone_id: cloneId,
     });
 

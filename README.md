@@ -610,7 +610,7 @@ curl http://localhost:3000/qwen-tts/voices/clone/my-voice/download \
 ```
 
 The ZIP file contains:
-- `{cloneId}.pkl` - The voice embedding pickle file
+- `{cloneId}.safetensors` - The voice embedding in safetensors format (safe, no code execution possible)
 - `metadata.json` - Clone metadata (ID, creation date, service info)
 
 #### Import Voice Clone
@@ -628,7 +628,7 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 | file * | file | - | ZIP file containing the voice clone |
 | cloneId | string | from metadata/filename | Custom ID for the imported clone |
 
-> **Security Warning**: Pickle files can execute arbitrary code during deserialization. Only import voice clones from trusted sources. The server validates pickle contents before importing, but this cannot guarantee safety against all malicious files.
+> Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code. Legacy `.pkl` files are accepted on import and automatically converted to safetensors.
 
 #### Voice Design (Create Voice from Description)
 

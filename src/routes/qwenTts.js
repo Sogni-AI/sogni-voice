@@ -637,7 +637,11 @@ export const qwenTtsRoutes = [
           throw Boom.notFound(`Voice clone '${cloneId}' not found`);
         }
 
-        const clonePath = qwenTtsBaseService.getVoiceClonePath(cloneId);
+        const clonePath = await qwenTtsBaseService.resolveVoiceClonePath(cloneId);
+        if (!clonePath) {
+          throw Boom.notFound(`Voice clone '${cloneId}' not found`);
+        }
+        const cloneFilename = basename(clonePath);
 
         // Create temp directory for the ZIP
         tempDir = await tempFileManager.createTempDir('qwen-download-');
@@ -647,18 +651,18 @@ export const qwenTtsRoutes = [
         // Create metadata.json
         const metadata = {
           clone_id: cloneId,
-          format_version: '1.0',
+          format_version: '2.0',
           service: 'qwen-tts',
           created_at: new Date().toISOString(),
         };
         await writeFile(join(zipDir, 'metadata.json'), JSON.stringify(metadata, null, 2));
 
-        // Copy the pickle file to the package directory
-        await execFileAsync('cp', [clonePath, join(zipDir, `${cloneId}.pkl`)], { timeout: 60000 });
+        // Copy the voice clone file to the package directory
+        await execFileAsync('cp', [clonePath, join(zipDir, cloneFilename)], { timeout: 60000 });
 
         // Create ZIP
         const zipPath = join(tempDir, `${cloneId}.zip`);
-        await execFileAsync('zip', ['-j', zipPath, join(zipDir, `${cloneId}.pkl`), join(zipDir, 'metadata.json')], {
+        await execFileAsync('zip', ['-j', zipPath, join(zipDir, cloneFilename), join(zipDir, 'metadata.json')], {
           timeout: 60000,
         });
 
@@ -695,7 +699,7 @@ export const qwenTtsRoutes = [
       validate: {
         payload: Joi.object({
           file: Joi.any().required()
-            .description('ZIP file containing voice clone (.pkl file and optionally metadata.json)'),
+            .description('ZIP file containing voice clone (.safetensors or .pkl file and optionally metadata.json)'),
           cloneId: Joi.string().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
             .description('Optional custom name for the imported voice clone'),
         }),
@@ -732,11 +736,18 @@ export const qwenTtsRoutes = [
           timeout: 60000,
         });
 
-        // Find .pkl file in extracted contents
+        // Find voice clone file (.safetensors or .pkl) in extracted contents
         const extractedFiles = await readdir(extractDir);
-        let pklPath = null;
+        let cloneFilePath = null;
         let metadataPath = null;
         let extractedCloneId = null;
+
+        const isCloneFile = (name) => name.endsWith('.safetensors') || name.endsWith('.pkl');
+        const getCloneId = (name) => {
+          if (name.endsWith('.safetensors')) return basename(name, '.safetensors');
+          if (name.endsWith('.pkl')) return basename(name, '.pkl');
+          return null;
+        };
 
         // Check if files are directly in extractDir or in a subdirectory
         for (const item of extractedFiles) {
@@ -744,27 +755,32 @@ export const qwenTtsRoutes = [
           const itemStat = await stat(itemPath);
 
           if (itemStat.isDirectory()) {
-            // Check inside subdirectory
+            // Check inside subdirectory (prefer .safetensors over .pkl)
             const subFiles = await readdir(itemPath);
             for (const subFile of subFiles) {
-              if (subFile.endsWith('.pkl')) {
-                pklPath = join(itemPath, subFile);
-                extractedCloneId = basename(subFile, '.pkl');
+              if (isCloneFile(subFile)) {
+                // Prefer safetensors if both exist
+                if (!cloneFilePath || subFile.endsWith('.safetensors')) {
+                  cloneFilePath = join(itemPath, subFile);
+                  extractedCloneId = getCloneId(subFile);
+                }
               } else if (subFile === 'metadata.json') {
                 metadataPath = join(itemPath, subFile);
               }
             }
-            if (pklPath) break;
-          } else if (item.endsWith('.pkl')) {
-            pklPath = itemPath;
-            extractedCloneId = basename(item, '.pkl');
+            if (cloneFilePath) break;
+          } else if (isCloneFile(item)) {
+            if (!cloneFilePath || item.endsWith('.safetensors')) {
+              cloneFilePath = itemPath;
+              extractedCloneId = getCloneId(item);
+            }
           } else if (item === 'metadata.json') {
             metadataPath = itemPath;
           }
         }
 
-        if (!pklPath) {
-          throw Boom.badRequest('Invalid ZIP file: must contain a .pkl file');
+        if (!cloneFilePath) {
+          throw Boom.badRequest('Invalid ZIP file: must contain a .safetensors or .pkl file');
         }
 
         // Determine clone ID: user provided > metadata > filename > random
@@ -784,14 +800,14 @@ export const qwenTtsRoutes = [
         // Sanitize clone ID
         cloneId = cloneId.replace(/[^a-zA-Z0-9_-]/g, '_');
 
-        // Validate the pickle file via daemon
-        const validation = await qwenTtsBaseService.validateVoiceClone(pklPath);
+        // Validate the voice clone file via daemon
+        const validation = await qwenTtsBaseService.validateVoiceClone(cloneFilePath);
         if (!validation.valid) {
           throw Boom.badRequest(`Invalid voice clone file: ${validation.error || 'unknown error'}`);
         }
 
-        // Import via daemon (copy + cache)
-        const result = await qwenTtsBaseService.importVoiceClone(pklPath, cloneId);
+        // Import via daemon (loads, converts to safetensors, caches)
+        const result = await qwenTtsBaseService.importVoiceClone(cloneFilePath, cloneId);
 
         return {
           success: true,

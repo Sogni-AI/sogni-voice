@@ -20,6 +20,33 @@ const checkEnabled = (request, h) => {
   return h.continue;
 };
 
+// Helper to check if voice clone imports are authorized.
+// Requires either DANGEROUSLY_ALLOW_IMPORTS=1 or a valid API key.
+const checkImportAuthorized = (request, h) => {
+  if (config.auth.dangerouslyAllowImports) {
+    return h.continue;
+  }
+
+  // Check for a valid API key
+  const apiKeyHeader = request.headers['x-api-key'];
+  const authHeader = request.headers.authorization;
+  let providedKey = null;
+
+  if (apiKeyHeader) {
+    providedKey = apiKeyHeader;
+  } else if (authHeader && authHeader.startsWith('Bearer ')) {
+    providedKey = authHeader.slice(7);
+  }
+
+  if (!providedKey || !config.auth.apiKey || providedKey !== config.auth.apiKey) {
+    throw Boom.unauthorized(
+      'Voice clone import requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_IMPORTS=1.'
+    );
+  }
+
+  return h.continue;
+};
+
 export const pocketTtsRoutes = [
   // Generate speech
   {
@@ -430,7 +457,8 @@ export const pocketTtsRoutes = [
     method: 'POST',
     path: '/pocket-tts/voices/clone/import',
     options: {
-      pre: [{ method: checkEnabled }],
+      auth: false,
+      pre: [{ method: checkEnabled }, { method: checkImportAuthorized }],
       payload: {
         maxBytes: config.upload.maxFileSizeBytes,
         output: 'stream',

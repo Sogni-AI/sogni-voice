@@ -86,7 +86,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `GET /qwen-tts/voices` - List voices, clones, and capabilities
 - `DELETE /qwen-tts/voices/clone/{cloneId}` - Delete voice clone
 - `GET /qwen-tts/voices/clone/{cloneId}/download` - Download voice clone as ZIP
-- `POST /qwen-tts/voices/clone/import` - Import voice clone from ZIP
+- `POST /qwen-tts/voices/clone/import` - Import voice clone from ZIP (requires API key or `DANGEROUSLY_ALLOW_IMPORTS=1`)
 
 ## Configuration
 
@@ -111,6 +111,9 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `QWEN_TTS_VOICE_CLONES_DIR` (./voice_clones)
 
 **Upload**: `MAX_FILE_SIZE_MB` (100)
+
+**Security**:
+- `DANGEROUSLY_ALLOW_IMPORTS` (false) - Allow voice clone imports without API key authentication
 
 ## External Dependencies
 

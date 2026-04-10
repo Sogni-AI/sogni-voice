@@ -169,6 +169,7 @@ cp .env.example .env
 |----------|---------|-------------|
 | AUTH_ENABLED | 0 | Enable API key authentication |
 | AUTH_API_KEY | (none) | API key for authenticating requests |
+| DANGEROUSLY_ALLOW_IMPORTS | 0 | Allow voice clone imports without API key authentication |
 
 **Qwen3-TTS Model Variants:**
 - `base-0.6b` - Basic TTS + voice cloning (smaller, faster)
@@ -615,10 +616,11 @@ The ZIP file contains:
 
 #### Import Voice Clone
 
-Import a previously exported voice clone from a ZIP file:
+Import a previously exported voice clone from a ZIP file. **Requires authentication** — you must provide a valid API key (via `X-API-Key` or `Authorization: Bearer` header) or set `DANGEROUSLY_ALLOW_IMPORTS=1`:
 
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
+  -H "X-API-Key: sk_your_secret_key_here" \
   -F "file=@my-voice.zip" \
   -F "cloneId=imported-voice"
 ```
@@ -629,6 +631,8 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 | cloneId | string | from metadata/filename | Custom ID for the imported clone |
 
 > Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code. Legacy `.pkl` files are accepted on import and automatically converted to safetensors.
+>
+> **Security note:** Voice clone imports are always gated by authentication, even when global API authentication (`AUTH_ENABLED`) is disabled. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
 
 #### Voice Design (Create Voice from Description)
 

@@ -17,6 +17,7 @@ export const config = {
     enabled: parseEnvBool(process.env.AUTH_ENABLED, false),
     apiKey: process.env.AUTH_API_KEY || null,
     excludePaths: ['/health', '/auth/status'],
+    dangerouslyAllowImports: parseEnvBool(process.env.DANGEROUSLY_ALLOW_IMPORTS, false),
   },
   tts: {
     enabled: parseEnvBool(process.env.TTS_ENABLED, true),

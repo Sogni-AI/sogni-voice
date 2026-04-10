@@ -364,6 +364,16 @@ check_system_requirements() {
         all_good=false
     fi
 
+    # Check sox
+    if command -v sox >/dev/null 2>&1; then
+        local sox_version=$(sox --version | awk '{print $NF}')
+        print_success "sox $sox_version"
+    else
+        print_error "sox not found"
+        print_info "Install via: brew install sox"
+        all_good=false
+    fi
+
     # Check uv
     if command -v uv >/dev/null 2>&1; then
         local uv_version=$(uv --version | awk '{print $2}')
@@ -719,7 +729,7 @@ install_dependencies() {
     if [ "$ENABLE_KOKORO" = "1" ]; then
         if ! pip show mlx-audio >/dev/null 2>&1; then
             print_info "Installing mlx-audio for Kokoro TTS..."
-            pip install --quiet mlx-audio
+            pip install --quiet "mlx-audio>=0.2.10,<0.3"
             print_success "mlx-audio installed"
         else
             print_info "mlx-audio already installed"

@@ -660,6 +660,7 @@ with open('my_voice.zip', 'wb') as f:
       <span class="method">POST</span> /pocket-tts/voices/clone/import
     </div>
     <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>reference.wav</code> file.</p>
+    <p><strong>Requires authentication:</strong> You must provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code> header, or set <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> in the server environment.</p>
 
     <table>
       <tr>
@@ -681,6 +682,7 @@ with open('my_voice.zip', 'wb') as f:
 
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/pocket-tts/voices/clone/import \
+  -H "X-API-Key: sk_your_secret_key_here" \
   -F "file=@my_voice.zip" \
   -F "cloneId=restored_voice"</code></pre>
 
@@ -698,6 +700,7 @@ formData.append('cloneId', 'my_imported_voice');
 
 const response = await fetch('https://voice.sogni.ai/pocket-tts/voices/clone/import', {
   method: 'POST',
+  headers: { 'X-API-Key': 'sk_your_secret_key_here' },
   body: formData
 });
 
@@ -710,6 +713,7 @@ console.log('Imported clone:', data.cloneId);</code></pre>
 with open('my_voice.zip', 'rb') as f:
     response = requests.post(
         'https://voice.sogni.ai/pocket-tts/voices/clone/import',
+        headers={'X-API-Key': 'sk_your_secret_key_here'},
         files={'file': f},
         data={'cloneId': 'restored_voice'}
     )
@@ -993,6 +997,111 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
   "cloneId": "my_voice",
   "message": "Voice clone deleted successfully"
 }</code></pre>
+
+    <h3>Download Voice Clone</h3>
+    <div class="endpoint">
+      <span class="method get">GET</span> /qwen-tts/voices/clone/{cloneId}/download
+    </div>
+    <p>Download a voice clone as a ZIP file containing the voice embedding and metadata. Useful for backup or transferring clones between servers.</p>
+
+    <h4>Response</h4>
+    <p>Returns a ZIP file (<code>Content-Type: application/zip</code>) containing:</p>
+    <ul>
+      <li><code>{cloneId}.safetensors</code> - The voice embedding (safe, no code execution possible)</li>
+      <li><code>metadata.json</code> - Clone metadata (clone ID, creation date, service info)</li>
+    </ul>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl https://voice.sogni.ai/qwen-tts/voices/clone/my_voice/download \
+  --output my_voice.zip</code></pre>
+
+    <h4>JavaScript Example</h4>
+    <pre><code>const response = await fetch(
+  'https://voice.sogni.ai/qwen-tts/voices/clone/my_voice/download'
+);
+
+const blob = await response.blob();
+const url = URL.createObjectURL(blob);
+const a = document.createElement('a');
+a.href = url;
+a.download = 'my_voice.zip';
+a.click();</code></pre>
+
+    <h4>Python Example</h4>
+    <pre><code>import requests
+
+response = requests.get(
+    'https://voice.sogni.ai/qwen-tts/voices/clone/my_voice/download'
+)
+
+with open('my_voice.zip', 'wb') as f:
+    f.write(response.content)</code></pre>
+
+    <h3>Import Voice Clone</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /qwen-tts/voices/clone/import
+    </div>
+    <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>.safetensors</code> or <code>.pkl</code> file.</p>
+    <p><strong>Requires authentication:</strong> You must provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code> header, or set <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> in the server environment.</p>
+
+    <table>
+      <tr>
+        <th>Parameter</th>
+        <th>Type</th>
+        <th>Description</th>
+      </tr>
+      <tr>
+        <td><code>file</code> <span class="required">*</span></td>
+        <td>File</td>
+        <td>ZIP file containing the voice clone (.safetensors or .pkl + optional metadata.json)</td>
+      </tr>
+      <tr>
+        <td><code>cloneId</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Custom name for the imported clone. If omitted, uses the name from metadata or filename.</td>
+      </tr>
+    </table>
+
+    <h4>cURL Example</h4>
+    <pre><code>curl -X POST https://voice.sogni.ai/qwen-tts/voices/clone/import \
+  -H "X-API-Key: sk_your_secret_key_here" \
+  -F "file=@my_voice.zip" \
+  -F "cloneId=restored_voice"</code></pre>
+
+    <h4>Response</h4>
+    <pre><code>{
+  "success": true,
+  "cloneId": "restored_voice",
+  "message": "Voice clone imported successfully"
+}</code></pre>
+
+    <h4>JavaScript Example</h4>
+    <pre><code>const formData = new FormData();
+formData.append('file', zipFile);
+formData.append('cloneId', 'my_imported_voice');
+
+const response = await fetch('https://voice.sogni.ai/qwen-tts/voices/clone/import', {
+  method: 'POST',
+  headers: { 'X-API-Key': 'sk_your_secret_key_here' },
+  body: formData
+});
+
+const data = await response.json();
+console.log('Imported clone:', data.cloneId);</code></pre>
+
+    <h4>Python Example</h4>
+    <pre><code>import requests
+
+with open('my_voice.zip', 'rb') as f:
+    response = requests.post(
+        'https://voice.sogni.ai/qwen-tts/voices/clone/import',
+        headers={'X-API-Key': 'sk_your_secret_key_here'},
+        files={'file': f},
+        data={'cloneId': 'restored_voice'}
+    )
+
+data = response.json()
+print(f"Imported clone: {data['cloneId']}")</code></pre>
     </div>
   </details>
 

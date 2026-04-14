@@ -8,16 +8,27 @@ const parseEnvBool = (value, defaultValue = false) => {
   return defaultValue;
 };
 
+const parseEnvList = (value) => {
+  if (!value) return [];
+
+  return value
+    .split(',')
+    .map((item) => item.trim())
+    .filter(Boolean);
+};
+
 export const config = {
   server: {
     port: parseInt(process.env.PORT, 10) || 3000,
-    host: process.env.HOST || '0.0.0.0',
+    host: process.env.HOST || '127.0.0.1',
+    corsOrigins: parseEnvList(process.env.CORS_ORIGINS),
   },
   auth: {
     enabled: parseEnvBool(process.env.AUTH_ENABLED, false),
     apiKey: process.env.AUTH_API_KEY || null,
     excludePaths: ['/health', '/auth/status'],
     dangerouslyAllowImports: parseEnvBool(process.env.DANGEROUSLY_ALLOW_IMPORTS, false),
+    dangerouslyAllowVoiceCloning: parseEnvBool(process.env.DANGEROUSLY_ALLOW_VOICE_CLONING, false),
   },
   tts: {
     enabled: parseEnvBool(process.env.TTS_ENABLED, true),
@@ -58,5 +69,6 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_TTS, true),
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
+    allowLegacyPickleClones: parseEnvBool(process.env.QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES, false),
   },
 };

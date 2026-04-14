@@ -15,11 +15,13 @@ vi.mock('node:child_process', () => ({
 
 vi.mock('../../src/config/index.js', () => ({
   config: {
-    server: { port: 3000, host: '0.0.0.0' },
+    server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
     auth: {
       enabled: false,
       apiKey: null,
       excludePaths: ['/health', '/auth/status'],
+      dangerouslyAllowImports: true,
+      dangerouslyAllowVoiceCloning: true,
     },
     tts: {
       enabled: false,

@@ -140,6 +140,7 @@ def suppress_flash_attn_warning():
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 VOICE_CLONES_DIR = os.environ.get('QWEN_TTS_VOICE_CLONES_DIR', os.path.join(SCRIPT_DIR, "..", "voice_clones"))
+ALLOW_LEGACY_PICKLE_CLONES = os.environ.get('QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES', '0') == '1'
 SAMPLE_RATE = 24000
 
 # Model variant configurations (using official Qwen repos)
@@ -264,7 +265,7 @@ class QwenTTSDaemon:
                 return self.default_voice_prompt
             except Exception as e:
                 print(f"[warning] Failed to load default voice prompt: {e}", file=sys.stderr)
-        elif os.path.exists(pkl_path):
+        elif ALLOW_LEGACY_PICKLE_CLONES and os.path.exists(pkl_path):
             try:
                 with open(pkl_path, 'rb') as f:
                     self.default_voice_prompt = safe_pickle_load(f)
@@ -496,7 +497,7 @@ class QwenTTSDaemon:
                 if os.path.exists(st_path):
                     print(f"[generate_voice_clone] Reading prompt from {st_path}", file=sys.stderr)
                     prompt = load_voice_prompt(st_path)
-                elif os.path.exists(pkl_path):
+                elif ALLOW_LEGACY_PICKLE_CLONES and os.path.exists(pkl_path):
                     print(f"[generate_voice_clone] Migrating legacy {pkl_path}", file=sys.stderr)
                     with open(pkl_path, 'rb') as f:
                         prompt = safe_pickle_load(f)
@@ -555,15 +556,17 @@ class QwenTTSDaemon:
 
         try:
             st_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.safetensors")
-            pkl_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
-
             # Remove from cache
             if clone_id in self.voice_clones:
                 del self.voice_clones[clone_id]
 
             # Remove from disk (check both formats)
             deleted = False
-            for path in (st_path, pkl_path):
+            delete_paths = [st_path]
+            if os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")):
+                delete_paths.append(os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl"))
+
+            for path in delete_paths:
                 if os.path.exists(path):
                     os.remove(path)
                     deleted = True
@@ -585,13 +588,13 @@ class QwenTTSDaemon:
         try:
             # Find source file (safetensors or legacy pkl)
             st_old = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.safetensors")
-            pkl_old = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
-
             if os.path.exists(st_old):
                 old_path = st_old
                 ext = ".safetensors"
-            elif os.path.exists(pkl_old):
-                old_path = pkl_old
+            elif os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")):
+                if not ALLOW_LEGACY_PICKLE_CLONES:
+                    return {"success": False, "error": "Legacy .pkl voice clones are disabled. Set QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES=1 to migrate this clone."}
+                old_path = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
                 ext = ".safetensors"  # migrate on rename
             else:
                 return {"success": False, "error": f"Voice clone '{old_clone_id}' not found"}
@@ -639,7 +642,7 @@ class QwenTTSDaemon:
                         continue
                     if filename.endswith('.safetensors'):
                         clones.add(filename[:-len('.safetensors')])
-                    elif filename.endswith('.pkl'):
+                    elif ALLOW_LEGACY_PICKLE_CLONES and filename.endswith('.pkl'):
                         clones.add(filename[:-4])
             return {"success": True, "clones": sorted(clones)}
         except Exception as e:
@@ -665,6 +668,8 @@ class QwenTTSDaemon:
                 # safetensors is safe by design — just verify it contains valid data
                 prompt = load_voice_prompt(file_path)
             elif file_path.endswith('.pkl'):
+                if not ALLOW_LEGACY_PICKLE_CLONES:
+                    return {"success": True, "valid": False, "error": "Legacy .pkl voice clones are disabled"}
                 # Legacy pickle — use restricted unpickler
                 with open(file_path, 'rb') as f:
                     prompt = safe_pickle_load(f)
@@ -707,6 +712,8 @@ class QwenTTSDaemon:
                 prompt = load_voice_prompt(file_path)
                 print(f"[import_voice_clone] Loaded safetensors from {file_path}", file=sys.stderr)
             elif file_path.endswith('.pkl'):
+                if not ALLOW_LEGACY_PICKLE_CLONES:
+                    return {"success": False, "error": "Legacy .pkl voice clones are disabled"}
                 with open(file_path, 'rb') as f:
                     prompt = safe_pickle_load(f)
                 print(f"[import_voice_clone] Loaded legacy pkl from {file_path}", file=sys.stderr)

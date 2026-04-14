@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile, mkdir, writeFile, readdir, stat } from 'node:fs/promises';
+import { readFile, mkdir, writeFile, readdir, stat, lstat } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
@@ -10,6 +10,7 @@ import { join, basename } from 'node:path';
 import { config } from '../config/index.js';
 import { pocketTtsService } from '../services/pocketTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
+import { requestHasValidApiKey } from '../utils/apiKey.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -20,6 +21,21 @@ const checkEnabled = (request, h) => {
   return h.continue;
 };
 
+const hasCloneAccess = (request) => (
+  config.auth.dangerouslyAllowVoiceCloning
+  || requestHasValidApiKey(request, config.auth.apiKey)
+);
+
+const checkCloneAuthorized = (request, h) => {
+  if (hasCloneAccess(request)) {
+    return h.continue;
+  }
+
+  throw Boom.unauthorized(
+    'Voice cloning requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_VOICE_CLONING=1.'
+  );
+};
+
 // Helper to check if voice clone imports are authorized.
 // Requires either DANGEROUSLY_ALLOW_IMPORTS=1 or a valid API key.
 const checkImportAuthorized = (request, h) => {
@@ -27,24 +43,25 @@ const checkImportAuthorized = (request, h) => {
     return h.continue;
   }
 
-  // Check for a valid API key
-  const apiKeyHeader = request.headers['x-api-key'];
-  const authHeader = request.headers.authorization;
-  let providedKey = null;
-
-  if (apiKeyHeader) {
-    providedKey = apiKeyHeader;
-  } else if (authHeader && authHeader.startsWith('Bearer ')) {
-    providedKey = authHeader.slice(7);
-  }
-
-  if (!providedKey || !config.auth.apiKey || providedKey !== config.auth.apiKey) {
+  if (!requestHasValidApiKey(request, config.auth.apiKey)) {
     throw Boom.unauthorized(
       'Voice clone import requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_IMPORTS=1.'
     );
   }
 
   return h.continue;
+};
+
+const assertRegularArchiveFile = async (filePath, label) => {
+  const stats = await lstat(filePath);
+
+  if (stats.isSymbolicLink()) {
+    throw Boom.badRequest(`Invalid ZIP file: ${label} cannot be a symbolic link`);
+  }
+
+  if (!stats.isFile()) {
+    throw Boom.badRequest(`Invalid ZIP file: ${label} must be a regular file`);
+  }
 };
 
 export const pocketTtsRoutes = [
@@ -147,7 +164,7 @@ export const pocketTtsRoutes = [
 
         return {
           voices: result.voices,
-          clones: result.clones,
+          clones: hasCloneAccess(request) ? result.clones : [],
           default: config.pocketTts.defaultVoice,
         };
       } catch (error) {
@@ -163,7 +180,7 @@ export const pocketTtsRoutes = [
     method: 'POST',
     path: '/pocket-tts/voices/clone',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       payload: {
         maxBytes: config.upload.maxFileSizeBytes,
         output: 'stream',
@@ -234,7 +251,7 @@ export const pocketTtsRoutes = [
     method: 'POST',
     path: '/pocket-tts/voices/clone/{cloneId}/generate',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -317,7 +334,7 @@ export const pocketTtsRoutes = [
     method: 'DELETE',
     path: '/pocket-tts/voices/clone/{cloneId}',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -354,7 +371,7 @@ export const pocketTtsRoutes = [
     method: 'PATCH',
     path: '/pocket-tts/voices/clone/{cloneId}',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -402,7 +419,7 @@ export const pocketTtsRoutes = [
     method: 'GET',
     path: '/pocket-tts/voices/clone/{cloneId}/download',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -510,7 +527,11 @@ export const pocketTtsRoutes = [
         // Check if files are directly in extractDir or in a subdirectory
         for (const item of extractedFiles) {
           const itemPath = join(extractDir, item);
-          const itemStat = await stat(itemPath);
+          const itemStat = await lstat(itemPath);
+
+          if (itemStat.isSymbolicLink()) {
+            throw Boom.badRequest('Invalid ZIP file: symbolic links are not allowed');
+          }
 
           if (itemStat.isDirectory()) {
             // Check inside subdirectory
@@ -532,6 +553,11 @@ export const pocketTtsRoutes = [
 
         if (!referenceWavPath) {
           throw Boom.badRequest('Invalid ZIP file: must contain reference.wav');
+        }
+
+        await assertRegularArchiveFile(referenceWavPath, 'reference.wav');
+        if (metadataPath) {
+          await assertRegularArchiveFile(metadataPath, 'metadata.json');
         }
 
         // Determine clone ID: user provided > metadata > extracted directory name > ZIP filename

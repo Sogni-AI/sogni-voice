@@ -55,6 +55,7 @@ export class QwenTTSService {
           PYTHONUNBUFFERED: '1',
           QWEN_TTS_MODEL_VARIANT: this.variant,
           QWEN_TTS_VOICE_CLONES_DIR: config.qwenTts.voiceClonesDir,
+          QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES: config.qwenTts.allowLegacyPickleClones ? '1' : '0',
         },
       });
 
@@ -469,11 +470,16 @@ export class QwenTTSService {
    */
   async resolveVoiceClonePath(cloneId) {
     const stPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.safetensors`);
-    const pklPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
     try {
       await access(stPath);
       return stPath;
     } catch {
+      if (!config.qwenTts.allowLegacyPickleClones) {
+        return null;
+      }
+
+      const pklPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
+
       try {
         await access(pklPath);
         return pklPath;

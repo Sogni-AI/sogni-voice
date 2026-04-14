@@ -1,6 +1,6 @@
 import Joi from 'joi';
 import Boom from '@hapi/boom';
-import { readFile, unlink, mkdir, writeFile, readdir, stat } from 'node:fs/promises';
+import { readFile, unlink, mkdir, writeFile, readdir, stat, lstat } from 'node:fs/promises';
 import { createWriteStream } from 'node:fs';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
@@ -10,6 +10,7 @@ import { join, basename } from 'node:path';
 import { config } from '../config/index.js';
 import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
+import { requestHasValidApiKey } from '../utils/apiKey.js';
 
 const execFileAsync = promisify(execFile);
 
@@ -21,6 +22,21 @@ const checkEnabled = (request, h) => {
   return h.continue;
 };
 
+const hasCloneAccess = (request) => (
+  config.auth.dangerouslyAllowVoiceCloning
+  || requestHasValidApiKey(request, config.auth.apiKey)
+);
+
+const checkCloneAuthorized = (request, h) => {
+  if (hasCloneAccess(request)) {
+    return h.continue;
+  }
+
+  throw Boom.unauthorized(
+    'Voice cloning requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_VOICE_CLONING=1.'
+  );
+};
+
 // Helper to check if voice clone imports are authorized.
 // Requires either DANGEROUSLY_ALLOW_IMPORTS=1 or a valid API key.
 const checkImportAuthorized = (request, h) => {
@@ -28,24 +44,25 @@ const checkImportAuthorized = (request, h) => {
     return h.continue;
   }
 
-  // Check for a valid API key
-  const apiKeyHeader = request.headers['x-api-key'];
-  const authHeader = request.headers.authorization;
-  let providedKey = null;
-
-  if (apiKeyHeader) {
-    providedKey = apiKeyHeader;
-  } else if (authHeader && authHeader.startsWith('Bearer ')) {
-    providedKey = authHeader.slice(7);
-  }
-
-  if (!providedKey || !config.auth.apiKey || providedKey !== config.auth.apiKey) {
+  if (!requestHasValidApiKey(request, config.auth.apiKey)) {
     throw Boom.unauthorized(
       'Voice clone import requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_IMPORTS=1.'
     );
   }
 
   return h.continue;
+};
+
+const assertRegularArchiveFile = async (filePath, label) => {
+  const stats = await lstat(filePath);
+
+  if (stats.isSymbolicLink()) {
+    throw Boom.badRequest(`Invalid ZIP file: ${label} cannot be a symbolic link`);
+  }
+
+  if (!stats.isFile()) {
+    throw Boom.badRequest(`Invalid ZIP file: ${label} must be a regular file`);
+  }
 };
 
 export const qwenTtsRoutes = [
@@ -323,7 +340,7 @@ export const qwenTtsRoutes = [
     method: 'POST',
     path: '/qwen-tts/voices/clone',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       payload: {
         maxBytes: config.upload.maxFileSizeBytes,
         output: 'stream',
@@ -407,7 +424,7 @@ export const qwenTtsRoutes = [
     method: 'POST',
     path: '/qwen-tts/voices/clone/{cloneId}/generate',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -520,7 +537,9 @@ export const qwenTtsRoutes = [
           : qwenTtsCustomVoiceService.listVoices();
 
         // Get clones from Base service
-        const clonesResult = await qwenTtsBaseService.listVoiceClones();
+        const clonesResult = hasCloneAccess(request)
+          ? await qwenTtsBaseService.listVoiceClones()
+          : { clones: [] };
 
         // Merge features from both daemons
         const allFeatures = [...new Set([
@@ -552,7 +571,7 @@ export const qwenTtsRoutes = [
     method: 'DELETE',
     path: '/qwen-tts/voices/clone/{cloneId}',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -589,7 +608,7 @@ export const qwenTtsRoutes = [
     method: 'PATCH',
     path: '/qwen-tts/voices/clone/{cloneId}',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -642,7 +661,7 @@ export const qwenTtsRoutes = [
     method: 'GET',
     path: '/qwen-tts/voices/clone/{cloneId}/download',
     options: {
-      pre: [{ method: checkEnabled }],
+      pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
       validate: {
         params: Joi.object({
           cloneId: Joi.string().required().pattern(/^[a-zA-Z0-9_-]+$/)
@@ -770,7 +789,10 @@ export const qwenTtsRoutes = [
         let metadataPath = null;
         let extractedCloneId = null;
 
-        const isCloneFile = (name) => name.endsWith('.safetensors') || name.endsWith('.pkl');
+        const isCloneFile = (name) => (
+          name.endsWith('.safetensors')
+          || (config.qwenTts.allowLegacyPickleClones && name.endsWith('.pkl'))
+        );
         const getCloneId = (name) => {
           if (name.endsWith('.safetensors')) return basename(name, '.safetensors');
           if (name.endsWith('.pkl')) return basename(name, '.pkl');
@@ -780,20 +802,31 @@ export const qwenTtsRoutes = [
         // Check if files are directly in extractDir or in a subdirectory
         for (const item of extractedFiles) {
           const itemPath = join(extractDir, item);
-          const itemStat = await stat(itemPath);
+          const itemStat = await lstat(itemPath);
+
+          if (itemStat.isSymbolicLink()) {
+            throw Boom.badRequest('Invalid ZIP file: symbolic links are not allowed');
+          }
 
           if (itemStat.isDirectory()) {
             // Check inside subdirectory (prefer .safetensors over .pkl)
             const subFiles = await readdir(itemPath);
             for (const subFile of subFiles) {
+              const subFilePath = join(itemPath, subFile);
+              const subFileStat = await lstat(subFilePath);
+
+              if (subFileStat.isSymbolicLink()) {
+                throw Boom.badRequest('Invalid ZIP file: symbolic links are not allowed');
+              }
+
               if (isCloneFile(subFile)) {
                 // Prefer safetensors if both exist
                 if (!cloneFilePath || subFile.endsWith('.safetensors')) {
-                  cloneFilePath = join(itemPath, subFile);
+                  cloneFilePath = subFilePath;
                   extractedCloneId = getCloneId(subFile);
                 }
               } else if (subFile === 'metadata.json') {
-                metadataPath = join(itemPath, subFile);
+                metadataPath = subFilePath;
               }
             }
             if (cloneFilePath) break;
@@ -808,7 +841,15 @@ export const qwenTtsRoutes = [
         }
 
         if (!cloneFilePath) {
-          throw Boom.badRequest('Invalid ZIP file: must contain a .safetensors or .pkl file');
+          const supportedFormats = config.qwenTts.allowLegacyPickleClones
+            ? '.safetensors or .pkl'
+            : '.safetensors';
+          throw Boom.badRequest(`Invalid ZIP file: must contain a ${supportedFormats} file`);
+        }
+
+        await assertRegularArchiveFile(cloneFilePath, 'voice clone file');
+        if (metadataPath) {
+          await assertRegularArchiveFile(metadataPath, 'metadata.json');
         }
 
         // Determine clone ID: user provided > metadata > filename > random

@@ -121,7 +121,8 @@ cp .env.example .env
 | Variable | Default | Description |
 |----------|---------|-------------|
 | PORT | 3000 | Server port |
-| HOST | 0.0.0.0 | Server host (listens on all interfaces) |
+| HOST | 127.0.0.1 | Server host (loopback-only by default) |
+| CORS_ORIGINS | (empty) | Comma-separated CORS allowlist. CORS is disabled when unset. |
 | MAX_FILE_SIZE_MB | 100 | Max upload file size |
 
 #### Transcription
@@ -163,6 +164,7 @@ cp .env.example .env
 | QWEN_TTS_DAEMON_STARTUP_TIMEOUT | 180000 | Daemon startup timeout (ms) |
 | PREWARM_QWEN_TTS | 0 | Pre-load model on server start |
 | QWEN_TTS_VOICE_CLONES_DIR | ./voice_clones | Voice clone storage directory |
+| QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES | 0 | Temporarily allow legacy `.pkl` voice clone migration. Leave disabled in production. |
 
 #### Authentication (Optional)
 | Variable | Default | Description |
@@ -170,6 +172,7 @@ cp .env.example .env
 | AUTH_ENABLED | 0 | Enable API key authentication |
 | AUTH_API_KEY | (none) | API key for authenticating requests |
 | DANGEROUSLY_ALLOW_IMPORTS | 0 | Allow voice clone imports without API key authentication |
+| DANGEROUSLY_ALLOW_VOICE_CLONING | 0 | Allow clone creation, generation, download, rename, and deletion without API key authentication |
 
 **Qwen3-TTS Model Variants:**
 - `base-0.6b` - Basic TTS + voice cloning (smaller, faster)
@@ -243,6 +246,11 @@ For authenticated deployments, set `AUTH_ENABLED=1` and provide the API key in C
 ## Authentication
 
 The API supports optional API key authentication, which is **disabled by default** for local installations.
+
+Security defaults:
+- The server binds to `127.0.0.1` by default. To expose it on a network interface, set `HOST` explicitly and enable `AUTH_ENABLED=1` with `AUTH_API_KEY`.
+- CORS is disabled by default. Set `CORS_ORIGINS=https://app.example.com` (comma-separated for multiple origins) only when you need browser access from other origins.
+- Voice clone operations are protected even when global API auth is off. To use clone create/generate/download/delete/rename routes without an API key in local development, set `DANGEROUSLY_ALLOW_VOICE_CLONING=1`.
 
 ### Enabling Authentication
 
@@ -568,6 +576,8 @@ with open('output.wav', 'wb') as f:
 
 Create a voice clone from reference audio (3-10 seconds recommended):
 
+> **Authentication required by default:** clone create/generate/download/delete/rename routes require a valid API key unless you explicitly set `DANGEROUSLY_ALLOW_VOICE_CLONING=1`.
+
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/voices/clone \
   -F "audio=@reference.wav" \
@@ -630,7 +640,8 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 | file * | file | - | ZIP file containing the voice clone |
 | cloneId | string | from metadata/filename | Custom ID for the imported clone |
 
-> Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code. Legacy `.pkl` files are accepted on import and automatically converted to safetensors.
+> Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code.
+> Legacy `.pkl` imports are disabled by default. For a one-time migration of trusted old clones, set `QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES=1`, import/migrate them, then turn it back off.
 >
 > **Security note:** Voice clone imports are always gated by authentication, even when global API authentication (`AUTH_ENABLED`) is disabled. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
 
@@ -752,6 +763,8 @@ with open('output.wav', 'wb') as f:
 #### Voice Cloning
 
 Create a voice clone from reference audio (5-10 seconds recommended):
+
+> **Authentication required by default:** clone create/generate/download/delete/rename routes require a valid API key unless you explicitly set `DANGEROUSLY_ALLOW_VOICE_CLONING=1`.
 
 ```bash
 curl -X POST http://localhost:3000/pocket-tts/voices/clone \

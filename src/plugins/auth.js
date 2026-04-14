@@ -1,5 +1,6 @@
 import Boom from '@hapi/boom';
 import { config } from '../config/index.js';
+import { apiKeysMatch, extractApiKeyFromHeaders } from '../utils/apiKey.js';
 
 // Get auth config with defaults for safety
 const getAuthConfig = () => ({
@@ -22,22 +23,13 @@ const apiKeyScheme = () => {
       }
 
       // Check for API key in X-API-Key header or Authorization Bearer header
-      const apiKeyHeader = request.headers['x-api-key'];
-      const authHeader = request.headers.authorization;
-
-      let providedKey = null;
-
-      if (apiKeyHeader) {
-        providedKey = apiKeyHeader;
-      } else if (authHeader && authHeader.startsWith('Bearer ')) {
-        providedKey = authHeader.slice(7);
-      }
+      const providedKey = extractApiKeyFromHeaders(request.headers);
 
       if (!providedKey) {
         throw Boom.unauthorized('Missing API key. Provide X-API-Key header or Authorization: Bearer <key>');
       }
 
-      if (providedKey !== authConfig.apiKey) {
+      if (!apiKeysMatch(providedKey, authConfig.apiKey)) {
         throw Boom.unauthorized('Invalid API key');
       }
 

@@ -8,6 +8,8 @@ describe('config', () => {
     // Clear all relevant environment variables
     delete process.env.PORT;
     delete process.env.HOST;
+    delete process.env.CORS_ORIGINS;
+    delete process.env.DANGEROUSLY_ALLOW_VOICE_CLONING;
     delete process.env.TTS_MODEL_ID;
     delete process.env.TTS_DEFAULT_VOICE;
     delete process.env.TTS_DEFAULT_SPEED;
@@ -34,15 +36,42 @@ describe('config', () => {
       expect(config.server.port).toBe(8080);
     });
 
-    it('should use default host 0.0.0.0 when HOST not set', async () => {
+    it('should use default host 127.0.0.1 when HOST not set', async () => {
       const { config } = await import('../../../src/config/index.js');
-      expect(config.server.host).toBe('0.0.0.0');
+      expect(config.server.host).toBe('127.0.0.1');
     });
 
     it('should use HOST from environment', async () => {
       process.env.HOST = '0.0.0.0';
       const { config } = await import('../../../src/config/index.js');
       expect(config.server.host).toBe('0.0.0.0');
+    });
+
+    it('should disable CORS by default', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.server.corsOrigins).toEqual([]);
+    });
+
+    it('should parse CORS_ORIGINS from environment', async () => {
+      process.env.CORS_ORIGINS = 'https://app.example.com, https://admin.example.com';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.server.corsOrigins).toEqual([
+        'https://app.example.com',
+        'https://admin.example.com',
+      ]);
+    });
+  });
+
+  describe('auth config', () => {
+    it('should disallow public voice cloning by default', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.auth.dangerouslyAllowVoiceCloning).toBe(false);
+    });
+
+    it('should allow public voice cloning only when explicitly enabled', async () => {
+      process.env.DANGEROUSLY_ALLOW_VOICE_CLONING = '1';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.auth.dangerouslyAllowVoiceCloning).toBe(true);
     });
   });
 

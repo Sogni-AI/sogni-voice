@@ -53,11 +53,13 @@ const createFakeWavBuffer = () => {
 // Mock the config using environment variables
 vi.mock('../../src/config/index.js', () => ({
   config: {
-    server: { port: 3000, host: '0.0.0.0' },
+    server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
     auth: {
       enabled: false,
       apiKey: null,
       excludePaths: ['/health', '/auth/status'],
+      dangerouslyAllowImports: true,
+      dangerouslyAllowVoiceCloning: true,
     },
     tts: {
       enabled: process.env.TTS_ENABLED === '1',
@@ -591,11 +593,13 @@ describe('Qwen TTS Routes (disabled)', () => {
 
     vi.doMock('../../src/config/index.js', () => ({
       config: {
-        server: { port: 3000, host: '0.0.0.0' },
+        server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
         auth: {
           enabled: false,
           apiKey: null,
           excludePaths: ['/health', '/auth/status'],
+          dangerouslyAllowImports: true,
+          dangerouslyAllowVoiceCloning: true,
         },
         tts: {
           defaultVoice: 'af_heart',

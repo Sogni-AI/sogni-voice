@@ -581,6 +581,85 @@ describe('Qwen TTS Routes', () => {
 
       expect(response.statusCode).toBe(400);
     });
+
+    it('should return 403 when imports are blocked by server config', async () => {
+      vi.resetModules();
+
+      vi.doMock('../../src/config/index.js', () => ({
+        config: {
+          server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
+          auth: {
+            enabled: false,
+            apiKey: null,
+            excludePaths: ['/health', '/auth/status'],
+            dangerouslyAllowImports: false,
+            dangerouslyAllowVoiceCloning: true,
+          },
+          tts: {
+            enabled: false,
+            defaultVoice: 'af_heart',
+            defaultSpeed: 1.0,
+            timeout: 60000,
+            daemonStartupTimeout: 60000,
+            preWarmDaemon: false,
+          },
+          transcription: {
+            enabled: false,
+            timeout: 300000,
+            daemonStartupTimeout: 120000,
+            preWarmDaemon: false,
+          },
+          upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+          pocketTts: {
+            enabled: true,
+            defaultVoice: 'alba',
+            timeout: 60000,
+            daemonStartupTimeout: 60000,
+            preWarmDaemon: false,
+            voiceClonesDir: './pocket_voice_clones',
+          },
+          qwenTts: {
+            enabled: true,
+            modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-1.7b',
+            baseModelVariant: 'base-0.6b',
+            customVoiceModelVariant: 'custom-voice',
+            defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+            defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
+            timeout: 120000,
+            daemonStartupTimeout: 180000,
+            preWarmDaemon: false,
+            voiceClonesDir: './voice_clones',
+          },
+        },
+      }));
+
+      const { initServer: initServerBlocked } = await import('../../src/server.js');
+      const blockedServer = await initServerBlocked();
+
+      try {
+        const fakeZipBuffer = Buffer.from('PK..fake zip content');
+
+        const response = await blockedServer.inject({
+          method: 'POST',
+          url: '/qwen-tts/voices/clone/import',
+          headers: {
+            'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary',
+          },
+          payload:
+            '------WebKitFormBoundary\r\n' +
+            'Content-Disposition: form-data; name="file"; filename="clone.zip"\r\n' +
+            'Content-Type: application/zip\r\n\r\n' +
+            fakeZipBuffer.toString('binary') + '\r\n' +
+            '------WebKitFormBoundary--\r\n',
+        });
+
+        expect(response.statusCode).toBe(403);
+        const payload = JSON.parse(response.payload);
+        expect(payload.message).toContain('Voice clone import is disabled on this server');
+      } finally {
+        await blockedServer.stop();
+      }
+    });
   });
 });
 

@@ -43,9 +43,15 @@ const checkImportAuthorized = (request, h) => {
     return h.continue;
   }
 
+  if (!config.auth.apiKey) {
+    throw Boom.forbidden(
+      'Voice clone import is disabled on this server. Set AUTH_API_KEY to allow authenticated imports or DANGEROUSLY_ALLOW_IMPORTS=1 to allow unauthenticated imports.'
+    );
+  }
+
   if (!requestHasValidApiKey(request, config.auth.apiKey)) {
     throw Boom.unauthorized(
-      'Voice clone import requires authentication. Provide a valid API key via X-API-Key header or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_IMPORTS=1.'
+      'Voice clone import requires a valid API key. Provide X-API-Key or Authorization: Bearer <key>, or set DANGEROUSLY_ALLOW_IMPORTS=1.'
     );
   }
 

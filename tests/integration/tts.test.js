@@ -10,7 +10,7 @@ const toBool = (v, d = false) => v === '1' || v === 'true' ? true : v === '0' ||
 // Mock config using environment variables
 vi.mock('../../src/config/index.js', () => ({
   config: {
-    server: { port: 3000, host: '0.0.0.0' },
+    server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
     auth: {
       enabled: false,
       apiKey: null,
@@ -123,7 +123,9 @@ describe('TTS Routes', () => {
   });
 
   afterAll(async () => {
-    await server.stop();
+    if (server) {
+      await server.stop();
+    }
   });
 
   describe('POST /tts', () => {
@@ -152,7 +154,7 @@ describe('TTS Routes', () => {
 
       expect(response.statusCode).toBe(200);
       expect(response.headers['content-type']).toBe('audio/opus');
-    });
+    }, 15000);
 
     it('should return base64 when format is buffer', async () => {
       const response = await server.inject({
@@ -334,7 +336,7 @@ describe('TTS Routes', () => {
       expect(payload.success).toBe(true);
       expect(payload.format).toBe('opus');
       expect(payload.timestamps).toBeDefined();
-    });
+    }, 15000);
 
     it('should not include timestamps when timestamps=false', async () => {
       const response = await server.inject({

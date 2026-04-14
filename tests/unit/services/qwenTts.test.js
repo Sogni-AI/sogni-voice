@@ -522,9 +522,9 @@ describe('QwenTTSService', () => {
 
   describe('voice clone helper methods', () => {
     describe('getVoiceClonePath', () => {
-      it('should return the path to the pickle file', () => {
+      it('should return the path to the safetensors file', () => {
         const path = service.getVoiceClonePath('my-voice');
-        expect(path).toContain('my-voice.pkl');
+        expect(path).toContain('my-voice.safetensors');
         expect(path).toContain('voice_clones');
       });
     });
@@ -552,12 +552,12 @@ describe('QwenTTSService', () => {
       });
 
       it('should send validate request to daemon', async () => {
-        const validatePromise = service.validateVoiceClone('/tmp/test.pkl');
+        const validatePromise = service.validateVoiceClone('/tmp/test.safetensors');
 
         await new Promise(resolve => setTimeout(resolve, 10));
         const request = JSON.parse(mockStdin.lastWrite);
         expect(request.type).toBe('validate_voice_clone');
-        expect(request.pkl_path).toBe('/tmp/test.pkl');
+        expect(request.file_path).toBe('/tmp/test.safetensors');
 
         mockStdout.push(`{"id":"${request.id}","success":true,"valid":true}\n`);
 
@@ -580,7 +580,7 @@ describe('QwenTTSService', () => {
 
       it('should require pklPath', async () => {
         await expect(service.validateVoiceClone(null))
-          .rejects.toThrow('pklPath is required');
+          .rejects.toThrow('filePath is required');
       });
     });
 
@@ -594,12 +594,12 @@ describe('QwenTTSService', () => {
       });
 
       it('should send import request to daemon', async () => {
-        const importPromise = service.importVoiceClone('/tmp/test.pkl', 'my-voice');
+        const importPromise = service.importVoiceClone('/tmp/test.safetensors', 'my-voice');
 
         await new Promise(resolve => setTimeout(resolve, 10));
         const request = JSON.parse(mockStdin.lastWrite);
         expect(request.type).toBe('import_voice_clone');
-        expect(request.pkl_path).toBe('/tmp/test.pkl');
+        expect(request.file_path).toBe('/tmp/test.safetensors');
         expect(request.clone_id).toBe('my-voice');
 
         mockStdout.push(`{"id":"${request.id}","success":true,"clone_id":"my-voice"}\n`);
@@ -610,7 +610,7 @@ describe('QwenTTSService', () => {
 
       it('should require pklPath', async () => {
         await expect(service.importVoiceClone(null, 'id'))
-          .rejects.toThrow('pklPath is required');
+          .rejects.toThrow('filePath is required');
       });
 
       it('should require cloneId', async () => {

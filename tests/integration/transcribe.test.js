@@ -10,7 +10,7 @@ const mockTranscribe = vi.hoisted(() => vi.fn());
 // Mock config using environment variables
 vi.mock('../../src/config/index.js', () => ({
   config: {
-    server: { port: 3000, host: '0.0.0.0' },
+    server: { port: 3000, host: '127.0.0.1', corsOrigins: [] },
     auth: {
       enabled: false,
       apiKey: null,
@@ -81,7 +81,9 @@ describe('POST /transcribe', () => {
   });
 
   afterAll(async () => {
-    await server.stop();
+    if (server) {
+      await server.stop();
+    }
   });
 
   it('should transcribe an uploaded audio file', async () => {

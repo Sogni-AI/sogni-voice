@@ -16,6 +16,8 @@ describe('Authentication Integration Tests', () => {
             enabled: false,
             apiKey: null,
             excludePaths: ['/health', '/auth/status'],
+            dangerouslyAllowImports: false,
+            dangerouslyAllowVoiceCloning: false,
           },
           tts: {
             modelId: 'test',
@@ -51,7 +53,7 @@ describe('Authentication Integration Tests', () => {
       vi.resetModules();
     });
 
-    it('GET /auth/status should return authEnabled: false', async () => {
+    it('GET /auth/status should report blocked voice clone imports when no env override is configured', async () => {
       const response = await server.inject({
         method: 'GET',
         url: '/auth/status',
@@ -60,6 +62,12 @@ describe('Authentication Integration Tests', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.authEnabled).toBe(false);
+      expect(payload.apiKeyConfigured).toBe(false);
+      expect(payload.dangerouslyAllowImports).toBe(false);
+      expect(payload.voiceCloneImports).toEqual({
+        enabled: false,
+        mode: 'blocked',
+      });
     });
 
     it('GET /health should be accessible without API key', async () => {
@@ -88,6 +96,8 @@ describe('Authentication Integration Tests', () => {
             enabled: true,
             apiKey: TEST_API_KEY,
             excludePaths: ['/health', '/auth/status'],
+            dangerouslyAllowImports: false,
+            dangerouslyAllowVoiceCloning: false,
           },
           tts: {
             modelId: 'test',
@@ -131,7 +141,7 @@ describe('Authentication Integration Tests', () => {
       vi.resetModules();
     });
 
-    it('GET /auth/status should return authEnabled: true', async () => {
+    it('GET /auth/status should report API-key-only voice clone imports when AUTH_API_KEY is configured', async () => {
       const response = await server.inject({
         method: 'GET',
         url: '/auth/status',
@@ -140,6 +150,12 @@ describe('Authentication Integration Tests', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.authEnabled).toBe(true);
+      expect(payload.apiKeyConfigured).toBe(true);
+      expect(payload.dangerouslyAllowImports).toBe(false);
+      expect(payload.voiceCloneImports).toEqual({
+        enabled: true,
+        mode: 'api_key',
+      });
     });
 
     it('GET /health should be accessible without API key', async () => {

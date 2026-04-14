@@ -294,6 +294,8 @@ These endpoints are always accessible without authentication:
 - `GET /auth/status` - Check if authentication is enabled
 - `GET /{static files}` - Demo site and static files
 
+Voice clone import endpoints are separate: when `DANGEROUSLY_ALLOW_IMPORTS` is not set, imports either require `AUTH_API_KEY` or are fully blocked if no API key is configured.
+
 ### Check Auth Status
 
 ```bash
@@ -303,9 +305,20 @@ curl http://localhost:3000/auth/status
 Response:
 ```json
 {
-  "authEnabled": true
+  "authEnabled": true,
+  "apiKeyConfigured": true,
+  "dangerouslyAllowImports": false,
+  "voiceCloneImports": {
+    "enabled": true,
+    "mode": "api_key"
+  }
 }
 ```
+
+`voiceCloneImports.mode` can be:
+- `public` - imports are open because `DANGEROUSLY_ALLOW_IMPORTS=1`
+- `api_key` - imports require `X-API-Key` / `Authorization: Bearer`
+- `blocked` - imports are disabled until the server sets `AUTH_API_KEY` or `DANGEROUSLY_ALLOW_IMPORTS=1`
 
 ## API Endpoints
 
@@ -626,7 +639,7 @@ The ZIP file contains:
 
 #### Import Voice Clone
 
-Import a previously exported voice clone from a ZIP file. **Requires authentication** — you must provide a valid API key (via `X-API-Key` or `Authorization: Bearer` header) or set `DANGEROUSLY_ALLOW_IMPORTS=1`:
+Import a previously exported voice clone from a ZIP file. If `voiceCloneImports.mode` is `api_key`, provide a valid API key via `X-API-Key` or `Authorization: Bearer`. If it is `blocked`, the server must set `AUTH_API_KEY` or `DANGEROUSLY_ALLOW_IMPORTS=1` before imports will work:
 
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
@@ -643,7 +656,7 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 > Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code.
 > Legacy `.pkl` imports are disabled by default. For a one-time migration of trusted old clones, set `QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES=1`, import/migrate them, then turn it back off.
 >
-> **Security note:** Voice clone imports are always gated by authentication, even when global API authentication (`AUTH_ENABLED`) is disabled. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
+> **Security note:** Voice clone imports are configured separately from global API auth. When `AUTH_ENABLED=0`, imports can still be API-key-only or fully blocked. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
 
 #### Voice Design (Create Voice from Description)
 

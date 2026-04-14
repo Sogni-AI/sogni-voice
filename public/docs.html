@@ -195,18 +195,26 @@
   <details class="section">
     <summary><h2>Authentication (Optional)</h2></summary>
     <div class="section-content">
-    <p>API key authentication can be enabled for production deployments. When enabled, <strong>all API endpoints</strong> (including Kokoro TTS, Pocket TTS, Qwen3 TTS, and Transcription) require authentication, except health check and auth status.</p>
+    <p>API key authentication can be enabled for production deployments. When enabled, <strong>all API endpoints</strong> (including Kokoro TTS, Pocket TTS, Qwen3 TTS, and Transcription) require authentication, except health check and auth status. Voice clone imports are configured separately and can be public, API-key-only, or fully blocked.</p>
 
     <h3>Check Auth Status</h3>
     <div class="endpoint">
       <span class="method get">GET</span> /auth/status
     </div>
-    <p>Check if authentication is enabled on this server.</p>
+    <p>Check if authentication is enabled on this server and whether voice clone imports are public, API-key-only, or blocked by configuration.</p>
 
-    <h4>Response</h4>
-    <pre><code>{
-  "authEnabled": true
+<h4>Response</h4>
+<pre><code>{
+  "authEnabled": true,
+  "apiKeyConfigured": true,
+  "dangerouslyAllowImports": false,
+  "voiceCloneImports": {
+    "enabled": true,
+    "mode": "api_key"
+  }
 }</code></pre>
+
+    <p><code>voiceCloneImports.mode</code> is one of <code>public</code>, <code>api_key</code>, or <code>blocked</code>.</p>
 
     <h3>Authenticating Requests</h3>
     <p>When authentication is enabled, include your API key using one of these methods:</p>
@@ -257,6 +265,7 @@ with open('output.wav', 'wb') as f:
       <li><code>GET /health</code> - Health check for monitoring</li>
       <li><code>GET /auth/status</code> - Check if auth is enabled</li>
     </ul>
+    <p>Voice clone import routes are <strong>not</strong> implicitly public when <code>authEnabled</code> is <code>false</code>; check <code>voiceCloneImports.mode</code> first.</p>
 
     <h3>Error Response</h3>
     <p>When authentication fails, the API returns a 401 Unauthorized response:</p>
@@ -660,7 +669,7 @@ with open('my_voice.zip', 'wb') as f:
       <span class="method">POST</span> /pocket-tts/voices/clone/import
     </div>
     <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>reference.wav</code> file.</p>
-    <p><strong>Requires authentication:</strong> You must provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code> header, or set <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> in the server environment.</p>
+    <p><strong>Import access:</strong> If <code>voiceCloneImports.mode</code> is <code>api_key</code>, provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code>. If it is <code>blocked</code>, the server must set <code>AUTH_API_KEY</code> or <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> before imports will work.</p>
 
     <table>
       <tr>
@@ -1042,7 +1051,7 @@ with open('my_voice.zip', 'wb') as f:
       <span class="method">POST</span> /qwen-tts/voices/clone/import
     </div>
     <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>.safetensors</code> or <code>.pkl</code> file.</p>
-    <p><strong>Requires authentication:</strong> You must provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code> header, or set <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> in the server environment.</p>
+    <p><strong>Import access:</strong> If <code>voiceCloneImports.mode</code> is <code>api_key</code>, provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code>. If it is <code>blocked</code>, the server must set <code>AUTH_API_KEY</code> or <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> before imports will work.</p>
 
     <table>
       <tr>

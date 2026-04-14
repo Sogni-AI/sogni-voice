@@ -823,7 +823,7 @@
         <div class="auth-status" id="authStatus"></div>
       </div>
       <div id="authDisabledContent" class="hidden">
-        <p style="margin: 0; color: #6c757d; font-size: 14px;">Authentication is not enabled on this server. All API endpoints are publicly accessible.</p>
+        <p id="authDisabledText" style="margin: 0; color: #6c757d; font-size: 14px;">Authentication is not enabled on this server. All API endpoints are publicly accessible.</p>
       </div>
     </div>
   </div>
@@ -1031,7 +1031,7 @@
           </div>
 
           <div class="controls">
-            <label for="pocketImportFile" class="upload-btn" style="background: #17a2b8;">
+            <label for="pocketImportFile" id="pocketImportLabel" class="upload-btn" style="background: #17a2b8;">
               Select ZIP File
               <input type="file" id="pocketImportFile" accept=".zip,application/zip" style="display: none;">
             </label>
@@ -1110,7 +1110,7 @@
           </div>
 
           <div class="controls">
-            <label for="qwenImportFile" class="upload-btn" style="background: #17a2b8;">
+            <label for="qwenImportFile" id="qwenImportLabel" class="upload-btn" style="background: #17a2b8;">
               Select ZIP File
               <input type="file" id="qwenImportFile" accept=".zip,application/zip" style="display: none;">
             </label>
@@ -1154,12 +1154,16 @@
 
     // ==================== Authentication ====================
     let authEnabled = false;
+    let apiKeyConfigured = false;
+    let dangerouslyAllowImports = false;
+    let voiceCloneImportMode = 'blocked';
     let apiKey = localStorage.getItem('sogni_api_key') || '';
 
     const authSection = document.getElementById('authSection');
     const authTitle = document.getElementById('authTitle');
     const authContent = document.getElementById('authContent');
     const authDisabledContent = document.getElementById('authDisabledContent');
+    const authDisabledText = document.getElementById('authDisabledText');
     const apiKeyInput = document.getElementById('apiKeyInput');
     const saveApiKeyBtn = document.getElementById('saveApiKeyBtn');
     const clearApiKeyBtn = document.getElementById('clearApiKeyBtn');
@@ -1225,6 +1229,7 @@
       localStorage.removeItem('sogni_api_key');
       authStatus.textContent = 'API key cleared';
       authStatus.className = 'auth-status info';
+      updateImportAccessUI();
     });
 
     // Helper function to get fetch headers with auth
@@ -1233,7 +1238,7 @@
       if (contentType) {
         headers['Content-Type'] = contentType;
       }
-      if (authEnabled && apiKey) {
+      if (apiKey) {
         headers['X-API-Key'] = apiKey;
       }
       return headers;
@@ -1242,7 +1247,7 @@
     // Helper function for authenticated fetch
     // Set showAuthError=false for background/initialization requests
     async function authFetch(url, options = {}, showAuthError = true) {
-      if (authEnabled && apiKey) {
+      if (apiKey) {
         options.headers = options.headers || {};
         options.headers['X-API-Key'] = apiKey;
       }
@@ -1262,22 +1267,94 @@
       return !authEnabled || (authEnabled && apiKey);
     }
 
+    function getVoiceCloneImportMessage() {
+      if (voiceCloneImportMode === 'public') {
+        return 'Select a ZIP file to import';
+      }
+
+      if (voiceCloneImportMode === 'api_key') {
+        return apiKey
+          ? 'Select a ZIP file to import'
+          : 'Enter your API key above to import voice clones.';
+      }
+
+      return 'Voice clone import is blocked on this server. Set AUTH_API_KEY or DANGEROUSLY_ALLOW_IMPORTS=1 in .env to enable imports.';
+    }
+
+    function canImportVoiceClones() {
+      return voiceCloneImportMode === 'public' || (voiceCloneImportMode === 'api_key' && Boolean(apiKey));
+    }
+
+    function setImportControlState(prefix, enabled) {
+      const fileInput = document.getElementById(`${prefix}ImportFile`);
+      const cloneIdInput = document.getElementById(`${prefix}ImportCloneId`);
+      const status = document.getElementById(`${prefix}ImportStatus`);
+      const result = document.getElementById(`${prefix}ImportResult`);
+      const label = document.getElementById(`${prefix}ImportLabel`);
+      const message = getVoiceCloneImportMessage();
+
+      if (fileInput) {
+        fileInput.disabled = !enabled;
+        if (!enabled) {
+          fileInput.value = '';
+        }
+      }
+
+      if (cloneIdInput) {
+        cloneIdInput.disabled = !enabled;
+      }
+
+      if (label) {
+        label.style.pointerEvents = enabled ? 'auto' : 'none';
+        label.style.opacity = enabled ? '1' : '0.5';
+      }
+
+      if (status) {
+        status.textContent = message;
+      }
+
+      if (!enabled && result) {
+        result.className = 'result error';
+        result.textContent = message;
+        result.style.display = 'block';
+      }
+
+      if (enabled && result && result.textContent === getVoiceCloneImportMessage()) {
+        result.style.display = 'none';
+      }
+    }
+
+    function updateImportAccessUI() {
+      const importEnabled = canImportVoiceClones();
+      setImportControlState('pocket', importEnabled);
+      setImportControlState('qwen', importEnabled);
+    }
+
     async function checkAuthStatus() {
       try {
         const response = await fetch(`${API_BASE}/auth/status`);
         const data = await response.json();
         authEnabled = data.authEnabled;
+        apiKeyConfigured = Boolean(data.apiKeyConfigured);
+        dangerouslyAllowImports = Boolean(data.dangerouslyAllowImports);
+        voiceCloneImportMode = data.voiceCloneImports?.mode
+          || (dangerouslyAllowImports ? 'public' : (apiKeyConfigured ? 'api_key' : 'blocked'));
 
-        if (authEnabled) {
+        const shouldShowApiKeyEntry = authEnabled || voiceCloneImportMode === 'api_key';
+
+        if (shouldShowApiKeyEntry) {
           authSection.classList.remove('auth-disabled');
           authContent.classList.remove('hidden');
           authDisabledContent.classList.add('hidden');
-          authTitle.textContent = 'API Authentication Required';
+          authTitle.textContent = authEnabled ? 'API Authentication Required' : 'API Key Required For Voice Imports';
           if (apiKey) {
             authStatus.textContent = 'API key loaded from browser storage';
             authStatus.className = 'auth-status success';
-          } else {
+          } else if (authEnabled) {
             authStatus.textContent = 'Enter your API key to access the API';
+            authStatus.className = 'auth-status info';
+          } else {
+            authStatus.textContent = 'Other API endpoints are public, but voice clone imports require your API key.';
             authStatus.className = 'auth-status info';
           }
         } else {
@@ -1285,14 +1362,24 @@
           authContent.classList.add('hidden');
           authDisabledContent.classList.remove('hidden');
           authTitle.textContent = 'Authentication';
+          authDisabledText.textContent = voiceCloneImportMode === 'blocked'
+            ? 'Authentication is not enabled on this server, but voice clone imports are blocked. Set AUTH_API_KEY or DANGEROUSLY_ALLOW_IMPORTS=1 in .env to enable them.'
+            : 'Authentication is not enabled on this server. All API endpoints are publicly accessible.';
         }
+
+        updateImportAccessUI();
       } catch (error) {
         console.error('Failed to check auth status:', error);
         // Assume auth is disabled if we can't check
         authEnabled = false;
+        apiKeyConfigured = false;
+        dangerouslyAllowImports = false;
+        voiceCloneImportMode = 'blocked';
         authSection.classList.add('auth-disabled');
         authContent.classList.add('hidden');
         authDisabledContent.classList.remove('hidden');
+        authDisabledText.textContent = 'Authentication status is unavailable right now. Voice clone imports may be blocked until the server config is confirmed.';
+        updateImportAccessUI();
       }
     }
 
@@ -2618,6 +2705,16 @@
       const file = event.target.files[0];
       if (!file) return;
 
+      if (!canImportVoiceClones()) {
+        const message = getVoiceCloneImportMessage();
+        pocketImportStatus.textContent = message;
+        pocketImportResult.className = 'result error';
+        pocketImportResult.textContent = message;
+        pocketImportResult.style.display = 'block';
+        pocketImportFile.value = '';
+        return;
+      }
+
       if (!file.name.endsWith('.zip') && file.type !== 'application/zip') {
         pocketImportStatus.textContent = 'Please select a ZIP file';
         pocketImportResult.className = 'result error';
@@ -2676,6 +2773,16 @@
     async function handleQwenImport(event) {
       const file = event.target.files[0];
       if (!file) return;
+
+      if (!canImportVoiceClones()) {
+        const message = getVoiceCloneImportMessage();
+        qwenImportStatus.textContent = message;
+        qwenImportResult.className = 'result error';
+        qwenImportResult.textContent = message;
+        qwenImportResult.style.display = 'block';
+        qwenImportFile.value = '';
+        return;
+      }
 
       if (!file.name.endsWith('.zip') && file.type !== 'application/zip') {
         qwenImportStatus.textContent = 'Please select a ZIP file';
@@ -2739,6 +2846,7 @@
         qwenVoiceCloningEnabled = false;
         updateQwenAvailability();
         updateStyleInstructUI();
+        updateImportAccessUI();
         // Disable all interactive elements
         setUIDisabledState(true);
         return;
@@ -2790,6 +2898,7 @@
       updateQwenAvailability();
       updatePocketAvailability();
       updateStyleInstructUI();
+      updateImportAccessUI();
 
     }
 

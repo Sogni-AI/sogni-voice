@@ -1,4 +1,5 @@
 import dotenv from 'dotenv';
+import { parseCorsOrigins } from '../utils/cors.js';
 dotenv.config();
 
 const parseEnvBool = (value, defaultValue = false) => {
@@ -8,20 +9,11 @@ const parseEnvBool = (value, defaultValue = false) => {
   return defaultValue;
 };
 
-const parseEnvList = (value) => {
-  if (!value) return [];
-
-  return value
-    .split(',')
-    .map((item) => item.trim())
-    .filter(Boolean);
-};
-
 export const config = {
   server: {
     port: parseInt(process.env.PORT, 10) || 3000,
     host: process.env.HOST || '127.0.0.1',
-    corsOrigins: parseEnvList(process.env.CORS_ORIGINS),
+    corsOrigins: parseCorsOrigins(process.env.CORS_ORIGINS),
   },
   auth: {
     enabled: parseEnvBool(process.env.AUTH_ENABLED, false),

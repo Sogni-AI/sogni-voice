@@ -1,23 +1,24 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { localCorsOrigins } from '../../../src/utils/cors.js';
 
 describe('config', () => {
   const originalEnv = { ...process.env };
 
   beforeEach(() => {
     vi.resetModules();
-    // Clear all relevant environment variables
-    delete process.env.PORT;
-    delete process.env.HOST;
-    delete process.env.CORS_ORIGINS;
-    delete process.env.DANGEROUSLY_ALLOW_VOICE_CLONING;
-    delete process.env.TTS_MODEL_ID;
-    delete process.env.TTS_DEFAULT_VOICE;
-    delete process.env.TTS_DEFAULT_SPEED;
-    delete process.env.TTS_TIMEOUT;
-    delete process.env.TTS_DAEMON_STARTUP_TIMEOUT;
-    delete process.env.PREWARM_TTS;
-    delete process.env.TRANSCRIBE_TIMEOUT;
-    delete process.env.MAX_FILE_SIZE_MB;
+    // Use empty strings so dotenv does not repopulate these from .env during import.
+    process.env.PORT = '';
+    process.env.HOST = '';
+    process.env.CORS_ORIGINS = '';
+    process.env.DANGEROUSLY_ALLOW_VOICE_CLONING = '';
+    process.env.TTS_MODEL_ID = '';
+    process.env.TTS_DEFAULT_VOICE = '';
+    process.env.TTS_DEFAULT_SPEED = '';
+    process.env.TTS_TIMEOUT = '';
+    process.env.TTS_DAEMON_STARTUP_TIMEOUT = '';
+    process.env.PREWARM_TTS = '';
+    process.env.TRANSCRIBE_TIMEOUT = '';
+    process.env.MAX_FILE_SIZE_MB = '';
   });
 
   afterEach(() => {
@@ -47,9 +48,9 @@ describe('config', () => {
       expect(config.server.host).toBe('0.0.0.0');
     });
 
-    it('should disable CORS by default', async () => {
+    it('should default CORS to local-only origins', async () => {
       const { config } = await import('../../../src/config/index.js');
-      expect(config.server.corsOrigins).toEqual([]);
+      expect(config.server.corsOrigins).toEqual(localCorsOrigins);
     });
 
     it('should parse CORS_ORIGINS from environment', async () => {
@@ -59,6 +60,18 @@ describe('config', () => {
         'https://app.example.com',
         'https://admin.example.com',
       ]);
+    });
+
+    it('should allow all origins when CORS_ORIGINS is wildcard', async () => {
+      process.env.CORS_ORIGINS = '*';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.server.corsOrigins).toEqual(['*']);
+    });
+
+    it('should disable CORS when CORS_ORIGINS is off', async () => {
+      process.env.CORS_ORIGINS = 'off';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.server.corsOrigins).toEqual([]);
     });
   });
 

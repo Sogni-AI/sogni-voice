@@ -1,3 +1,6 @@
+const host = process.env.HOST || '127.0.0.1';
+const corsOrigins = process.env.CORS_ORIGINS || 'local';
+
 module.exports = {
   apps: [
     {
@@ -12,7 +15,8 @@ module.exports = {
       env: {
         NODE_ENV: 'development',
         PORT: 3000,
-        HOST: '0.0.0.0',
+        HOST: host,
+        CORS_ORIGINS: corsOrigins,
         // ORT threading config: generateLock serializes requests, so we can allow
         // intra-op parallelism for faster single-inference performance
         OMP_NUM_THREADS: '4',
@@ -22,7 +26,8 @@ module.exports = {
       env_production: {
         NODE_ENV: 'production',
         PORT: 3000,
-        HOST: '0.0.0.0',
+        HOST: host,
+        CORS_ORIGINS: corsOrigins,
         // ORT threading config: generateLock serializes requests, so we can allow
         // intra-op parallelism for faster single-inference performance
         OMP_NUM_THREADS: '4',

@@ -115,6 +115,8 @@ Copy `.env.example` to `.env` to customize settings:
 cp .env.example .env
 ```
 
+Examples for local-only, allowlist, and public `CORS_ORIGINS=*` setups are in `examples/README.md`.
+
 ### Environment Variables
 
 #### Server
@@ -122,7 +124,7 @@ cp .env.example .env
 |----------|---------|-------------|
 | PORT | 3000 | Server port |
 | HOST | 127.0.0.1 | Server host (loopback-only by default) |
-| CORS_ORIGINS | (empty) | Comma-separated CORS allowlist. CORS is disabled when unset. |
+| CORS_ORIGINS | local | `local` allows loopback browser origins only. Set `*` for any origin, `off` to disable, or use a comma-separated allowlist. |
 | MAX_FILE_SIZE_MB | 100 | Max upload file size |
 
 #### Transcription
@@ -248,7 +250,7 @@ The API supports optional API key authentication, which is **disabled by default
 
 Security defaults:
 - The server binds to `127.0.0.1` by default. To expose it on a network interface, set `HOST` explicitly and enable `AUTH_ENABLED=1` with `AUTH_API_KEY`.
-- CORS is disabled by default. Set `CORS_ORIGINS=https://app.example.com` (comma-separated for multiple origins) only when you need browser access from other origins.
+- CORS defaults to `CORS_ORIGINS=local`, which only allows browser origins from `localhost`, `127.0.0.1`, and `::1`. Set `CORS_ORIGINS=*` for any origin, `off` to disable CORS entirely, or a comma-separated allowlist for specific sites.
 - Voice clone operations are protected even when global API auth is off. To use clone create/generate/download/delete/rename routes without an API key in local development, set `DANGEROUSLY_ALLOW_VOICE_CLONING=1`.
 
 ### Enabling Authentication

@@ -752,7 +752,7 @@ export const qwenTtsRoutes = [
       validate: {
         payload: Joi.object({
           file: Joi.any().required()
-            .description('ZIP file containing voice clone (.safetensors or .pkl file and optionally metadata.json)'),
+            .description('ZIP file containing voice clone (.safetensors file and optionally metadata.json)'),
           cloneId: Joi.string().min(1).max(100).pattern(/^[a-zA-Z0-9_-]+$/)
             .description('Optional custom name for the imported voice clone'),
         }),
@@ -789,21 +789,14 @@ export const qwenTtsRoutes = [
           timeout: 60000,
         });
 
-        // Find voice clone file (.safetensors or .pkl) in extracted contents
+        // Find the voice clone file in extracted contents.
         const extractedFiles = await readdir(extractDir);
         let cloneFilePath = null;
         let metadataPath = null;
         let extractedCloneId = null;
 
-        const isCloneFile = (name) => (
-          name.endsWith('.safetensors')
-          || (config.qwenTts.allowLegacyPickleClones && name.endsWith('.pkl'))
-        );
-        const getCloneId = (name) => {
-          if (name.endsWith('.safetensors')) return basename(name, '.safetensors');
-          if (name.endsWith('.pkl')) return basename(name, '.pkl');
-          return null;
-        };
+        const isCloneFile = (name) => name.endsWith('.safetensors');
+        const getCloneId = (name) => basename(name, '.safetensors');
 
         // Check if files are directly in extractDir or in a subdirectory
         for (const item of extractedFiles) {
@@ -815,7 +808,7 @@ export const qwenTtsRoutes = [
           }
 
           if (itemStat.isDirectory()) {
-            // Check inside subdirectory (prefer .safetensors over .pkl)
+            // Check inside subdirectory.
             const subFiles = await readdir(itemPath);
             for (const subFile of subFiles) {
               const subFilePath = join(itemPath, subFile);
@@ -826,8 +819,7 @@ export const qwenTtsRoutes = [
               }
 
               if (isCloneFile(subFile)) {
-                // Prefer safetensors if both exist
-                if (!cloneFilePath || subFile.endsWith('.safetensors')) {
+                if (!cloneFilePath) {
                   cloneFilePath = subFilePath;
                   extractedCloneId = getCloneId(subFile);
                 }
@@ -847,10 +839,7 @@ export const qwenTtsRoutes = [
         }
 
         if (!cloneFilePath) {
-          const supportedFormats = config.qwenTts.allowLegacyPickleClones
-            ? '.safetensors or .pkl'
-            : '.safetensors';
-          throw Boom.badRequest(`Invalid ZIP file: must contain a ${supportedFormats} file`);
+          throw Boom.badRequest('Invalid ZIP file: must contain a .safetensors file');
         }
 
         await assertRegularArchiveFile(cloneFilePath, 'voice clone file');
@@ -874,6 +863,9 @@ export const qwenTtsRoutes = [
 
         // Sanitize clone ID
         cloneId = cloneId.replace(/[^a-zA-Z0-9_-]/g, '_');
+        if (!cloneId) {
+          cloneId = `imported_${randomBytes(4).toString('hex')}`;
+        }
 
         // Validate the voice clone file via daemon
         const validation = await qwenTtsBaseService.validateVoiceClone(cloneFilePath);

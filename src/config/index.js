@@ -69,6 +69,5 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_TTS, true),
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
-    allowLegacyPickleClones: parseEnvBool(process.env.QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES, false),
   },
 };

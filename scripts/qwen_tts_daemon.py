@@ -34,10 +34,11 @@ import json
 import signal
 import traceback
 import os
-import pickle
 import io
 import contextlib
+import importlib
 from collections import OrderedDict
+from dataclasses import fields, is_dataclass
 
 from safetensors.torch import save_file as _st_save_file
 from safetensors import safe_open
@@ -46,26 +47,67 @@ from safetensors import safe_open
 # --- Safe voice prompt serialization using safetensors ---
 # safetensors stores only tensor data + JSON metadata header.
 # No code execution is structurally possible.
-#
-# Legacy .pkl files are loaded via RestrictedUnpickler (blocks arbitrary
-# code execution) and auto-migrated to .safetensors on first load.
 
 
 def save_voice_prompt(prompt, path):
     """Save a voice prompt as a .safetensors file."""
     import torch
 
-    if isinstance(prompt, torch.Tensor):
-        _st_save_file({"prompt": prompt.contiguous()}, path, metadata={"format": "single_tensor"})
-    elif isinstance(prompt, dict):
-        tensors = {k: v.contiguous() for k, v in prompt.items() if isinstance(v, torch.Tensor)}
-        _st_save_file(tensors, path, metadata={"format": "dict"})
-    elif isinstance(prompt, (list, tuple)):
-        fmt = "tuple" if isinstance(prompt, tuple) else "list"
-        tensors = {str(i): t.contiguous() for i, t in enumerate(prompt) if isinstance(t, torch.Tensor)}
-        _st_save_file(tensors, path, metadata={"format": fmt, "length": str(len(prompt))})
-    else:
-        raise ValueError(f"Unsupported voice prompt type for safetensors: {type(prompt)}")
+    tensors = {}
+
+    def pack(value, key_prefix):
+        if isinstance(value, torch.Tensor):
+            tensor_key = key_prefix or "prompt"
+            tensors[tensor_key] = value.detach().contiguous().cpu()
+            return {"kind": "tensor", "key": tensor_key}
+
+        if is_dataclass(value):
+            cls = type(value)
+            return {
+                "kind": "dataclass",
+                "class_module": cls.__module__,
+                "class_name": cls.__qualname__,
+                "fields": {
+                    field.name: pack(getattr(value, field.name), f"{key_prefix}.{field.name}")
+                    for field in fields(value)
+                },
+            }
+
+        if isinstance(value, dict):
+            return {
+                "kind": "dict",
+                "items": {
+                    str(k): pack(v, f"{key_prefix}.{k}")
+                    for k, v in value.items()
+                },
+            }
+
+        if isinstance(value, list):
+            return {
+                "kind": "list",
+                "items": [pack(item, f"{key_prefix}.{i}") for i, item in enumerate(value)],
+            }
+
+        if isinstance(value, tuple):
+            return {
+                "kind": "tuple",
+                "items": [pack(item, f"{key_prefix}.{i}") for i, item in enumerate(value)],
+            }
+
+        if value is None or isinstance(value, (bool, int, float, str)):
+            return {"kind": "literal", "value": value}
+
+        raise ValueError(f"Unsupported voice prompt type for safetensors: {type(value)}")
+
+    structure = pack(prompt, "prompt")
+    _st_save_file(
+        tensors,
+        path,
+        metadata={
+            "format": "structured",
+            "structure": json.dumps(structure, separators=(",", ":")),
+        },
+    )
 
 
 def load_voice_prompt(path):
@@ -73,6 +115,45 @@ def load_voice_prompt(path):
     with safe_open(path, framework="pt") as f:
         metadata = f.metadata()
         fmt = metadata.get("format", "single_tensor")
+
+        if fmt == "structured" and metadata.get("structure"):
+            structure = json.loads(metadata["structure"])
+
+            def unpack(node):
+                kind = node["kind"]
+
+                if kind == "tensor":
+                    return f.get_tensor(node["key"])
+
+                if kind == "literal":
+                    return node["value"]
+
+                if kind == "list":
+                    return [unpack(item) for item in node["items"]]
+
+                if kind == "tuple":
+                    return tuple(unpack(item) for item in node["items"])
+
+                if kind == "dict":
+                    return {
+                        key: unpack(value)
+                        for key, value in node["items"].items()
+                    }
+
+                if kind == "dataclass":
+                    module = importlib.import_module(node["class_module"])
+                    cls = module
+                    for part in node["class_name"].split("."):
+                        cls = getattr(cls, part)
+                    kwargs = {
+                        key: unpack(value)
+                        for key, value in node["fields"].items()
+                    }
+                    return cls(**kwargs)
+
+                raise ValueError(f"Unsupported serialized voice prompt kind: {kind}")
+
+            return unpack(structure)
 
         if fmt == "single_tensor":
             return f.get_tensor("prompt")
@@ -84,40 +165,6 @@ def load_voice_prompt(path):
             return tuple(tensors) if fmt == "tuple" else tensors
         else:
             return f.get_tensor("prompt")
-
-
-# --- Legacy .pkl support (restricted unpickler for migration only) ---
-
-SAFE_PICKLE_MODULES = {
-    'collections': {'OrderedDict', 'defaultdict'},
-    '_codecs': {'encode'},
-    'copyreg': {'_reconstructor'},
-}
-
-
-class RestrictedUnpickler(pickle.Unpickler):
-    """Unpickler that blocks arbitrary code execution.
-
-    Only allows torch tensors, numpy arrays, and basic Python container types.
-    Used only for migrating legacy .pkl files to safetensors.
-    """
-
-    def find_class(self, module, name):
-        if module.startswith(('torch', 'numpy', '_numpy')):
-            return super().find_class(module, name)
-
-        allowed_names = SAFE_PICKLE_MODULES.get(module)
-        if allowed_names is not None and name in allowed_names:
-            return super().find_class(module, name)
-
-        raise pickle.UnpicklingError(
-            f"Blocked unsafe class: {module}.{name}"
-        )
-
-
-def safe_pickle_load(f):
-    """Safely load a legacy .pkl file, blocking arbitrary code execution."""
-    return RestrictedUnpickler(f).load()
 
 # Ensure unbuffered output for reliable communication
 sys.stdout.reconfigure(line_buffering=True)
@@ -140,7 +187,6 @@ def suppress_flash_attn_warning():
 
 SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 VOICE_CLONES_DIR = os.environ.get('QWEN_TTS_VOICE_CLONES_DIR', os.path.join(SCRIPT_DIR, "..", "voice_clones"))
-ALLOW_LEGACY_PICKLE_CLONES = os.environ.get('QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES', '0') == '1'
 SAMPLE_RATE = 24000
 
 # Model variant configurations (using official Qwen repos)
@@ -255,24 +301,12 @@ class QwenTTSDaemon:
         if self.default_voice_prompt is not None:
             return self.default_voice_prompt
 
-        # Check for a default voice clone on disk (safetensors first, then legacy .pkl)
+        # Check for a default voice clone on disk.
         st_path = os.path.join(VOICE_CLONES_DIR, "_default.safetensors")
-        pkl_path = os.path.join(VOICE_CLONES_DIR, "_default.pkl")
 
         if os.path.exists(st_path):
             try:
                 self.default_voice_prompt = load_voice_prompt(st_path)
-                return self.default_voice_prompt
-            except Exception as e:
-                print(f"[warning] Failed to load default voice prompt: {e}", file=sys.stderr)
-        elif ALLOW_LEGACY_PICKLE_CLONES and os.path.exists(pkl_path):
-            try:
-                with open(pkl_path, 'rb') as f:
-                    self.default_voice_prompt = safe_pickle_load(f)
-                # Auto-migrate to safetensors
-                save_voice_prompt(self.default_voice_prompt, st_path)
-                os.remove(pkl_path)
-                print(f"[migrate] Migrated _default.pkl to safetensors", file=sys.stderr)
                 return self.default_voice_prompt
             except Exception as e:
                 print(f"[warning] Failed to load default voice prompt: {e}", file=sys.stderr)
@@ -492,19 +526,10 @@ class QwenTTSDaemon:
             prompt = self._get_cached_clone(clone_id)
             if prompt is None:
                 st_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.safetensors")
-                pkl_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
 
                 if os.path.exists(st_path):
                     print(f"[generate_voice_clone] Reading prompt from {st_path}", file=sys.stderr)
                     prompt = load_voice_prompt(st_path)
-                elif ALLOW_LEGACY_PICKLE_CLONES and os.path.exists(pkl_path):
-                    print(f"[generate_voice_clone] Migrating legacy {pkl_path}", file=sys.stderr)
-                    with open(pkl_path, 'rb') as f:
-                        prompt = safe_pickle_load(f)
-                    # Auto-migrate to safetensors
-                    save_voice_prompt(prompt, st_path)
-                    os.remove(pkl_path)
-                    print(f"[migrate] Migrated {clone_id}.pkl to safetensors", file=sys.stderr)
                 else:
                     return {"success": False, "error": f"Voice clone '{clone_id}' not found"}
 
@@ -556,17 +581,14 @@ class QwenTTSDaemon:
 
         try:
             st_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.safetensors")
+            legacy_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")
+
             # Remove from cache
             if clone_id in self.voice_clones:
                 del self.voice_clones[clone_id]
 
-            # Remove from disk (check both formats)
             deleted = False
-            delete_paths = [st_path]
-            if os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")):
-                delete_paths.append(os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl"))
-
-            for path in delete_paths:
+            for path in (st_path, legacy_path):
                 if os.path.exists(path):
                     os.remove(path)
                     deleted = True
@@ -586,34 +608,22 @@ class QwenTTSDaemon:
             return {"success": False, "error": "Invalid clone_id"}
 
         try:
-            # Find source file (safetensors or legacy pkl)
             st_old = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.safetensors")
+            legacy_old = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
             if os.path.exists(st_old):
                 old_path = st_old
-                ext = ".safetensors"
-            elif os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")):
-                if not ALLOW_LEGACY_PICKLE_CLONES:
-                    return {"success": False, "error": "Legacy .pkl voice clones are disabled. Set QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES=1 to migrate this clone."}
-                old_path = os.path.join(VOICE_CLONES_DIR, f"{old_clone_id}.pkl")
-                ext = ".safetensors"  # migrate on rename
+            elif os.path.exists(legacy_old):
+                return {"success": False, "error": "Legacy .pkl voice clones are no longer supported. Delete and recreate this clone as a .safetensors file."}
             else:
                 return {"success": False, "error": f"Voice clone '{old_clone_id}' not found"}
 
             new_path = os.path.join(VOICE_CLONES_DIR, f"{new_clone_id}.safetensors")
+            legacy_new = os.path.join(VOICE_CLONES_DIR, f"{new_clone_id}.pkl")
 
-            # Check if destination already exists (either format)
-            if os.path.exists(new_path) or os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{new_clone_id}.pkl")):
+            if os.path.exists(new_path) or os.path.exists(legacy_new):
                 return {"success": False, "error": f"Voice clone '{new_clone_id}' already exists"}
 
-            if old_path.endswith('.pkl'):
-                # Migrate legacy pkl to safetensors during rename
-                with open(old_path, 'rb') as f:
-                    prompt = safe_pickle_load(f)
-                save_voice_prompt(prompt, new_path)
-                os.remove(old_path)
-                print(f"[migrate] Migrated {old_clone_id}.pkl to {new_clone_id}.safetensors", file=sys.stderr)
-            else:
-                os.rename(old_path, new_path)
+            os.rename(old_path, new_path)
 
             # Update cache if the old clone was cached
             if old_clone_id in self.voice_clones:
@@ -642,8 +652,6 @@ class QwenTTSDaemon:
                         continue
                     if filename.endswith('.safetensors'):
                         clones.add(filename[:-len('.safetensors')])
-                    elif ALLOW_LEGACY_PICKLE_CLONES and filename.endswith('.pkl'):
-                        clones.add(filename[:-4])
             return {"success": True, "clones": sorted(clones)}
         except Exception as e:
             print(f"List voice clones error: {e}", file=sys.stderr)
@@ -651,11 +659,7 @@ class QwenTTSDaemon:
             return {"success": False, "error": str(e)}
 
     def validate_voice_clone(self, file_path: str) -> dict:
-        """Validate a voice clone file (.safetensors or legacy .pkl).
-
-        For .safetensors: verifies the file can be opened and contains tensors.
-        For .pkl: uses RestrictedUnpickler to block code execution, then validates.
-        """
+        """Validate a voice clone file stored in .safetensors format."""
         try:
             if not os.path.exists(file_path):
                 return {"success": True, "valid": False, "error": "File not found"}
@@ -664,17 +668,10 @@ class QwenTTSDaemon:
 
             import torch
 
-            if file_path.endswith('.safetensors'):
-                # safetensors is safe by design — just verify it contains valid data
-                prompt = load_voice_prompt(file_path)
-            elif file_path.endswith('.pkl'):
-                if not ALLOW_LEGACY_PICKLE_CLONES:
-                    return {"success": True, "valid": False, "error": "Legacy .pkl voice clones are disabled"}
-                # Legacy pickle — use restricted unpickler
-                with open(file_path, 'rb') as f:
-                    prompt = safe_pickle_load(f)
-            else:
-                return {"success": True, "valid": False, "error": "Unsupported file format (expected .safetensors or .pkl)"}
+            if not file_path.endswith('.safetensors'):
+                return {"success": True, "valid": False, "error": "Unsupported file format (expected .safetensors)"}
+
+            prompt = load_voice_prompt(file_path)
 
             if isinstance(prompt, (torch.Tensor, dict, list, tuple)):
                 print(f"[validate_voice_clone] Valid prompt type: {type(prompt)}", file=sys.stderr)
@@ -688,10 +685,7 @@ class QwenTTSDaemon:
             return {"success": True, "valid": False, "error": str(e)}
 
     def import_voice_clone(self, file_path: str, clone_id: str) -> dict:
-        """Import a voice clone from a .safetensors or legacy .pkl file.
-
-        Loads the prompt, saves as .safetensors in the voice clones directory, and caches it.
-        """
+        """Import a voice clone from a .safetensors file."""
         if not self._validate_clone_id(clone_id):
             return {"success": False, "error": "Invalid clone_id"}
 
@@ -703,22 +697,14 @@ class QwenTTSDaemon:
 
             dest_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.safetensors")
 
-            # Check if destination already exists (either format)
-            if os.path.exists(dest_path) or os.path.exists(os.path.join(VOICE_CLONES_DIR, f"{clone_id}.pkl")):
+            if os.path.exists(dest_path):
                 return {"success": False, "error": f"Voice clone '{clone_id}' already exists"}
 
-            # Load from source file
-            if file_path.endswith('.safetensors'):
-                prompt = load_voice_prompt(file_path)
-                print(f"[import_voice_clone] Loaded safetensors from {file_path}", file=sys.stderr)
-            elif file_path.endswith('.pkl'):
-                if not ALLOW_LEGACY_PICKLE_CLONES:
-                    return {"success": False, "error": "Legacy .pkl voice clones are disabled"}
-                with open(file_path, 'rb') as f:
-                    prompt = safe_pickle_load(f)
-                print(f"[import_voice_clone] Loaded legacy pkl from {file_path}", file=sys.stderr)
-            else:
-                return {"success": False, "error": "Unsupported file format (expected .safetensors or .pkl)"}
+            if not file_path.endswith('.safetensors'):
+                return {"success": False, "error": "Unsupported file format (expected .safetensors)"}
+
+            prompt = load_voice_prompt(file_path)
+            print(f"[import_voice_clone] Loaded safetensors from {file_path}", file=sys.stderr)
 
             # Always save as safetensors
             save_voice_prompt(prompt, dest_path)

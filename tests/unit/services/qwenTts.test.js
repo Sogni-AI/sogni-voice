@@ -565,8 +565,8 @@ describe('QwenTTSService', () => {
         expect(result.valid).toBe(true);
       });
 
-      it('should return invalid for bad pickle file', async () => {
-        const validatePromise = service.validateVoiceClone('/tmp/bad.pkl');
+      it('should return invalid for an unsupported voice clone file', async () => {
+        const validatePromise = service.validateVoiceClone('/tmp/bad.voice');
 
         await new Promise(resolve => setTimeout(resolve, 10));
         const request = JSON.parse(mockStdin.lastWrite);
@@ -578,7 +578,7 @@ describe('QwenTTSService', () => {
         expect(result.error).toBe('Unexpected type: str');
       });
 
-      it('should require pklPath', async () => {
+      it('should require filePath', async () => {
         await expect(service.validateVoiceClone(null))
           .rejects.toThrow('filePath is required');
       });
@@ -608,13 +608,13 @@ describe('QwenTTSService', () => {
         expect(result.cloneId).toBe('my-voice');
       });
 
-      it('should require pklPath', async () => {
+      it('should require filePath', async () => {
         await expect(service.importVoiceClone(null, 'id'))
           .rejects.toThrow('filePath is required');
       });
 
       it('should require cloneId', async () => {
-        await expect(service.importVoiceClone('/tmp/test.pkl', null))
+        await expect(service.importVoiceClone('/tmp/test.safetensors', null))
           .rejects.toThrow('cloneId is required');
       });
     });

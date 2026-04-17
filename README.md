@@ -164,7 +164,6 @@ cp .env.example .env
 | QWEN_TTS_DAEMON_STARTUP_TIMEOUT | 180000 | Daemon startup timeout (ms) |
 | PREWARM_QWEN_TTS | 0 | Pre-load model on server start |
 | QWEN_TTS_VOICE_CLONES_DIR | ./voice_clones | Voice clone storage directory |
-| QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES | 0 | Temporarily allow legacy `.pkl` voice clone migration. Leave disabled in production. |
 
 #### Authentication (Optional)
 | Variable | Default | Description |
@@ -654,7 +653,7 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 | cloneId | string | from metadata/filename | Custom ID for the imported clone |
 
 > Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code.
-> Legacy `.pkl` imports are disabled by default. For a one-time migration of trusted old clones, set `QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES=1`, import/migrate them, then turn it back off.
+> Pickle-based voice clones are intentionally rejected. Convert or recreate old clones as `.safetensors` before importing them.
 >
 > **Security note:** Voice clone imports are configured separately from global API auth. When `AUTH_ENABLED=0`, imports can still be API-key-only or fully blocked. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
 

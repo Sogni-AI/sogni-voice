@@ -182,7 +182,8 @@ vi.mock('../../src/services/qwenTts.js', () => {
     shutdown: vi.fn().mockResolvedValue(undefined),
     isEnabled: vi.fn().mockReturnValue(true),
     voiceCloneExists: vi.fn().mockResolvedValue(true),
-    getVoiceClonePath: vi.fn().mockImplementation((cloneId) => `./voice_clones/${cloneId}.pkl`),
+    getVoiceClonePath: vi.fn().mockImplementation((cloneId) => `./voice_clones/${cloneId}.safetensors`),
+    resolveVoiceClonePath: vi.fn().mockImplementation(async (cloneId) => `./voice_clones/${cloneId}.safetensors`),
     validateVoiceClone: vi.fn().mockResolvedValue({ valid: true }),
     importVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'imported_clone' }),
   });

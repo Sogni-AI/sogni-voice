@@ -63,7 +63,6 @@ vi.mock('../../src/config/index.js', () => ({
       daemonStartupTimeout: 180000,
       preWarmDaemon: false,
       voiceClonesDir: './voice_clones',
-      allowLegacyPickleClones: false,
     },
   },
 }));

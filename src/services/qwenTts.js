@@ -55,7 +55,6 @@ export class QwenTTSService {
           PYTHONUNBUFFERED: '1',
           QWEN_TTS_MODEL_VARIANT: this.variant,
           QWEN_TTS_VOICE_CLONES_DIR: config.qwenTts.voiceClonesDir,
-          QWEN_TTS_ALLOW_LEGACY_PICKLE_CLONES: config.qwenTts.allowLegacyPickleClones ? '1' : '0',
         },
       });
 
@@ -464,7 +463,7 @@ export class QwenTTSService {
   }
 
   /**
-   * Get the actual path to a voice clone file, checking both formats
+   * Get the path to a voice clone file if it exists
    * @param {string} cloneId - Voice clone ID
    * @returns {Promise<string|null>} Path to the file, or null if not found
    */
@@ -474,23 +473,12 @@ export class QwenTTSService {
       await access(stPath);
       return stPath;
     } catch {
-      if (!config.qwenTts.allowLegacyPickleClones) {
-        return null;
-      }
-
-      const pklPath = join(config.qwenTts.voiceClonesDir, `${cloneId}.pkl`);
-
-      try {
-        await access(pklPath);
-        return pklPath;
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
 
   /**
-   * Check if a voice clone exists (either format)
+   * Check if a voice clone exists in safetensors format
    * @param {string} cloneId - Voice clone ID
    * @returns {Promise<boolean>}
    */
@@ -499,7 +487,7 @@ export class QwenTTSService {
   }
 
   /**
-   * Validate a voice clone file (.safetensors or .pkl)
+   * Validate a voice clone file (.safetensors only)
    * @param {string} filePath - Path to the voice clone file
    * @returns {Promise<{valid: boolean, error?: string}>}
    */
@@ -520,7 +508,7 @@ export class QwenTTSService {
   }
 
   /**
-   * Import a voice clone from a .safetensors or .pkl file
+   * Import a voice clone from a .safetensors file
    * @param {string} filePath - Path to the source file
    * @param {string} cloneId - Clone ID to assign
    * @returns {Promise<{cloneId: string}>}

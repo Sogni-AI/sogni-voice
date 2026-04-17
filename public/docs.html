@@ -1050,7 +1050,7 @@ with open('my_voice.zip', 'wb') as f:
     <div class="endpoint">
       <span class="method">POST</span> /qwen-tts/voices/clone/import
     </div>
-    <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>.safetensors</code> or <code>.pkl</code> file.</p>
+    <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>.safetensors</code> file.</p>
     <p><strong>Import access:</strong> If <code>voiceCloneImports.mode</code> is <code>api_key</code>, provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code>. If it is <code>blocked</code>, the server must set <code>AUTH_API_KEY</code> or <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> before imports will work.</p>
 
     <table>
@@ -1062,7 +1062,7 @@ with open('my_voice.zip', 'wb') as f:
       <tr>
         <td><code>file</code> <span class="required">*</span></td>
         <td>File</td>
-        <td>ZIP file containing the voice clone (.safetensors or .pkl + optional metadata.json)</td>
+        <td>ZIP file containing the voice clone (.safetensors + optional metadata.json)</td>
       </tr>
       <tr>
         <td><code>cloneId</code> <span class="optional">(optional)</span></td>

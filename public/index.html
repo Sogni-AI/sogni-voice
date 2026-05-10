@@ -172,6 +172,21 @@
       background: #dc3545;
       animation: pulse 1s infinite;
     }
+    .drop-zone {
+      border: 2px dashed transparent;
+      border-radius: 6px;
+      padding: 8px;
+      transition: border-color 0.15s, background 0.15s;
+    }
+    .drop-zone.dragging {
+      border-color: var(--primary);
+      background: rgba(102, 126, 234, 0.05);
+    }
+    .drop-hint {
+      font-size: 12px;
+      color: #888;
+      margin-top: 6px;
+    }
     button.danger {
       background: var(--danger);
       padding: 8px 16px;
@@ -836,6 +851,8 @@
     <div class="controls">
       <button id="recordBtn">Start Recording</button>
       <button id="stopBtn" style="display: none;">Stop Recording</button>
+      <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
+      <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac" hidden>
       <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0; margin-left: 12px;">
         <label style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Subtitle timings:</label>
         <select id="timestampMode" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px;">
@@ -848,8 +865,11 @@
 
     <div class="status" id="recordStatus">Ready to record</div>
 
-    <label>Recorded Audio:</label>
-    <audio id="recordedAudio" controls style="display: none;"></audio>
+    <div id="audioDropZone" class="drop-zone">
+      <label>Recorded Audio:</label>
+      <audio id="recordedAudio" controls style="display: none;"></audio>
+      <div class="drop-hint">Drop an audio file here, or use Upload Audio File. Max 25MB. Allowed: mp3, wav, m4a, webm, ogg, flac.</div>
+    </div>
 
     <label style="margin-top: 16px;">Transcript Result:</label>
     <div class="result" id="transcriptResult">No transcript yet. Record audio and it will appear here.</div>
@@ -974,7 +994,7 @@
     <!-- Pocket TTS Cloning Tab -->
     <div class="clone-tab-content active" id="pocketCloneTabContent">
       <div id="pocketDisabledMessage" class="result error hidden">
-        Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=true</code> in your environment.
+        Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=1</code> in your environment.
       </div>
 
       <div id="pocketVoiceCloningContent">
@@ -1046,7 +1066,7 @@
     <!-- Qwen3 TTS Cloning Tab -->
     <div class="clone-tab-content" id="qwenCloneTabContent">
       <div id="qwenDisabledMessage" class="result error hidden">
-        Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=true</code> in your environment.
+        Qwen3 TTS is not enabled on this server. To enable it, set <code>QWEN_TTS_ENABLED=1</code> in your environment.
       </div>
 
       <div id="voiceCloningContent">
@@ -1262,6 +1282,24 @@
       return response;
     }
 
+    async function getResponseErrorMessage(response, fallback = `HTTP ${response.status}`) {
+      try {
+        const contentType = response.headers.get('content-type') || '';
+        if (contentType.includes('application/json')) {
+          const data = await response.json();
+          return data.message || data.error || fallback;
+        }
+
+        const text = await response.text();
+        return text
+          .replace(/<[^>]*>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim() || fallback;
+      } catch {
+        return fallback;
+      }
+    }
+
     // Check if we can make authenticated API calls
     function canMakeAuthenticatedCalls() {
       return !authEnabled || (authEnabled && apiKey);
@@ -1401,6 +1439,7 @@
     let qwenClones = [];
     let pocketVoices = [];
     let pocketClones = [];
+    let pocketAvailabilityMessage = '';
 
     modelRadios.forEach(radio => {
       radio.addEventListener('change', (e) => {
@@ -1502,14 +1541,83 @@
 
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const uploadBtn = document.getElementById('uploadBtn');
+    const audioFileInput = document.getElementById('audioFileInput');
+    const audioDropZone = document.getElementById('audioDropZone');
     const timestampMode = document.getElementById('timestampMode');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
     const transcriptTiming = document.getElementById('transcriptTiming');
 
+    const ALLOWED_UPLOAD_EXTENSIONS = ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac'];
+    const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
+    uploadBtn.addEventListener('click', () => audioFileInput.click());
+    audioFileInput.addEventListener('change', () => {
+      const file = audioFileInput.files && audioFileInput.files[0];
+      if (file) handleAudioUpload(file);
+      audioFileInput.value = '';
+    });
+
+    ['dragenter', 'dragover'].forEach((evt) => {
+      audioDropZone.addEventListener(evt, (e) => {
+        if (!e.dataTransfer || !Array.from(e.dataTransfer.types || []).includes('Files')) return;
+        e.preventDefault();
+        e.stopPropagation();
+        audioDropZone.classList.add('dragging');
+      });
+    });
+    ['dragleave', 'dragend'].forEach((evt) => {
+      audioDropZone.addEventListener(evt, (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+        audioDropZone.classList.remove('dragging');
+      });
+    });
+    audioDropZone.addEventListener('drop', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      audioDropZone.classList.remove('dragging');
+      const file = e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files[0];
+      if (file) handleAudioUpload(file);
+    });
+
+    function getFileExtension(name) {
+      if (typeof name !== 'string') return '';
+      const base = name.split(/[\\/]/).pop().toLowerCase();
+      const dot = base.lastIndexOf('.');
+      return dot < 0 || dot === base.length - 1 ? '' : base.slice(dot + 1);
+    }
+
+    function handleAudioUpload(file) {
+      const ext = getFileExtension(file.name);
+      if (!ALLOWED_UPLOAD_EXTENSIONS.includes(ext)) {
+        transcriptResult.className = 'result error';
+        transcriptResult.textContent = `Unsupported file type. Allowed: ${ALLOWED_UPLOAD_EXTENSIONS.join(', ')}`;
+        recordStatus.textContent = 'Upload rejected';
+        return;
+      }
+      if (file.size === 0) {
+        transcriptResult.className = 'result error';
+        transcriptResult.textContent = 'File is empty.';
+        recordStatus.textContent = 'Upload rejected';
+        return;
+      }
+      if (file.size > MAX_UPLOAD_BYTES) {
+        transcriptResult.className = 'result error';
+        transcriptResult.textContent = `File is too large (max ${MAX_UPLOAD_BYTES / (1024 * 1024)}MB).`;
+        recordStatus.textContent = 'Upload rejected';
+        return;
+      }
+
+      recordedAudio.src = URL.createObjectURL(file);
+      recordedAudio.style.display = 'block';
+      recordStatus.textContent = `Uploading ${file.name}...`;
+      transcribeAudio(file, file.name);
+    }
 
     async function startRecording() {
       try {
@@ -1533,7 +1641,7 @@
           recordedAudio.style.display = 'block';
 
           // Send to server for transcription
-          await transcribeAudio(audioBlob);
+          await transcribeAudio(audioBlob, 'recording.webm');
 
           // Stop all tracks
           stream.getTracks().forEach(track => track.stop());
@@ -1564,7 +1672,7 @@
       }
     }
 
-    async function transcribeAudio(audioBlob) {
+    async function transcribeAudio(audioBlob, filename = 'recording.webm') {
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
 
       const startTime = performance.now();
@@ -1572,7 +1680,7 @@
 
       try {
         const formData = new FormData();
-        formData.append('file', audioBlob, 'recording.webm');
+        formData.append('file', audioBlob, filename);
         if (mode === 'sentence') {
           formData.append('timestamps', 'true');
         } else if (mode === 'word') {
@@ -1749,13 +1857,24 @@
         const response = await authFetch(`${API_BASE}/pocket-tts/voices`, {}, showAuthError);
 
         if (!response.ok) {
+          const errorMessage = await getResponseErrorMessage(response);
           pocketEnabled = false;
+          if (response.status === 404 && errorMessage.includes('Pocket TTS is not enabled')) {
+            pocketAvailabilityMessage = '';
+          } else if (response.status === 404) {
+            pocketAvailabilityMessage = `Pocket TTS endpoint returned HTTP 404 (${errorMessage}). The browser may be connected to the wrong server, or Pocket TTS is disabled.`;
+          } else if (response.status === 401) {
+            pocketAvailabilityMessage = 'Pocket TTS voices could not be loaded because API authentication failed.';
+          } else {
+            pocketAvailabilityMessage = `Pocket TTS is enabled, but the service is unavailable (${errorMessage}). Check the server logs for the Pocket TTS daemon error.`;
+          }
           updatePocketAvailability();
           return;
         }
 
         const data = await response.json();
         pocketEnabled = true;
+        pocketAvailabilityMessage = '';
         pocketVoices = (data.voices || []).sort((a, b) => a.localeCompare(b));
         pocketClones = (data.clones || []).sort((a, b) => a.localeCompare(b));
 
@@ -1795,6 +1914,7 @@
       } catch (error) {
         console.error('Failed to load Pocket voices:', error);
         pocketEnabled = false;
+        pocketAvailabilityMessage = `Pocket TTS status could not be checked (${error.message}). Confirm the Sogni Voice server is running at ${API_BASE}.`;
         updatePocketAvailability();
       }
     }
@@ -1805,7 +1925,14 @@
 
       if (!pocketEnabled) {
         if (pocketContent) pocketContent.classList.add('hidden');
-        if (pocketDisabledMessage) pocketDisabledMessage.classList.remove('hidden');
+        if (pocketDisabledMessage) {
+          if (pocketAvailabilityMessage) {
+            pocketDisabledMessage.textContent = pocketAvailabilityMessage;
+          } else {
+            pocketDisabledMessage.innerHTML = 'Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=1</code> in your environment.';
+          }
+          pocketDisabledMessage.classList.remove('hidden');
+        }
         if (currentModel === 'pocket') {
           voiceSelect.innerHTML = '<option>Pocket TTS not available</option>';
         }
@@ -2878,21 +3005,6 @@
         qwenEnabled = false;
         qwenCustomVoiceEnabled = false;
         qwenVoiceCloningEnabled = false;
-      }
-
-      // Check if Pocket TTS is available
-      try {
-        const pocketResponse = await authFetch(`${API_BASE}/pocket-tts/voices`, {}, false);
-        if (pocketResponse.ok) {
-          const pocketData = await pocketResponse.json();
-          pocketEnabled = true;
-          pocketClones = pocketData.clones || [];
-          updatePocketVoiceCloneList();
-        } else {
-          pocketEnabled = false;
-        }
-      } catch {
-        pocketEnabled = false;
       }
 
       updateQwenAvailability();

@@ -31,7 +31,7 @@ vi.mock('../../src/config/index.js', () => ({
       daemonStartupTimeout: 120000,
       preWarmDaemon: false,
     },
-    upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+    upload: { maxFileSizeBytes: 100 * 1024 * 1024, transcribeMaxBytes: 25 * 1024 * 1024 },
     pocketTts: {
       enabled: process.env.POCKET_TTS_ENABLED === '1',
       defaultVoice: process.env.POCKET_TTS_DEFAULT_VOICE || 'alba',
@@ -87,7 +87,8 @@ describe('POST /transcribe', () => {
   });
 
   it('should transcribe an uploaded audio file', async () => {
-    const audioContent = Buffer.from('fake audio content');
+    // Real MP3 ID3 magic header so the upload passes server-side magic-byte validation.
+    const audioContent = Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00fake audio content');
 
     const response = await server.inject({
       method: 'POST',
@@ -135,7 +136,8 @@ describe('POST /transcribe', () => {
       timestamps: wordTimestamps,
     });
 
-    const audioContent = Buffer.from('fake audio content');
+    // Real MP3 ID3 magic header so the upload passes server-side magic-byte validation.
+    const audioContent = Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00fake audio content');
 
     const response = await server.inject({
       method: 'POST',
@@ -177,7 +179,8 @@ describe('POST /transcribe', () => {
       timestamps: sentenceTimestamps,
     });
 
-    const audioContent = Buffer.from('fake audio content');
+    // Real MP3 ID3 magic header so the upload passes server-side magic-byte validation.
+    const audioContent = Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00fake audio content');
 
     const response = await server.inject({
       method: 'POST',
@@ -209,7 +212,8 @@ describe('POST /transcribe', () => {
   });
 
   it('should return transcript without timestamps by default', async () => {
-    const audioContent = Buffer.from('fake audio content');
+    // Real MP3 ID3 magic header so the upload passes server-side magic-byte validation.
+    const audioContent = Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00fake audio content');
 
     const response = await server.inject({
       method: 'POST',

@@ -4,8 +4,9 @@ dotenv.config();
 
 const parseEnvBool = (value, defaultValue = false) => {
   if (value == null) return defaultValue;
-  if (value === '1') return true;
-  if (value === '0') return false;
+  const normalizedValue = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalizedValue)) return false;
   return defaultValue;
 };
 
@@ -39,6 +40,7 @@ export const config = {
   },
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
+    transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 25) * 1024 * 1024,
   },
   pocketTts: {
     enabled: parseEnvBool(process.env.POCKET_TTS_ENABLED, false),

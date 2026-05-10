@@ -2,10 +2,16 @@ import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { pipeline } from 'node:stream/promises';
 import { createWriteStream } from 'node:fs';
-import { stat } from 'node:fs/promises';
+import { open, stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { tempFileManager } from '../utils/tempFile.js';
+import {
+  getExtension,
+  sanitizeEchoFilename,
+  validateAudioUpload,
+  ALLOWED_AUDIO_EXTENSIONS,
+} from '../utils/audioValidation.js';
 
 export const transcribeRoutes = [
   {
@@ -16,7 +22,7 @@ export const transcribeRoutes = [
         output: 'stream',
         parse: true,
         multipart: true,
-        maxBytes: config.upload.maxFileSizeBytes,
+        maxBytes: config.upload.transcribeMaxBytes,
         allow: 'multipart/form-data',
       },
       validate: {
@@ -48,13 +54,16 @@ export const transcribeRoutes = [
         }
 
         const { filename } = file.hapi;
-        const extension = filename.split('.').pop() || 'mp3';
+        const claimedExtension = getExtension(filename);
+        if (!claimedExtension || !ALLOWED_AUDIO_EXTENSIONS.includes(claimedExtension)) {
+          throw Boom.unsupportedMediaType(
+            `Unsupported file extension. Allowed: ${ALLOWED_AUDIO_EXTENSIONS.join(', ')}`,
+          );
+        }
 
-        // Create temp directory and file
         tempDir = await tempFileManager.createTempDir('transcribe-');
-        const tempFilePath = await tempFileManager.createTempFile(tempDir, extension);
+        const tempFilePath = await tempFileManager.createTempFile(tempDir, claimedExtension);
 
-        // Write uploaded file to temp location
         const writeStream = createWriteStream(tempFilePath);
         await pipeline(file, writeStream);
 
@@ -63,7 +72,15 @@ export const transcribeRoutes = [
           throw Boom.badRequest('Uploaded audio file is empty');
         }
 
-        // Perform transcription
+        const fh = await open(tempFilePath, 'r');
+        try {
+          const headBytes = Buffer.alloc(16);
+          await fh.read(headBytes, 0, 16, 0);
+          validateAudioUpload({ filename, headBytes });
+        } finally {
+          await fh.close();
+        }
+
         const result = await transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps });
 
         // When timestamps requested, only return timestamps for programmatic use
@@ -77,7 +94,7 @@ export const transcribeRoutes = [
         return {
           success: true,
           transcript: result.text,
-          filename,
+          filename: sanitizeEchoFilename(filename),
         };
       } catch (error) {
         if (error.isBoom) throw error;

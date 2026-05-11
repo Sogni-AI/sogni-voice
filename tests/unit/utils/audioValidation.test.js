@@ -16,8 +16,9 @@ const head = (...bytes) => {
 const mp3Id3 = head(0x49, 0x44, 0x33, 0x04, 0, 0, 0, 0, 0, 0, 0, 0);
 const mp3Sync = head(0xFF, 0xFB, 0x90, 0x00);
 const wav = head(0x52, 0x49, 0x46, 0x46, 0x24, 0x08, 0x00, 0x00, 0x57, 0x41, 0x56, 0x45);
-const m4aIsom = head(0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D);
+const mp4Isom = head(0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x69, 0x73, 0x6F, 0x6D);
 const m4aBrand = head(0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x4D, 0x34, 0x41, 0x20);
+const mp4Mp42 = head(0x00, 0x00, 0x00, 0x20, 0x66, 0x74, 0x79, 0x70, 0x6D, 0x70, 0x34, 0x32);
 const webm = head(0x1A, 0x45, 0xDF, 0xA3, 0x9F, 0x42, 0x86, 0x81, 0x01);
 const ogg = head(0x4F, 0x67, 0x67, 0x53, 0x00, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00);
 const flac = head(0x66, 0x4C, 0x61, 0x43, 0x00, 0x00, 0x00, 0x22);
@@ -65,8 +66,9 @@ describe('sniffAudioFormat', () => {
   it('detects mp3 (ID3 tag)', () => expect(sniffAudioFormat(mp3Id3)).toBe('mp3'));
   it('detects mp3 (raw MPEG sync)', () => expect(sniffAudioFormat(mp3Sync)).toBe('mp3'));
   it('detects wav', () => expect(sniffAudioFormat(wav)).toBe('wav'));
-  it('detects m4a (isom brand)', () => expect(sniffAudioFormat(m4aIsom)).toBe('m4a'));
-  it('detects m4a (M4A brand)', () => expect(sniffAudioFormat(m4aBrand)).toBe('m4a'));
+  it('detects mp4 (isom brand)', () => expect(sniffAudioFormat(mp4Isom)).toBe('mp4'));
+  it('detects mp4 (mp42 brand)', () => expect(sniffAudioFormat(mp4Mp42)).toBe('mp4'));
+  it('detects m4a (M4A brand, audio-only)', () => expect(sniffAudioFormat(m4aBrand)).toBe('m4a'));
   it('detects webm (EBML)', () => expect(sniffAudioFormat(webm)).toBe('webm'));
   it('detects ogg', () => expect(sniffAudioFormat(ogg)).toBe('ogg'));
   it('detects flac', () => expect(sniffAudioFormat(flac)).toBe('flac'));
@@ -86,10 +88,18 @@ describe('validateAudioUpload', () => {
   it('accepts each allowlisted format with matching content', () => {
     expect(validateAudioUpload({ filename: 'a.mp3', headBytes: mp3Id3 })).toBe('mp3');
     expect(validateAudioUpload({ filename: 'a.wav', headBytes: wav })).toBe('wav');
-    expect(validateAudioUpload({ filename: 'a.m4a', headBytes: m4aIsom })).toBe('m4a');
+    expect(validateAudioUpload({ filename: 'a.m4a', headBytes: m4aBrand })).toBe('m4a');
+    expect(validateAudioUpload({ filename: 'a.mp4', headBytes: mp4Isom })).toBe('mp4');
     expect(validateAudioUpload({ filename: 'a.webm', headBytes: webm })).toBe('webm');
     expect(validateAudioUpload({ filename: 'a.ogg', headBytes: ogg })).toBe('ogg');
     expect(validateAudioUpload({ filename: 'a.flac', headBytes: flac })).toBe('flac');
+  });
+
+  it('treats mp4 and m4a as interchangeable container extensions', () => {
+    // mp4 video uploaded as .m4a → accepted (audio gets extracted)
+    expect(validateAudioUpload({ filename: 'video.m4a', headBytes: mp4Isom })).toBe('mp4');
+    // audio-only m4a uploaded as .mp4 → also accepted
+    expect(validateAudioUpload({ filename: 'audio.mp4', headBytes: m4aBrand })).toBe('m4a');
   });
 
   it('rejects disallowed extensions', () => {
@@ -122,8 +132,7 @@ describe('validateAudioUpload', () => {
 });
 
 describe('ALLOWED_AUDIO_EXTENSIONS', () => {
-  it('does not include video-only or executable formats', () => {
-    expect(ALLOWED_AUDIO_EXTENSIONS).not.toContain('mp4');
+  it('does not include executable or markup formats', () => {
     expect(ALLOWED_AUDIO_EXTENSIONS).not.toContain('exe');
     expect(ALLOWED_AUDIO_EXTENSIONS).not.toContain('html');
     expect(ALLOWED_AUDIO_EXTENSIONS).not.toContain('js');

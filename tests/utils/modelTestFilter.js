@@ -6,8 +6,9 @@ dotenv.config();
 
 const toBool = (value, defaultValue) => {
   if (value == null) return defaultValue;
-  if (value === '1') return true;
-  if (value === '0') return false;
+  const normalizedValue = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalizedValue)) return false;
   return defaultValue;
 };
 

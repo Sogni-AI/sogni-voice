@@ -88,6 +88,29 @@ describe('config', () => {
     });
   });
 
+  describe('boolean env parsing', () => {
+    it.each([
+      ['1', true],
+      ['true', true],
+      ['yes', true],
+      ['on', true],
+      ['0', false],
+      ['false', false],
+      ['no', false],
+      ['off', false],
+    ])('should parse POCKET_TTS_ENABLED=%s', async (value, expected) => {
+      process.env.POCKET_TTS_ENABLED = value;
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.pocketTts.enabled).toBe(expected);
+    });
+
+    it('should use the default for empty boolean env values', async () => {
+      process.env.POCKET_TTS_ENABLED = '';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.pocketTts.enabled).toBe(false);
+    });
+  });
+
   describe('tts config', () => {
     it('should use default TTS model ID (MLX)', async () => {
       const { config } = await import('../../../src/config/index.js');

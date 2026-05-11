@@ -1,3 +1,6 @@
+require('dotenv').config();
+
+const port = parseInt(process.env.PORT, 10) || 3000;
 const host = process.env.HOST || '127.0.0.1';
 const corsOrigins = process.env.CORS_ORIGINS || 'local';
 
@@ -14,7 +17,7 @@ module.exports = {
       // max_memory_restart: '1G', // Disabled - TTS model needs more memory
       env: {
         NODE_ENV: 'development',
-        PORT: 3000,
+        PORT: port,
         HOST: host,
         CORS_ORIGINS: corsOrigins,
         // ORT threading config: generateLock serializes requests, so we can allow
@@ -25,7 +28,7 @@ module.exports = {
       },
       env_production: {
         NODE_ENV: 'production',
-        PORT: 3000,
+        PORT: port,
         HOST: host,
         CORS_ORIGINS: corsOrigins,
         // ORT threading config: generateLock serializes requests, so we can allow

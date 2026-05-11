@@ -8,8 +8,10 @@ import dotenv from 'dotenv';
 dotenv.config();
 
 const toBool = (value, defaultValue = false) => {
-  if (value === '1' || value === 'true') return true;
-  if (value === '0' || value === 'false') return false;
+  if (value == null) return defaultValue;
+  const normalizedValue = String(value).trim().toLowerCase();
+  if (['1', 'true', 'yes', 'on'].includes(normalizedValue)) return true;
+  if (['0', 'false', 'no', 'off'].includes(normalizedValue)) return false;
   return defaultValue;
 };
 

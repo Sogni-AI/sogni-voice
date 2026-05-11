@@ -48,6 +48,53 @@ from safetensors import safe_open
 # safetensors stores only tensor data + JSON metadata header.
 # No code execution is structurally possible.
 
+ALLOWED_VOICE_PROMPT_DATACLASSES = {
+    (
+        "qwen_tts.inference.qwen3_tts_model",
+        "VoiceClonePromptItem",
+    ): frozenset({
+        "ref_code",
+        "ref_spk_embedding",
+        "x_vector_only_mode",
+        "icl_mode",
+        "ref_text",
+    }),
+}
+
+
+def _resolve_allowed_voice_prompt_dataclass(class_module, class_name, field_nodes):
+    """Resolve only dataclasses that this service writes to clone files."""
+    allowed_fields = ALLOWED_VOICE_PROMPT_DATACLASSES.get((class_module, class_name))
+    if allowed_fields is None:
+        raise ValueError(
+            f"Unsupported serialized voice prompt dataclass: {class_module}.{class_name}"
+        )
+
+    if not isinstance(field_nodes, dict):
+        raise ValueError("Serialized dataclass fields must be an object")
+
+    provided_fields = frozenset(field_nodes.keys())
+    if provided_fields != allowed_fields:
+        raise ValueError(
+            f"Unexpected fields for serialized voice prompt dataclass: {sorted(provided_fields)}"
+        )
+
+    module = importlib.import_module(class_module)
+    cls = module
+    for part in class_name.split("."):
+        cls = getattr(cls, part)
+
+    if not is_dataclass(cls):
+        raise ValueError(f"Allowed voice prompt type is not a dataclass: {class_module}.{class_name}")
+
+    actual_fields = frozenset(field.name for field in fields(cls))
+    if actual_fields != allowed_fields:
+        raise ValueError(
+            f"Allowed voice prompt dataclass schema changed: {class_module}.{class_name}"
+        )
+
+    return cls
+
 
 def save_voice_prompt(prompt, path):
     """Save a voice prompt as a .safetensors file."""
@@ -141,13 +188,15 @@ def load_voice_prompt(path):
                     }
 
                 if kind == "dataclass":
-                    module = importlib.import_module(node["class_module"])
-                    cls = module
-                    for part in node["class_name"].split("."):
-                        cls = getattr(cls, part)
+                    field_nodes = node.get("fields")
+                    cls = _resolve_allowed_voice_prompt_dataclass(
+                        node.get("class_module"),
+                        node.get("class_name"),
+                        field_nodes,
+                    )
                     kwargs = {
                         key: unpack(value)
-                        for key, value in node["fields"].items()
+                        for key, value in field_nodes.items()
                     }
                     return cls(**kwargs)
 

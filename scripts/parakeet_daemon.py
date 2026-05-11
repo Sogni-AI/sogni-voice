@@ -18,6 +18,7 @@ Protocol:
   Shutdown ack: {"id": "...", "status": "shutdown"}
 """
 
+import os
 import sys
 import json
 import signal
@@ -56,7 +57,13 @@ class ParakeetDaemon:
             return {"success": False, "error": "Model not loaded"}
 
         try:
-            result = self.model.transcribe(audio_path)
+            # Chunk long audio so Metal/MPS doesn't OOM on multi-minute files.
+            # parakeet-mlx returns a single AlignedResult covering the full
+            # file regardless of chunking; overlap_duration handles word
+            # boundaries across chunk seams.
+            chunk_duration_env = os.environ.get("PARAKEET_CHUNK_DURATION")
+            chunk_duration = float(chunk_duration_env) if chunk_duration_env else 120.0
+            result = self.model.transcribe(audio_path, chunk_duration=chunk_duration)
 
             # Handle different return formats from parakeet-mlx
             if hasattr(result, 'text'):

@@ -107,8 +107,14 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `QWEN_TTS_MODEL_VARIANT` (base-0.6b) - Options: base-0.6b, base-1.7b, custom-voice-0.6b, custom-voice, voice-design
 - `QWEN_TTS_DEFAULT_VOICE` (Chelsie), `QWEN_TTS_DEFAULT_LANGUAGE` (English)
 - `QWEN_TTS_TIMEOUT` (300000ms), `QWEN_TTS_DAEMON_STARTUP_TIMEOUT` (180000ms)
+- `QWEN_TTS_TIMEOUT_PER_CHAR_MS` (120) - Per-char headroom added to the generation timeout, so long-form text gets a proportionally longer budget instead of bumping into the 5-min default.
+- `QWEN_TTS_TIMEOUT_MAX` (1800000ms / 30 min) - Hard ceiling on the scaled timeout.
 - `PREWARM_QWEN_TTS` (false)
 - `QWEN_TTS_VOICE_CLONES_DIR` (./voice_clones)
+- `QWEN_TTS_MAX_CHARS_PER_CHUNK` (100) - Split input text into chunks of at most this many chars. MPS attention slows non-linearly with output length; keeping chunks small keeps each generation in the fast regime.
+- `QWEN_TTS_CHUNK_SILENCE_SEC` (0.25) - Silence inserted between concatenated chunks; set to 0 to disable.
+- `QWEN_TTS_TOKENS_PER_CHAR` (4) - Headroom multiplier used to derive a per-chunk `max_new_tokens` cap from the chunk length, so a non-terminating generation can't run away.
+- `QWEN_TTS_MIN_NEW_TOKENS` (128), `QWEN_TTS_MAX_NEW_TOKENS` (2048) - Floor/ceiling on the derived `max_new_tokens` cap.
 
 **Upload**: `MAX_FILE_SIZE_MB` (100)
 

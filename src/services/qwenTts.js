@@ -8,6 +8,19 @@ import { QwenTTSError } from '../utils/errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
+/**
+ * Compute a per-request timeout that scales with text length. The daemon
+ * chunks long input, so total wall time grows linearly with chars; we need
+ * the JS-side timeout to track that rather than being a fixed ceiling.
+ */
+function computeGenerationTimeout(text = '') {
+  const base = config.qwenTts.timeout || 300000;
+  const perChar = config.qwenTts.timeoutPerChar || 120;
+  const ceiling = config.qwenTts.timeoutMax || 1800000;
+  const scaled = base + (text.length || 0) * perChar;
+  return Math.min(ceiling, Math.max(base, scaled));
+}
+
 export class QwenTTSService {
   /**
    * Create a new QwenTTSService instance
@@ -241,7 +254,7 @@ export class QwenTTSService {
       voice,
       language,
       output_path: outputPath,
-    });
+    }, { timeout: computeGenerationTimeout(text) });
 
     return {
       outputPath: result.output_path,
@@ -277,7 +290,7 @@ export class QwenTTSService {
       speaker,
       instruct,
       output_path: outputPath,
-    });
+    }, { timeout: computeGenerationTimeout(text) });
 
     return {
       outputPath: result.output_path,
@@ -311,7 +324,7 @@ export class QwenTTSService {
       text,
       instruct,
       output_path: outputPath,
-    });
+    }, { timeout: computeGenerationTimeout(text) });
 
     return {
       outputPath: result.output_path,
@@ -382,7 +395,7 @@ export class QwenTTSService {
       clone_id: cloneId,
       language,
       output_path: outputPath,
-    }, { timeout: 600000 });
+    }, { timeout: computeGenerationTimeout(text) });
 
     return {
       outputPath: result.output_path,

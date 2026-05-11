@@ -67,6 +67,10 @@ export const config = {
     defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
     defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
     timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 300000, // 5 minutes for voice cloning
+    // Per-char generation budget used to scale the timeout for long-form text.
+    // Observed MPS performance is ~10s per 100-char chunk; 120ms/char adds ~20% headroom.
+    timeoutPerChar: parseInt(process.env.QWEN_TTS_TIMEOUT_PER_CHAR_MS, 10) || 120,
+    timeoutMax: parseInt(process.env.QWEN_TTS_TIMEOUT_MAX, 10) || 1800000, // 30 min ceiling
     daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_TTS, true),
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',

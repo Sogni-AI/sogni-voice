@@ -31,12 +31,14 @@ Protocol:
 
 import sys
 import json
+import re
 import signal
 import traceback
 import os
 import io
 import contextlib
 import importlib
+import time
 from collections import OrderedDict
 from dataclasses import fields, is_dataclass
 
@@ -238,6 +240,80 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 VOICE_CLONES_DIR = os.environ.get('QWEN_TTS_VOICE_CLONES_DIR', os.path.join(SCRIPT_DIR, "..", "voice_clones"))
 SAMPLE_RATE = 24000
 
+# Qwen3 TTS is autoregressive with max_new_tokens=2048 codec tokens (~170s at
+# 12Hz). On MPS the talker's attention slows non-linearly as the KV cache
+# grows, so even modest output lengths (~600 tokens) push the JS-side timeout.
+# Keep chunks small enough that each generation stays in the fast regime, and
+# cap max_new_tokens proportional to chunk length so a non-terminating
+# generation can't run away.
+MAX_CHARS_PER_CHUNK = max(20, int(os.environ.get('QWEN_TTS_MAX_CHARS_PER_CHUNK', '100')))
+CHUNK_SILENCE_SEC = max(0.0, float(os.environ.get('QWEN_TTS_CHUNK_SILENCE_SEC', '0.25')))
+# Codec tokens per input char. English speech at ~12Hz codec rate uses roughly
+# 1 codec token per 1-1.5 chars; 4x gives ample headroom while still bounding
+# pathological generations.
+TOKENS_PER_CHAR = max(1.0, float(os.environ.get('QWEN_TTS_TOKENS_PER_CHAR', '4')))
+MIN_MAX_NEW_TOKENS = max(64, int(os.environ.get('QWEN_TTS_MIN_NEW_TOKENS', '128')))
+MAX_MAX_NEW_TOKENS = max(MIN_MAX_NEW_TOKENS, int(os.environ.get('QWEN_TTS_MAX_NEW_TOKENS', '2048')))
+
+
+def estimate_max_new_tokens(chunk: str) -> int:
+    """Bound model.generate() output by chunk length so MPS slowdowns can't hang."""
+    target = int(len(chunk) * TOKENS_PER_CHAR)
+    return max(MIN_MAX_NEW_TOKENS, min(MAX_MAX_NEW_TOKENS, target))
+
+
+def _split_overlong_sentence(sentence: str, max_chars: int):
+    """Break a single sentence longer than max_chars at clause/word boundaries."""
+    pieces = []
+    remaining = sentence.strip()
+    while len(remaining) > max_chars:
+        cut = remaining.rfind(',', 0, max_chars)
+        if cut < max_chars // 2:
+            cut = remaining.rfind(' ', 0, max_chars)
+        if cut < max_chars // 2:
+            cut = max_chars
+        pieces.append(remaining[:cut].strip())
+        remaining = remaining[cut:].strip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def chunk_text(text: str, max_chars: int = MAX_CHARS_PER_CHUNK):
+    """Split text at sentence boundaries so each chunk is <= max_chars.
+
+    Returns a list of non-empty chunks. Short texts pass through as a single
+    chunk so callers can keep the original single-shot generation path.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    if len(cleaned) <= max_chars:
+        return [cleaned]
+
+    sentences = re.split(r'(?<=[.!?。！？])\s+|\n+', cleaned)
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if len(sentence) > max_chars:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_overlong_sentence(sentence, max_chars))
+            continue
+        candidate = f"{current} {sentence}".strip() if current else sentence
+        if len(candidate) <= max_chars:
+            current = candidate
+        else:
+            chunks.append(current)
+            current = sentence
+    if current:
+        chunks.append(current)
+    return chunks
+
 # Model variant configurations (using official Qwen repos)
 MODEL_VARIANTS = {
     'base-0.6b': {
@@ -345,6 +421,63 @@ class QwenTTSDaemon:
             traceback.print_exc(file=sys.stderr)
             return False
 
+    def _generate_chunked(self, label: str, text: str, output_path: str, generate_chunk):
+        """Synthesise text in sentence-sized chunks and write concatenated audio.
+
+        `generate_chunk(chunk_text, max_new_tokens)` must return `(wavs, sample_rate)`
+        where `wavs[0]` is the numpy waveform for the chunk. Returns the standard
+        response dict (success/output_path/duration on success, error otherwise).
+        """
+        import numpy as np
+        import soundfile as sf
+
+        chunks = chunk_text(text)
+        if not chunks:
+            return {"success": False, "error": "Text is empty"}
+
+        total_chars = sum(len(c) for c in chunks)
+        print(
+            f"[{label}] Chunking input: {len(chunks)} chunk(s), {total_chars} chars total",
+            file=sys.stderr,
+        )
+
+        sr = None
+        audio_parts = []
+        for i, chunk in enumerate(chunks, start=1):
+            cap = estimate_max_new_tokens(chunk)
+            print(
+                f"[{label}] Generating chunk {i}/{len(chunks)} ({len(chunk)} chars, max_new_tokens={cap})",
+                file=sys.stderr,
+            )
+            t0 = time.time()
+            wavs, this_sr = generate_chunk(chunk, cap)
+            if len(wavs) == 0 or wavs[0] is None:
+                return {"success": False, "error": f"No audio generated for chunk {i}"}
+            sr = this_sr
+            audio_parts.append(wavs[0])
+            print(
+                f"[{label}] Chunk {i}/{len(chunks)} done in {time.time() - t0:.2f}s",
+                file=sys.stderr,
+            )
+            if i < len(chunks) and CHUNK_SILENCE_SEC > 0:
+                audio_parts.append(
+                    np.zeros(int(CHUNK_SILENCE_SEC * sr), dtype=wavs[0].dtype)
+                )
+
+        audio = audio_parts[0] if len(audio_parts) == 1 else np.concatenate(audio_parts)
+        duration = len(audio) / sr
+
+        output_dir = os.path.dirname(output_path)
+        if not os.path.exists(output_dir):
+            print(
+                f"[{label}] Output directory no longer exists (caller likely timed out), skipping write",
+                file=sys.stderr,
+            )
+            return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
+
+        sf.write(output_path, audio, sr)
+        return {"success": True, "output_path": output_path, "duration": duration}
+
     def _get_default_voice_prompt(self):
         """Get or create a default voice prompt for base models."""
         if self.default_voice_prompt is not None:
@@ -371,57 +504,46 @@ class QwenTTSDaemon:
         features = model_info.get('features', [])
 
         try:
-            import soundfile as sf
+            lang_arg = language.capitalize() if language != "auto" else "Auto"
 
-            # Base models require voice cloning
             if 'voice_cloning' in features:
                 if ref_audio is None:
-                    # Try to use default voice prompt
                     voice_prompt = self._get_default_voice_prompt()
                     if voice_prompt is None:
                         return {"success": False, "error": "Base model requires reference audio. Use generate_voice_clone or create a default voice."}
 
-                    wavs, sr = self.model.generate_voice_clone(
-                        text=text,
-                        language=language.capitalize() if language != "auto" else "Auto",
-                        voice_clone_prompt=voice_prompt,
-                    )
+                    def run(chunk, max_new_tokens):
+                        return self.model.generate_voice_clone(
+                            text=chunk,
+                            language=lang_arg,
+                            voice_clone_prompt=voice_prompt,
+                            max_new_tokens=max_new_tokens,
+                        )
                 else:
-                    wavs, sr = self.model.generate_voice_clone(
-                        text=text,
-                        language=language.capitalize() if language != "auto" else "Auto",
-                        ref_audio=ref_audio,
-                        ref_text=ref_text or "",
-                    )
+                    ref_text_arg = ref_text or ""
+
+                    def run(chunk, max_new_tokens):
+                        return self.model.generate_voice_clone(
+                            text=chunk,
+                            language=lang_arg,
+                            ref_audio=ref_audio,
+                            ref_text=ref_text_arg,
+                            max_new_tokens=max_new_tokens,
+                        )
             elif 'custom_voice' in features:
-                # CustomVoice models can handle plain generate via generate_custom_voice with empty instruct
-                speaker = voice or os.environ.get('QWEN_TTS_DEFAULT_VOICE', 'Chelsie')
-                wavs, sr = self.model.generate_custom_voice(
-                    text=text,
-                    speaker=speaker.lower(),
-                    instruct="",
-                )
+                speaker = (voice or os.environ.get('QWEN_TTS_DEFAULT_VOICE', 'Chelsie')).lower()
+
+                def run(chunk, max_new_tokens):
+                    return self.model.generate_custom_voice(
+                        text=chunk,
+                        speaker=speaker,
+                        instruct="",
+                        max_new_tokens=max_new_tokens,
+                    )
             else:
                 return {"success": False, "error": f"Model variant '{self.model_variant}' does not support standard TTS"}
 
-            if len(wavs) == 0 or wavs[0] is None:
-                return {"success": False, "error": "No audio generated"}
-
-            audio = wavs[0]
-            duration = len(audio) / sr
-
-            output_dir = os.path.dirname(output_path)
-            if not os.path.exists(output_dir):
-                print(f"[generate] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
-                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
-
-            sf.write(output_path, audio, sr)
-
-            return {
-                "success": True,
-                "output_path": output_path,
-                "duration": duration,
-            }
+            return self._generate_chunked("generate", text, output_path, run)
         except Exception as e:
             print(f"TTS generation error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -437,33 +559,17 @@ class QwenTTSDaemon:
             return {"success": False, "error": f"custom_voice not supported by model variant '{self.model_variant}'"}
 
         try:
-            import soundfile as sf
+            speaker_arg = speaker.lower()
 
-            # Speaker names must be lowercase for the model
-            wavs, sr = self.model.generate_custom_voice(
-                text=text,
-                speaker=speaker.lower(),
-                instruct=instruct,
-            )
+            def run(chunk, max_new_tokens):
+                return self.model.generate_custom_voice(
+                    text=chunk,
+                    speaker=speaker_arg,
+                    instruct=instruct,
+                    max_new_tokens=max_new_tokens,
+                )
 
-            if len(wavs) == 0 or wavs[0] is None:
-                return {"success": False, "error": "No audio generated"}
-
-            audio = wavs[0]
-            duration = len(audio) / sr
-
-            output_dir = os.path.dirname(output_path)
-            if not os.path.exists(output_dir):
-                print(f"[generate_custom_voice] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
-                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
-
-            sf.write(output_path, audio, sr)
-
-            return {
-                "success": True,
-                "output_path": output_path,
-                "duration": duration,
-            }
+            return self._generate_chunked("generate_custom_voice", text, output_path, run)
         except Exception as e:
             print(f"CustomVoice generation error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -479,31 +585,14 @@ class QwenTTSDaemon:
             return {"success": False, "error": f"voice_design not supported by model variant '{self.model_variant}'"}
 
         try:
-            import soundfile as sf
+            def run(chunk, max_new_tokens):
+                return self.model.generate_voice_design(
+                    text=chunk,
+                    instruct=instruct,
+                    max_new_tokens=max_new_tokens,
+                )
 
-            wavs, sr = self.model.generate_voice_design(
-                text=text,
-                instruct=instruct,
-            )
-
-            if len(wavs) == 0 or wavs[0] is None:
-                return {"success": False, "error": "No audio generated"}
-
-            audio = wavs[0]
-            duration = len(audio) / sr
-
-            output_dir = os.path.dirname(output_path)
-            if not os.path.exists(output_dir):
-                print(f"[generate_voice_design] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
-                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
-
-            sf.write(output_path, audio, sr)
-
-            return {
-                "success": True,
-                "output_path": output_path,
-                "duration": duration,
-            }
+            return self._generate_chunked("generate_voice_design", text, output_path, run)
         except Exception as e:
             print(f"VoiceDesign generation error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
@@ -567,57 +656,33 @@ class QwenTTSDaemon:
             return {"success": False, "error": f"voice_cloning not supported by model variant '{self.model_variant}'"}
 
         try:
-            import soundfile as sf
-            import time
-
-            # Load voice prompt from LRU cache or disk
             print(f"[generate_voice_clone] Loading voice clone '{clone_id}'...", file=sys.stderr)
             prompt = self._get_cached_clone(clone_id)
             if prompt is None:
                 st_path = os.path.join(VOICE_CLONES_DIR, f"{clone_id}.safetensors")
-
-                if os.path.exists(st_path):
-                    print(f"[generate_voice_clone] Reading prompt from {st_path}", file=sys.stderr)
-                    prompt = load_voice_prompt(st_path)
-                else:
+                if not os.path.exists(st_path):
                     return {"success": False, "error": f"Voice clone '{clone_id}' not found"}
-
+                print(f"[generate_voice_clone] Reading prompt from {st_path}", file=sys.stderr)
+                prompt = load_voice_prompt(st_path)
                 self._cache_clone(clone_id, prompt)
                 print(f"[generate_voice_clone] Prompt loaded and cached", file=sys.stderr)
             print(f"[generate_voice_clone] Prompt type: {type(prompt)}", file=sys.stderr)
 
-            print(f"[generate_voice_clone] Starting generation: text='{text[:50]}...', language={language}", file=sys.stderr)
-            start_time = time.time()
-
-            wavs, sr = self.model.generate_voice_clone(
-                text=text,
-                language=language.capitalize() if language != "auto" else "Auto",
-                voice_clone_prompt=prompt,
+            lang_arg = language.capitalize() if language != "auto" else "Auto"
+            print(
+                f"[generate_voice_clone] Starting generation: text='{text[:50]}...', language={language}",
+                file=sys.stderr,
             )
 
-            elapsed = time.time() - start_time
-            print(f"[generate_voice_clone] Generation completed in {elapsed:.2f}s", file=sys.stderr)
+            def run(chunk, max_new_tokens):
+                return self.model.generate_voice_clone(
+                    text=chunk,
+                    language=lang_arg,
+                    voice_clone_prompt=prompt,
+                    max_new_tokens=max_new_tokens,
+                )
 
-            if len(wavs) == 0 or wavs[0] is None:
-                return {"success": False, "error": "No audio generated"}
-
-            audio = wavs[0]
-            duration = len(audio) / sr
-
-            # Check if output directory still exists (caller may have timed out and cleaned up)
-            output_dir = os.path.dirname(output_path)
-            if not os.path.exists(output_dir):
-                print(f"[generate_voice_clone] Output directory no longer exists (caller likely timed out), skipping write", file=sys.stderr)
-                return {"success": False, "error": "Output directory was cleaned up (request likely timed out)"}
-
-            print(f"[generate_voice_clone] Writing audio to {output_path}, samples={len(audio)}, sr={sr}", file=sys.stderr)
-            sf.write(output_path, audio, sr)
-
-            return {
-                "success": True,
-                "output_path": output_path,
-                "duration": duration,
-            }
+            return self._generate_chunked("generate_voice_clone", text, output_path, run)
         except Exception as e:
             print(f"Voice clone generation error: {e}", file=sys.stderr)
             traceback.print_exc(file=sys.stderr)

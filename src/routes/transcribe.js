@@ -5,6 +5,7 @@ import { createWriteStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
+import { diarizationService } from '../services/diarization.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import {
   getExtension,
@@ -12,6 +13,7 @@ import {
   validateAudioUpload,
   ALLOWED_AUDIO_EXTENSIONS,
 } from '../utils/audioValidation.js';
+import { mergeSpeakers, summarizeSpeakers } from '../utils/diarizationMerge.js';
 
 export const transcribeRoutes = [
   {
@@ -32,6 +34,14 @@ export const transcribeRoutes = [
             .description('Include sentence-level subtitle timings in response'),
           wordTimestamps: Joi.string().valid('true', 'false').optional()
             .description('Include word-level subtitle timings in response (overrides timestamps)'),
+          diarize: Joi.string().valid('true', 'false').optional()
+            .description('Identify speakers and label each timestamp segment'),
+          numSpeakers: Joi.string().pattern(/^\d+$/).optional()
+            .description('Exact number of speakers (1-20). Overrides min/max.'),
+          minSpeakers: Joi.string().pattern(/^\d+$/).optional()
+            .description('Lower bound on speaker count (1-20)'),
+          maxSpeakers: Joi.string().pattern(/^\d+$/).optional()
+            .description('Upper bound on speaker count (1-20)'),
         }),
       },
       description: 'Transcribe an audio file to text',
@@ -45,9 +55,34 @@ export const transcribeRoutes = [
           throw Boom.serviceUnavailable('Transcription is disabled');
         }
 
-        const { file, timestamps: timestampsParam, wordTimestamps: wordTimestampsParam } = request.payload;
+        const {
+          file,
+          timestamps: timestampsParam,
+          wordTimestamps: wordTimestampsParam,
+          diarize: diarizeParam,
+          numSpeakers: numSpeakersParam,
+          minSpeakers: minSpeakersParam,
+          maxSpeakers: maxSpeakersParam,
+        } = request.payload;
         const timestamps = timestampsParam === 'true';
         const wordTimestamps = wordTimestampsParam === 'true';
+        // Default diarize=true when the server can actually do it. Avoids noisy
+        // `diarization: {available: false}` on responses from servers that never
+        // opted into diarization, preserving backward compat for those clients.
+        const diarizeAvailable = config.diarization.enabled && !!config.diarization.hfToken;
+        const diarizeRequested = diarizeParam == null
+          ? diarizeAvailable
+          : diarizeParam === 'true';
+
+        const parseSpeakerCount = (raw) => {
+          if (raw == null) return undefined;
+          const n = parseInt(raw, 10);
+          if (!Number.isFinite(n) || n < 1 || n > 20) return undefined;
+          return n;
+        };
+        const numSpeakers = parseSpeakerCount(numSpeakersParam);
+        const minSpeakers = parseSpeakerCount(minSpeakersParam);
+        const maxSpeakers = parseSpeakerCount(maxSpeakersParam);
 
         if (!file || !file.hapi) {
           throw Boom.badRequest('No audio file provided');
@@ -81,21 +116,72 @@ export const transcribeRoutes = [
           await fh.close();
         }
 
-        const result = await transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps });
+        const wantDiarize = diarizeRequested && config.diarization.enabled;
+        let diarizationDisabledReason = null;
+        if (diarizeRequested && !config.diarization.enabled) {
+          diarizationDisabledReason = 'Diarization is disabled on this server';
+        } else if (diarizeRequested && !config.diarization.hfToken) {
+          diarizationDisabledReason = 'HF_TOKEN not configured on this server';
+        }
+
+        const [transcribeOutcome, diarizeOutcome] = await Promise.allSettled([
+          transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps }),
+          wantDiarize && config.diarization.hfToken
+            ? diarizationService.diarize(tempFilePath, { numSpeakers, minSpeakers, maxSpeakers })
+            : Promise.resolve(null),
+        ]);
+
+        if (transcribeOutcome.status === 'rejected') {
+          throw transcribeOutcome.reason;
+        }
+        const result = transcribeOutcome.value;
+
+        let diarization = null;
+        let speakerTurns = null;
+        if (diarizeRequested) {
+          if (diarizationDisabledReason) {
+            diarization = { available: false, error: diarizationDisabledReason };
+          } else if (diarizeOutcome.status === 'rejected') {
+            console.error('Diarization failed:', diarizeOutcome.reason);
+            diarization = {
+              available: false,
+              error: diarizeOutcome.reason?.message || 'Diarization failed',
+            };
+          } else if (diarizeOutcome.value) {
+            speakerTurns = diarizeOutcome.value.turns;
+            diarization = {
+              available: true,
+              numSpeakers: diarizeOutcome.value.numSpeakers,
+            };
+          }
+        }
 
         // When timestamps requested, only return timestamps for programmatic use
         if ((timestamps || wordTimestamps) && result.timestamps) {
-          return {
-            success: true,
-            timestamps: result.timestamps,
-          };
+          const tagged = speakerTurns ? mergeSpeakers(result.timestamps, speakerTurns) : result.timestamps;
+          const response = { success: true, timestamps: tagged };
+          if (diarization) {
+            response.diarization = diarization;
+            if (speakerTurns) response.speakers = summarizeSpeakers(tagged);
+          }
+          return response;
         }
 
-        return {
+        const response = {
           success: true,
           transcript: result.text,
           filename: sanitizeEchoFilename(filename),
         };
+        if (diarization) {
+          response.diarization = diarization;
+          if (speakerTurns) {
+            // Provide turn-level info even when no per-segment timestamps were requested.
+            response.speakers = summarizeSpeakers(
+              speakerTurns.map((t) => ({ start: t.start, end: t.end, speaker: t.speaker })),
+            );
+          }
+        }
+        return response;
       } catch (error) {
         if (error.isBoom) throw error;
         console.error('Transcription error:', error);

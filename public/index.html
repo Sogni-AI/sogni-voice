@@ -187,6 +187,28 @@
       color: #888;
       margin-top: 6px;
     }
+    .speaker-chip {
+      display: inline-block;
+      padding: 1px 7px;
+      margin-right: 6px;
+      border-radius: 10px;
+      font-size: 11px;
+      font-weight: 600;
+      color: #fff;
+      vertical-align: middle;
+    }
+    .speaker-chip.unknown { background: #999; }
+    .diarization-summary {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #555;
+    }
+    .diarization-warning {
+      margin-top: 8px;
+      font-size: 12px;
+      color: #b8860b;
+      font-style: italic;
+    }
     button.danger {
       background: var(--danger);
       padding: 8px 16px;
@@ -852,7 +874,7 @@
       <button id="recordBtn">Start Recording</button>
       <button id="stopBtn" style="display: none;">Stop Recording</button>
       <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
-      <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac" hidden>
+      <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac,video/mp4" hidden>
       <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0; margin-left: 12px;">
         <label style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Subtitle timings:</label>
         <select id="timestampMode" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px;">
@@ -861,6 +883,10 @@
           <option value="word">By word</option>
         </select>
       </div>
+      <label id="diarizeLabel" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; color: #555; cursor: pointer;">
+        <input type="checkbox" id="diarizeCheckbox" style="margin: 0;">
+        <span>Identify speakers</span>
+      </label>
     </div>
 
     <div class="status" id="recordStatus">Ready to record</div>
@@ -868,7 +894,7 @@
     <div id="audioDropZone" class="drop-zone">
       <label>Recorded Audio:</label>
       <audio id="recordedAudio" controls style="display: none;"></audio>
-      <div class="drop-hint">Drop an audio file here, or use Upload Audio File. Max 25MB. Allowed: mp3, wav, m4a, webm, ogg, flac.</div>
+      <div class="drop-hint">Drop an audio or video file here, or use Upload Audio File. Max 25MB. Allowed: mp3, wav, m4a, mp4, webm, ogg, flac. (Video uploads transcribe the audio track.)</div>
     </div>
 
     <label style="margin-top: 16px;">Transcript Result:</label>
@@ -1545,13 +1571,33 @@
     const audioFileInput = document.getElementById('audioFileInput');
     const audioDropZone = document.getElementById('audioDropZone');
     const timestampMode = document.getElementById('timestampMode');
+    const diarizeCheckbox = document.getElementById('diarizeCheckbox');
+    const diarizeLabel = document.getElementById('diarizeLabel');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
     const transcriptTiming = document.getElementById('transcriptTiming');
 
-    const ALLOWED_UPLOAD_EXTENSIONS = ['mp3', 'wav', 'm4a', 'webm', 'ogg', 'flac'];
+    const ALLOWED_UPLOAD_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'flac'];
     const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
+    const SPEAKER_PALETTE = ['#5b8def', '#e15554', '#3bb273', '#e1b400', '#9b5de5', '#f15bb5', '#00bbf9', '#ff6b35'];
+
+    function speakerColor(speakerLabel) {
+      if (!speakerLabel) return '#999';
+      const m = String(speakerLabel).match(/(\d+)/);
+      const idx = m ? parseInt(m[1], 10) : 0;
+      return SPEAKER_PALETTE[idx % SPEAKER_PALETTE.length];
+    }
+
+    function syncDiarizeAvailability() {
+      const enabled = timestampMode.value !== 'none';
+      diarizeCheckbox.disabled = !enabled;
+      diarizeLabel.style.opacity = enabled ? '1' : '0.5';
+      diarizeLabel.style.cursor = enabled ? 'pointer' : 'not-allowed';
+      if (!enabled) diarizeCheckbox.checked = false;
+    }
+    timestampMode.addEventListener('change', syncDiarizeAvailability);
+    syncDiarizeAvailability();
 
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
@@ -1672,11 +1718,72 @@
       }
     }
 
+    function renderTranscriptResult(data, mode) {
+      transcriptResult.replaceChildren();
+
+      const useTimestamps = data.timestamps && data.timestamps.length > 0;
+      if (useTimestamps) {
+        const label = document.createElement('div');
+        label.style.fontWeight = '600';
+        label.style.marginBottom = '6px';
+        label.textContent = mode === 'word' ? 'Word Timings:' : 'Subtitle Timings:';
+        transcriptResult.appendChild(label);
+
+        for (const seg of data.timestamps) {
+          const line = document.createElement('div');
+          if (seg.speaker) {
+            const chip = document.createElement('span');
+            chip.className = 'speaker-chip';
+            chip.style.background = speakerColor(seg.speaker);
+            chip.textContent = seg.speaker;
+            line.appendChild(chip);
+          } else if (data.diarization && data.diarization.available) {
+            const chip = document.createElement('span');
+            chip.className = 'speaker-chip unknown';
+            chip.textContent = '?';
+            line.appendChild(chip);
+          }
+          line.appendChild(document.createTextNode(
+            `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}`,
+          ));
+          transcriptResult.appendChild(line);
+        }
+      } else {
+        transcriptResult.appendChild(document.createTextNode(data.transcript || ''));
+      }
+
+      if (data.diarization) {
+        if (data.diarization.available && Array.isArray(data.speakers) && data.speakers.length > 0) {
+          const summary = document.createElement('div');
+          summary.className = 'diarization-summary';
+          summary.appendChild(document.createTextNode(
+            `Speakers detected: ${data.diarization.numSpeakers} — `,
+          ));
+          data.speakers.forEach((s, i) => {
+            const chip = document.createElement('span');
+            chip.className = 'speaker-chip';
+            chip.style.background = speakerColor(s.speaker);
+            chip.textContent = s.speaker;
+            summary.appendChild(chip);
+            summary.appendChild(document.createTextNode(`${s.totalSeconds}s`));
+            if (i < data.speakers.length - 1) summary.appendChild(document.createTextNode(' · '));
+          });
+          transcriptResult.appendChild(summary);
+        } else if (!data.diarization.available) {
+          const warn = document.createElement('div');
+          warn.className = 'diarization-warning';
+          warn.textContent = `Speaker identification unavailable: ${data.diarization.error || 'unknown reason'}`;
+          transcriptResult.appendChild(warn);
+        }
+      }
+    }
+
     async function transcribeAudio(audioBlob, filename = 'recording.webm') {
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
 
       const startTime = performance.now();
       const mode = timestampMode.value;
+      const diarize = diarizeCheckbox && diarizeCheckbox.checked && mode !== 'none';
 
       try {
         const formData = new FormData();
@@ -1685,6 +1792,9 @@
           formData.append('timestamps', 'true');
         } else if (mode === 'word') {
           formData.append('wordTimestamps', 'true');
+        }
+        if (diarize) {
+          formData.append('diarize', 'true');
         }
 
         const response = await authFetch(`${API_BASE}/transcribe`, {
@@ -1697,21 +1807,7 @@
 
         if (response.ok && data.success) {
           transcriptResult.className = 'result success';
-
-          let resultText;
-
-          // When timestamps requested, API only returns timestamps (no transcript)
-          if (data.timestamps && data.timestamps.length > 0) {
-            const label = mode === 'word' ? 'Word Timings:' : 'Subtitle Timings:';
-            resultText = label + '\n';
-            resultText += data.timestamps.map(seg =>
-              `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}`
-            ).join('\n');
-          } else {
-            resultText = data.transcript;
-          }
-
-          transcriptResult.textContent = resultText;
+          renderTranscriptResult(data, mode);
           transcriptTiming.textContent = `Elapsed time: ${elapsed}s`;
           recordStatus.textContent = 'Transcription complete!';
         } else {

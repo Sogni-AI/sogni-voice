@@ -38,6 +38,13 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.DAEMON_STARTUP_TIMEOUT, 10) || 120000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_TRANSCRIPTION, true),
   },
+  diarization: {
+    enabled: parseEnvBool(process.env.DIARIZATION_ENABLED, false),
+    hfToken: process.env.HF_TOKEN || null,
+    timeout: parseInt(process.env.DIARIZATION_TIMEOUT, 10) || 600000,
+    daemonStartupTimeout: parseInt(process.env.DIARIZATION_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_DIARIZATION, false),
+  },
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
     transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 25) * 1024 * 1024,

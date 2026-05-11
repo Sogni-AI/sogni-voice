@@ -1,0 +1,11 @@
+# Optional dependencies for speaker diarization (used by scripts/diarize_daemon.py).
+# Install only if you want to enable DIARIZATION_ENABLED=true.
+#
+#   pip install -r requirements-diarization.txt
+#
+# Then set HF_TOKEN (https://hf.co/settings/tokens) and accept the model
+# license at https://hf.co/pyannote/speaker-diarization-3.1
+
+pyannote.audio>=3.1
+torch>=2.1
+torchaudio>=2.1

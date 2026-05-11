@@ -4,6 +4,7 @@ import { transcriptionService } from './services/transcription.js';
 import { ttsService } from './services/tts.js';
 import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTts.js';
 import { pocketTtsService } from './services/pocketTts.js';
+import { diarizationService } from './services/diarization.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -17,6 +18,7 @@ const gracefulShutdown = async (signal) => {
     qwenTtsBaseService.shutdown(),
     qwenTtsCustomVoiceService.shutdown(),
     pocketTtsService.shutdown(),
+    diarizationService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -55,6 +57,11 @@ startServer()
     if (config.pocketTts.enabled && config.pocketTts.preWarmDaemon) {
       console.log('Pre-warming Pocket TTS daemon...');
       preWarmPromises.push(pocketTtsService.initialize());
+    }
+
+    if (config.diarization.enabled && config.diarization.preWarmDaemon) {
+      console.log('Pre-warming diarization daemon...');
+      preWarmPromises.push(diarizationService.initialize());
     }
 
     await Promise.all(preWarmPromises);

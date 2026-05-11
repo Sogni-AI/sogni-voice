@@ -58,3 +58,15 @@ export class QwenTTSError extends Error {
     return Boom.badImplementation(this.message);
   }
 }
+
+export class DiarizationError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'DiarizationError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}

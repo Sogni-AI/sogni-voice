@@ -1203,6 +1203,12 @@
     let apiKeyConfigured = false;
     let dangerouslyAllowImports = false;
     let voiceCloneImportMode = 'blocked';
+    let serviceStatus = {
+      tts: { enabled: false },
+      transcription: { enabled: false },
+      pocketTts: { enabled: false },
+      qwenTts: { enabled: false },
+    };
     let apiKey = localStorage.getItem('sogni_api_key') || '';
 
     const authSection = document.getElementById('authSection');
@@ -1403,6 +1409,10 @@
         dangerouslyAllowImports = Boolean(data.dangerouslyAllowImports);
         voiceCloneImportMode = data.voiceCloneImports?.mode
           || (dangerouslyAllowImports ? 'public' : (apiKeyConfigured ? 'api_key' : 'blocked'));
+        serviceStatus = {
+          ...serviceStatus,
+          ...(data.services || {}),
+        };
 
         const shouldShowApiKeyEntry = authEnabled || voiceCloneImportMode === 'api_key';
 
@@ -2018,11 +2028,14 @@
     function updatePocketAvailability() {
       const pocketDisabledMessage = document.getElementById('pocketDisabledMessage');
       const pocketContent = document.getElementById('pocketVoiceCloningContent');
+      const authRequired = authEnabled && !apiKey && pocketEnabled;
 
-      if (!pocketEnabled) {
+      if (!pocketEnabled || authRequired) {
         if (pocketContent) pocketContent.classList.add('hidden');
         if (pocketDisabledMessage) {
-          if (pocketAvailabilityMessage) {
+          if (authRequired) {
+            pocketDisabledMessage.textContent = 'Enter your API key above to load Pocket TTS voices and clones.';
+          } else if (pocketAvailabilityMessage) {
             pocketDisabledMessage.textContent = pocketAvailabilityMessage;
           } else {
             pocketDisabledMessage.innerHTML = 'Pocket TTS is not enabled on this server. To enable it, set <code>POCKET_TTS_ENABLED=1</code> in your environment.';
@@ -2030,7 +2043,9 @@
           pocketDisabledMessage.classList.remove('hidden');
         }
         if (currentModel === 'pocket') {
-          voiceSelect.innerHTML = '<option>Pocket TTS not available</option>';
+          voiceSelect.innerHTML = authRequired
+            ? '<option value="">Enter API key to load Pocket voices</option>'
+            : '<option>Pocket TTS not available</option>';
         }
       } else {
         if (pocketDisabledMessage) pocketDisabledMessage.classList.add('hidden');
@@ -2134,8 +2149,16 @@
     function updateQwenAvailability() {
       const qwenRadio = document.getElementById('qwenRadio');
       const authRequiredMessage = document.getElementById('authRequiredMessage');
+      const authRequired = authEnabled && !apiKey && qwenEnabled;
 
-      if (!qwenEnabled) {
+      if (authRequired) {
+        voiceCloningContent.classList.add('hidden');
+        qwenDisabledMessage.classList.add('hidden');
+        authRequiredMessage.classList.remove('hidden');
+        if (currentModel === 'qwen') {
+          voiceSelect.innerHTML = '<option value="">Enter API key to load Qwen voices</option>';
+        }
+      } else if (!qwenEnabled) {
         voiceCloningContent.classList.add('hidden');
         // Show different message based on why Qwen is not available
         if (authEnabled && !apiKey) {
@@ -3064,9 +3087,14 @@
       if (authEnabled && !apiKey) {
         // Set up empty/default UI state
         voiceSelect.innerHTML = '<option value="">Enter API key to load voices</option>';
-        qwenEnabled = false;
+        pocketEnabled = Boolean(serviceStatus.pocketTts?.enabled);
+        pocketAvailabilityMessage = pocketEnabled
+          ? 'Enter your API key above to load Pocket TTS voices and clones.'
+          : '';
+        qwenEnabled = Boolean(serviceStatus.qwenTts?.enabled);
         qwenCustomVoiceEnabled = false;
         qwenVoiceCloningEnabled = false;
+        updatePocketAvailability();
         updateQwenAvailability();
         updateStyleInstructUI();
         updateImportAccessUI();

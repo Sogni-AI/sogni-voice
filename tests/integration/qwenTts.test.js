@@ -501,6 +501,27 @@ describe('Qwen TTS Routes', () => {
       expect(payload.features).toContain('voice_cloning');
       expect(payload.features).toContain('custom_voice');
     });
+
+    it('should remain available when the CustomVoice daemon is unavailable', async () => {
+      qwenTtsCustomVoiceService.initialize.mockRejectedValueOnce(new Error('CustomVoice unavailable'));
+
+      const response = await server.inject({
+        method: 'GET',
+        url: '/qwen-tts/voices',
+      });
+
+      expect(response.statusCode).toBe(200);
+      const payload = JSON.parse(response.payload);
+      expect(payload.status).toBe('degraded');
+      expect(payload.features).toContain('voice_cloning');
+      expect(payload.features).not.toContain('custom_voice');
+      expect(payload.unavailableDaemons).toEqual([
+        {
+          name: 'CustomVoice',
+          error: 'CustomVoice unavailable',
+        },
+      ]);
+    });
   });
 
   describe('DELETE /qwen-tts/voices/clone/:cloneId', () => {

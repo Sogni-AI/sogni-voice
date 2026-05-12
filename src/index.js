@@ -31,6 +31,14 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
+const preWarmDaemon = async (name, initialize) => {
+  try {
+    await initialize();
+  } catch (error) {
+    console.error(`${name} pre-warm failed:`, error);
+  }
+};
+
 startServer()
   .then(async () => {
     // Optionally pre-warm the daemons
@@ -38,30 +46,30 @@ startServer()
 
     if (config.transcription.enabled && config.transcription.preWarmDaemon) {
       console.log('Pre-warming transcription daemon...');
-      preWarmPromises.push(transcriptionService.initialize());
+      preWarmPromises.push(preWarmDaemon('Transcription daemon', () => transcriptionService.initialize()));
     }
 
     if (config.tts.enabled && config.tts.preWarmDaemon) {
       console.log('Pre-warming TTS daemon...');
-      preWarmPromises.push(ttsService.initialize());
+      preWarmPromises.push(preWarmDaemon('TTS daemon', () => ttsService.initialize()));
     }
 
     if (config.qwenTts.enabled && config.qwenTts.preWarmDaemon) {
       console.log('Pre-warming Qwen TTS daemons (Base + CustomVoice)...');
       preWarmPromises.push(
-        qwenTtsBaseService.initialize(),
-        qwenTtsCustomVoiceService.initialize(),
+        preWarmDaemon('Qwen TTS Base daemon', () => qwenTtsBaseService.initialize()),
+        preWarmDaemon('Qwen TTS CustomVoice daemon', () => qwenTtsCustomVoiceService.initialize()),
       );
     }
 
     if (config.pocketTts.enabled && config.pocketTts.preWarmDaemon) {
       console.log('Pre-warming Pocket TTS daemon...');
-      preWarmPromises.push(pocketTtsService.initialize());
+      preWarmPromises.push(preWarmDaemon('Pocket TTS daemon', () => pocketTtsService.initialize()));
     }
 
     if (config.diarization.enabled && config.diarization.preWarmDaemon) {
       console.log('Pre-warming diarization daemon...');
-      preWarmPromises.push(diarizationService.initialize());
+      preWarmPromises.push(preWarmDaemon('Diarization daemon', () => diarizationService.initialize()));
     }
 
     await Promise.all(preWarmPromises);

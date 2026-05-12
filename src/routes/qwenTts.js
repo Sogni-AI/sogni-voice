@@ -13,6 +13,7 @@ import { tempFileManager } from '../utils/tempFile.js';
 import { requestHasValidApiKey } from '../utils/apiKey.js';
 
 const execFileAsync = promisify(execFile);
+const OPTIONAL_QWEN_STATUS_TIMEOUT_MS = 5000;
 
 // Helper to check if Qwen TTS is enabled
 const checkEnabled = (request, h) => {
@@ -70,6 +71,61 @@ const assertRegularArchiveFile = async (filePath, label) => {
     throw Boom.badRequest(`Invalid ZIP file: ${label} must be a regular file`);
   }
 };
+
+const initializeQwenService = async (name, service, options = {}) => {
+  const { timeoutMs = 0 } = options;
+
+  if (service.isReady?.()) {
+    return {
+      name,
+      ready: true,
+      info: service.getModelInfo(),
+    };
+  }
+
+  const initializePromise = service.initialize()
+    .then(() => ({
+      name,
+      ready: true,
+      info: service.getModelInfo(),
+    }))
+    .catch((error) => {
+      console.error(`Qwen TTS ${name} daemon unavailable:`, error);
+      return {
+        name,
+        ready: false,
+        info: service.getModelInfo(),
+        error,
+      };
+    });
+
+  if (!timeoutMs) {
+    return initializePromise;
+  }
+
+  let timeoutId;
+  try {
+    return await Promise.race([
+      initializePromise,
+      new Promise((resolve) => {
+        timeoutId = setTimeout(() => {
+          resolve({
+            name,
+            ready: false,
+            info: service.getModelInfo(),
+            error: new Error(`${name} daemon initialization is still in progress`),
+          });
+        }, timeoutMs);
+      }),
+    ]);
+  } finally {
+    if (timeoutId) {
+      clearTimeout(timeoutId);
+    }
+  }
+};
+
+const getErrorMessage = (error) => error?.message || String(error);
 
 export const qwenTtsRoutes = [
   // Standard TTS generation
@@ -527,31 +583,47 @@ export const qwenTtsRoutes = [
     },
     handler: async (request, h) => {
       try {
-        // Initialize both daemons (no-op if already running)
-        await Promise.all([
-          qwenTtsBaseService.initialize(),
-          qwenTtsCustomVoiceService.initialize(),
+        const [baseStatus, customVoiceStatus] = await Promise.all([
+          initializeQwenService('Base', qwenTtsBaseService),
+          initializeQwenService('CustomVoice', qwenTtsCustomVoiceService, {
+            timeoutMs: OPTIONAL_QWEN_STATUS_TIMEOUT_MS,
+          }),
         ]);
 
-        // Get info from both daemons and merge features
-        const baseInfo = qwenTtsBaseService.getModelInfo();
-        const customVoiceInfo = qwenTtsCustomVoiceService.getModelInfo();
+        const readyStatuses = [baseStatus, customVoiceStatus].filter((status) => status.ready);
+        if (readyStatuses.length === 0) {
+          throw Boom.serverUnavailable('Qwen TTS is enabled, but no Qwen daemons are available');
+        }
 
-        // Use CustomVoice for speaker list (has full speaker names)
-        const voices = customVoiceInfo.voices.length > 0
-          ? customVoiceInfo.voices
-          : qwenTtsCustomVoiceService.listVoices();
+        const baseInfo = baseStatus.info;
+        const customVoiceInfo = customVoiceStatus.info;
 
-        // Get clones from Base service
-        const clonesResult = hasCloneAccess(request)
-          ? await qwenTtsBaseService.listVoiceClones()
-          : { clones: [] };
+        const voices = customVoiceStatus.ready
+          ? (
+              customVoiceInfo.voices.length > 0
+                ? customVoiceInfo.voices
+                : qwenTtsCustomVoiceService.listVoices()
+            )
+          : baseInfo.voices;
 
-        // Merge features from both daemons
+        let clonesResult = { clones: [] };
+        if (baseStatus.ready && hasCloneAccess(request)) {
+          try {
+            clonesResult = await qwenTtsBaseService.listVoiceClones();
+          } catch (error) {
+            console.error('Qwen TTS list voice clones error:', error);
+          }
+        }
+
         const allFeatures = [...new Set([
-          ...baseInfo.features,
-          ...customVoiceInfo.features,
+          ...readyStatuses.flatMap((status) => status.info.features || []),
         ])];
+        const unavailableDaemons = [baseStatus, customVoiceStatus]
+          .filter((status) => !status.ready)
+          .map((status) => ({
+            name: status.name,
+            error: getErrorMessage(status.error),
+          }));
 
         return {
           voices,
@@ -563,6 +635,8 @@ export const qwenTtsRoutes = [
             customVoice: customVoiceInfo.variant || config.qwenTts.customVoiceModelVariant,
           },
           features: allFeatures,
+          status: unavailableDaemons.length > 0 ? 'degraded' : 'ready',
+          unavailableDaemons,
         };
       } catch (error) {
         if (error.isBoom) throw error;

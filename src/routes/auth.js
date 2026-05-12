@@ -21,6 +21,13 @@ const getVoiceCloneImportStatus = () => {
   };
 };
 
+const getServiceStatus = () => ({
+  tts: { enabled: Boolean(config.tts?.enabled) },
+  transcription: { enabled: Boolean(config.transcription?.enabled) },
+  pocketTts: { enabled: Boolean(config.pocketTts?.enabled) },
+  qwenTts: { enabled: Boolean(config.qwenTts?.enabled) },
+});
+
 export const authRoutes = [
   {
     method: 'GET',
@@ -32,12 +39,14 @@ export const authRoutes = [
     },
     handler: async (request, h) => {
       const voiceCloneImports = getVoiceCloneImportStatus();
+      const services = getServiceStatus();
 
       return {
         authEnabled: config.auth.enabled,
         apiKeyConfigured: Boolean(config.auth.apiKey),
         dangerouslyAllowImports: Boolean(config.auth.dangerouslyAllowImports),
         voiceCloneImports,
+        services,
       };
     },
   },

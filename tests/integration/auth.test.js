@@ -20,6 +20,7 @@ describe('Authentication Integration Tests', () => {
             dangerouslyAllowVoiceCloning: false,
           },
           tts: {
+            enabled: true,
             modelId: 'test',
             defaultVoice: 'af_heart',
             defaultSpeed: 1.0,
@@ -28,11 +29,13 @@ describe('Authentication Integration Tests', () => {
             preWarmDaemon: false,
           },
           transcription: {
+            enabled: true,
             timeout: 300000,
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
           },
           upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
+          pocketTts: { enabled: false },
           qwenTts: { enabled: false },
         },
       }));
@@ -68,6 +71,12 @@ describe('Authentication Integration Tests', () => {
         enabled: false,
         mode: 'blocked',
       });
+      expect(payload.services).toEqual({
+        tts: { enabled: true },
+        transcription: { enabled: true },
+        pocketTts: { enabled: false },
+        qwenTts: { enabled: false },
+      });
     });
 
     it('GET /health should be accessible without API key', async () => {
@@ -100,6 +109,7 @@ describe('Authentication Integration Tests', () => {
             dangerouslyAllowVoiceCloning: false,
           },
           tts: {
+            enabled: true,
             modelId: 'test',
             defaultVoice: 'af_heart',
             defaultSpeed: 1.0,
@@ -108,12 +118,14 @@ describe('Authentication Integration Tests', () => {
             preWarmDaemon: false,
           },
           transcription: {
+            enabled: true,
             timeout: 300000,
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
           },
           upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
-          qwenTts: { enabled: false },
+          pocketTts: { enabled: true },
+          qwenTts: { enabled: true },
         },
       }));
 
@@ -155,6 +167,12 @@ describe('Authentication Integration Tests', () => {
       expect(payload.voiceCloneImports).toEqual({
         enabled: true,
         mode: 'api_key',
+      });
+      expect(payload.services).toEqual({
+        tts: { enabled: true },
+        transcription: { enabled: true },
+        pocketTts: { enabled: true },
+        qwenTts: { enabled: true },
       });
     });
 

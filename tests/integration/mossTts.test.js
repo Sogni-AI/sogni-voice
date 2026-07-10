@@ -82,7 +82,7 @@ vi.mock('../../src/config/index.js', () => ({
       modelVariant: 'base-0.6b',
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',
-      defaultVoice: 'Chelsie',
+      defaultVoice: 'Ryan',
       defaultLanguage: 'English',
       timeout: 300000,
       timeoutPerChar: 120,

@@ -8,7 +8,11 @@ import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { join, basename } from 'node:path';
 import { config } from '../config/index.js';
-import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../services/qwenTts.js';
+import {
+  qwenTtsBaseService,
+  qwenTtsCustomVoiceService,
+  qwenTtsVoiceDesignService,
+} from '../services/qwenTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import { requestHasValidApiKey } from '../utils/apiKey.js';
 
@@ -166,6 +170,7 @@ export const qwenTtsRoutes = [
 
         const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, {
           speaker: voice,
+          language,
           outputPath,
         });
 
@@ -238,6 +243,8 @@ export const qwenTtsRoutes = [
             .description('Speaker voice to use'),
           instruct: Joi.string().required().min(1).max(500)
             .description('Emotion/style instruction (e.g., "Very happy and excited")'),
+          language: Joi.string().default(config.qwenTts.defaultLanguage)
+            .description('Language for synthesis'),
           format: Joi.string().valid('wav', 'opus', 'buffer').default('wav')
             .description('Output format'),
         }),
@@ -250,7 +257,13 @@ export const qwenTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, speaker, instruct, format: payloadFormat } = request.payload;
+        const {
+          text,
+          speaker,
+          instruct,
+          language,
+          format: payloadFormat,
+        } = request.payload;
         const format = request.query.format || payloadFormat;
 
         // Use the CustomVoice daemon for style instructions
@@ -263,7 +276,12 @@ export const qwenTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, { speaker, instruct, outputPath });
+        const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, {
+          speaker,
+          instruct,
+          language,
+          outputPath,
+        });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -275,6 +293,7 @@ export const qwenTtsRoutes = [
             audio: wavBuffer.toString('base64'),
             speaker,
             instruct,
+            language,
             format: 'wav',
             duration: result.duration,
           };
@@ -326,6 +345,8 @@ export const qwenTtsRoutes = [
             .description('Text to convert to speech'),
           instruct: Joi.string().required().min(1).max(500)
             .description('Voice description (e.g., "A deep male voice with calm tone")'),
+          language: Joi.string().default(config.qwenTts.defaultLanguage)
+            .description('Language for synthesis'),
           format: Joi.string().valid('wav', 'opus', 'buffer').default('wav')
             .description('Output format'),
         }),
@@ -338,20 +359,29 @@ export const qwenTtsRoutes = [
       let tempDir = null;
 
       try {
-        const { text, instruct, format: payloadFormat } = request.payload;
+        const {
+          text,
+          instruct,
+          language,
+          format: payloadFormat,
+        } = request.payload;
         const format = request.query.format || payloadFormat;
 
         // VoiceDesign requires a specific model variant (not Base or CustomVoice)
-        await qwenTtsBaseService.initialize();
+        await qwenTtsVoiceDesignService.initialize();
 
-        if (!qwenTtsBaseService.supportsFeature('voice_design')) {
+        if (!qwenTtsVoiceDesignService.supportsFeature('voice_design')) {
           throw Boom.badRequest('voice_design feature requires the VoiceDesign model variant');
         }
 
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsBaseService.generateVoiceDesign(text, { instruct, outputPath });
+        const result = await qwenTtsVoiceDesignService.generateVoiceDesign(text, {
+          instruct,
+          language,
+          outputPath,
+        });
 
         const wavBuffer = await readFile(outputPath);
 
@@ -362,6 +392,7 @@ export const qwenTtsRoutes = [
             success: true,
             audio: wavBuffer.toString('base64'),
             instruct,
+            language,
             format: 'wav',
             duration: result.duration,
           };
@@ -633,8 +664,27 @@ export const qwenTtsRoutes = [
           modelVariants: {
             base: baseInfo.variant || config.qwenTts.baseModelVariant,
             customVoice: customVoiceInfo.variant || config.qwenTts.customVoiceModelVariant,
+            voiceDesign: config.qwenTts.voiceDesignModelVariant,
           },
-          features: allFeatures,
+          backend: 'mlx',
+          models: {
+            base: {
+              model: baseInfo.model,
+              revision: baseInfo.revision,
+              precision: baseInfo.precision || config.qwenTts.mlxPrecision,
+            },
+            customVoice: {
+              model: customVoiceInfo.model,
+              revision: customVoiceInfo.revision,
+              precision: customVoiceInfo.precision || config.qwenTts.mlxPrecision,
+            },
+            voiceDesign: {
+              variant: config.qwenTts.voiceDesignModelVariant,
+              precision: config.qwenTts.mlxPrecision,
+              lazy: !qwenTtsVoiceDesignService.isReady(),
+            },
+          },
+          features: [...new Set([...allFeatures, 'voice_design'])],
           status: unavailableDaemons.length > 0 ? 'degraded' : 'ready',
           unavailableDaemons,
         };
@@ -945,6 +995,14 @@ export const qwenTtsRoutes = [
         const validation = await qwenTtsBaseService.validateVoiceClone(cloneFilePath);
         if (!validation.valid) {
           throw Boom.badRequest(`Invalid voice clone file: ${validation.error || 'unknown error'}`);
+        }
+        if (validation.compatible === false) {
+          const requiredVariant = validation.embeddingDim === 1024
+            ? 'base-0.6b'
+            : 'base-1.7b';
+          throw Boom.badRequest(
+            `Voice clone is valid but requires ${requiredVariant}; configure the matching QWEN_TTS_BASE_MODEL`,
+          );
         }
 
         // Import via daemon (loads, converts to safetensors, caches)

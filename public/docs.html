@@ -865,7 +865,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
   <details class="section">
     <summary><h2>4. TTS (Text-to-Speech) - Qwen3</h2></summary>
     <div class="section-content">
-    <p>Qwen3-TTS is a powerful multilingual TTS model with voice cloning, emotion control, and voice design capabilities. Requires <code>QWEN_TTS_ENABLED=1</code>. Supports 11 languages including English, Chinese, Japanese, Korean, French, German, Spanish, and more.</p>
+    <p>Qwen3-TTS runs through pinned 8-bit MLX-Audio models on Apple Silicon, with separate daemons for voice cloning, emotion/style control, and lazy VoiceDesign. Requires <code>QWEN_TTS_ENABLED=1</code>. It supports Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish, plus automatic language selection.</p>
 
     <h3>Generate Speech</h3>
     <div class="endpoint">
@@ -888,7 +888,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
       <tr>
         <td><code>voice</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Chelsie</td>
+        <td>Ryan</td>
         <td>Voice to use (see /qwen-tts/voices for available voices)</td>
       </tr>
       <tr>
@@ -908,20 +908,20 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/qwen-tts \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello, world!", "voice": "Chelsie"}' \
+  -d '{"text": "Hello, world!", "voice": "Ryan"}' \
   --output output.wav</code></pre>
 
     <h4>Opus via query-string format override</h4>
     <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello, world!", "voice": "Chelsie"}' \
+  -d '{"text": "Hello, world!", "voice": "Ryan"}' \
   --output output.opus</code></pre>
 
     <h3>Custom Voice (Emotion/Style Control)</h3>
     <div class="endpoint">
       <span class="method">POST</span> /qwen-tts/custom-voice
     </div>
-    <p>Generate speech with emotion and style instructions. Requires the CustomVoice model variant.</p>
+    <p>Generate speech with emotion and style instructions using the dedicated CustomVoice daemon.</p>
 
     <table>
       <tr>
@@ -937,12 +937,17 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
       <tr>
         <td><code>speaker</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Speaker voice to use (default: Chelsie)</td>
+        <td>Speaker voice to use (default: Ryan)</td>
       </tr>
       <tr>
         <td><code>instruct</code> <span class="required">*</span></td>
         <td>string</td>
         <td>Emotion/style instruction (e.g., "Very happy and excited", "Speak slowly with a calm tone")</td>
+      </tr>
+      <tr>
+        <td><code>language</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Language for synthesis (default: English)</td>
       </tr>
       <tr>
         <td><code>format</code> <span class="optional">(optional)</span></td>
@@ -954,20 +959,20 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/qwen-tts/custom-voice \
   -H "Content-Type: application/json" \
-  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Very happy and enthusiastic"}' \
+  -d '{"text": "I am so excited!", "speaker": "Ryan", "instruct": "Very happy and enthusiastic", "language": "English"}' \
   --output excited.wav</code></pre>
 
     <h4>Opus via query-string format override</h4>
     <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts/custom-voice?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Very happy and enthusiastic"}' \
+  -d '{"text": "I am so excited!", "speaker": "Ryan", "instruct": "Very happy and enthusiastic", "language": "English"}' \
   --output excited.opus</code></pre>
 
     <h3>Voice Design (Create Voice from Description)</h3>
     <div class="endpoint">
       <span class="method">POST</span> /qwen-tts/voice-design
     </div>
-    <p>Generate speech using a voice created from a text description. Requires the VoiceDesign model variant.</p>
+    <p>Generate speech using a voice created from a text description. The dedicated VoiceDesign daemon downloads and loads lazily on its first request.</p>
 
     <table>
       <tr>
@@ -986,6 +991,11 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
         <td>Voice description (e.g., "A deep male voice with a warm, calm tone")</td>
       </tr>
       <tr>
+        <td><code>language</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Language for synthesis (default: English)</td>
+      </tr>
+      <tr>
         <td><code>format</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>Output format: "wav", "opus", or "buffer". Also accepted as <code>?format=</code> on this endpoint.</td>
@@ -995,13 +1005,13 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
     <h4>cURL Example</h4>
     <pre><code>curl -X POST https://voice.sogni.ai/qwen-tts/voice-design \
   -H "Content-Type: application/json" \
-  -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone"}' \
+  -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone", "language": "English"}' \
   --output designed_voice.wav</code></pre>
 
     <h4>Opus via query-string format override</h4>
     <pre><code>curl -X POST 'https://voice.sogni.ai/qwen-tts/voice-design?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone"}' \
+  -d '{"text": "Welcome to our service.", "instruct": "A deep male voice with calm, professional tone", "language": "English"}' \
   --output designed_voice.opus</code></pre>
 
     <h3>List Voices</h3>
@@ -1011,22 +1021,25 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
 
     <h4>Response</h4>
     <pre><code>{
-  "voices": ["Chelsie", "Ethan", "Serena", "Vivian", "Ryan", "Aiden", "Eric", "Dylan"],
+  "voices": ["Ryan", "Aiden", "Serena", "Vivian", "Uncle_Fu", "Dylan", "Eric", "Ono_Anna", "Sohee"],
   "clones": ["my_clone"],
-  "default": "Chelsie",
+  "default": "Ryan",
   "defaultLanguage": "English",
   "modelVariants": {
     "base": "base-0.6b",
-    "customVoice": "custom-voice"
+    "customVoice": "custom-voice",
+    "voiceDesign": "voice-design"
   },
-  "features": ["voice_cloning", "custom_voice"]
+  "backend": "mlx",
+  "features": ["tts", "voice_cloning", "custom_voice", "voice_design"],
+  "status": "ready"
 }</code></pre>
 
     <h3>Create Voice Clone</h3>
     <div class="endpoint">
       <span class="method">POST</span> /qwen-tts/voices/clone
     </div>
-    <p>Upload a reference audio file with its transcript to create a voice clone. Requires the Base model variant.</p>
+    <p>Upload a reference audio file with its transcript to create a voice clone using the Base daemon.</p>
 
     <table>
       <tr>
@@ -1037,7 +1050,7 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
       <tr>
         <td><code>audio</code> <span class="required">*</span></td>
         <td>File</td>
-        <td>Reference audio file (3-10 seconds, WAV/MP3/OGG)</td>
+        <td>Reference audio file (1-30 seconds accepted; 3-10 clean seconds recommended, WAV/MP3/OGG)</td>
       </tr>
       <tr>
         <td><code>transcript</code> <span class="required">*</span></td>
@@ -1180,6 +1193,7 @@ with open('my_voice.zip', 'wb') as f:
       <span class="method">POST</span> /qwen-tts/voices/clone/import
     </div>
     <p>Import a previously exported voice clone from a ZIP file. The ZIP must contain a <code>.safetensors</code> file.</p>
+    <p>Safe ICL <code>.safetensors</code> clones from the former PyTorch backend migrate lazily: codec tokens are decoded, the reconstructed speaker is checked against the stored embedding, and the reference is cached. Clones created with the 0.6B model require <code>base-0.6b</code>; 1.7B clones require <code>base-1.7b</code>. Pickle files remain rejected.</p>
     <p><strong>Import access:</strong> If <code>voiceCloneImports.mode</code> is <code>api_key</code>, provide a valid API key via <code>X-API-Key</code> or <code>Authorization: Bearer</code>. If it is <code>blocked</code>, the server must set <code>AUTH_API_KEY</code> or <code>DANGEROUSLY_ALLOW_IMPORTS=1</code> before imports will work.</p>
 
     <table>

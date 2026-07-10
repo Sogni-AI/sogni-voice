@@ -103,15 +103,17 @@ export const config = {
     // Dual-daemon mode: run both Base (voice cloning) and CustomVoice (style) models
     baseModelVariant: process.env.QWEN_TTS_BASE_MODEL || 'base-0.6b',
     customVoiceModelVariant: process.env.QWEN_TTS_CUSTOM_VOICE_MODEL || 'custom-voice',
-    defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+    voiceDesignModelVariant: process.env.QWEN_TTS_VOICE_DESIGN_MODEL || 'voice-design',
+    pythonPath: process.env.QWEN_TTS_PYTHON_PATH || './.venv-qwen-tts/bin/python3',
+    mlxPrecision: process.env.QWEN_TTS_MLX_PRECISION || '8bit',
+    defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan',
     defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
-    timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 300000, // 5 minutes for voice cloning
-    // Per-char generation budget used to scale the timeout for long-form text.
-    // Observed MPS performance is ~10s per 100-char chunk; 120ms/char adds ~20% headroom.
-    timeoutPerChar: parseInt(process.env.QWEN_TTS_TIMEOUT_PER_CHAR_MS, 10) || 120,
-    timeoutMax: parseInt(process.env.QWEN_TTS_TIMEOUT_MAX, 10) || 1800000, // 30 min ceiling
-    daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 180000,
-    preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_TTS, true),
+    timeout: parseInt(process.env.QWEN_TTS_TIMEOUT, 10) || 120000,
+    timeoutPerChar: parseInt(process.env.QWEN_TTS_TIMEOUT_PER_CHAR_MS, 10) || 40,
+    timeoutMax: parseInt(process.env.QWEN_TTS_TIMEOUT_MAX, 10) || 900000,
+    daemonStartupTimeout: parseInt(process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_TTS, false),
+    preWarmVoiceDesign: parseEnvBool(process.env.PREWARM_QWEN_TTS_VOICE_DESIGN, false),
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
   },
 };

@@ -22,10 +22,15 @@ vi.mock('../../../src/config/index.js', () => ({
       enabled: true,
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',
-      defaultVoice: 'Chelsie',
+      voiceDesignModelVariant: 'voice-design',
+      pythonPath: './.venv-qwen-tts/bin/python3',
+      mlxPrecision: '8bit',
+      defaultVoice: 'Ryan',
       defaultLanguage: 'English',
-      timeout: 300000,
-      daemonStartupTimeout: 180000,
+      timeout: 120000,
+      timeoutPerChar: 40,
+      timeoutMax: 900000,
+      daemonStartupTimeout: 300000,
       voiceClonesDir: './voice_clones',
     },
   },
@@ -82,7 +87,11 @@ describe('QwenTTSService', () => {
 
   afterEach(async () => {
     try {
-      await service.shutdown();
+      const shutdownPromise = service.shutdown();
+      if (service.daemonProcess) {
+        mockProcess.emit('close', 0);
+      }
+      await shutdownPromise;
     } catch (e) {
       // Ignore shutdown errors in tests
     }
@@ -90,15 +99,26 @@ describe('QwenTTSService', () => {
 
   describe('initialize', () => {
     it('should start daemon and wait for ready signal', async () => {
+      const { spawn: freshSpawn } = await import('node:child_process');
       const initPromise = service.initialize();
 
       // Simulate daemon sending ready signal with model info
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Chelsie","Ethan"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Ryan","Aiden"],"backend":"mlx","model":"mlx-community/qwen","revision":"pinned","precision":"8bit","streaming":true}\n');
       }, 10);
 
       await initPromise;
       expect(service.isReady()).toBe(true);
+      expect(freshSpawn).toHaveBeenCalledWith(
+        expect.stringContaining('.venv-qwen-tts/bin/python3'),
+        [expect.stringContaining('qwen_tts_daemon.py')],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            QWEN_TTS_MODEL_VARIANT: 'base-0.6b',
+            QWEN_TTS_MLX_PRECISION: '8bit',
+          }),
+        }),
+      );
     });
 
     it('should reject if daemon fails to start', async () => {
@@ -141,7 +161,7 @@ describe('QwenTTSService', () => {
     beforeEach(async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Chelsie"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Ryan"]}\n');
       }, 10);
       await initPromise;
     });
@@ -155,7 +175,7 @@ describe('QwenTTSService', () => {
       const request = JSON.parse(mockStdin.lastWrite);
       expect(request.type).toBe('generate');
       expect(request.text).toBe('Hello world');
-      expect(request.voice).toBe('Chelsie');
+      expect(request.voice).toBe('Ryan');
       expect(request.language).toBe('English');
       expect(request.output_path).toBe('/tmp/output.wav');
 
@@ -164,25 +184,25 @@ describe('QwenTTSService', () => {
       const result = await generatePromise;
       expect(result.outputPath).toBe('/tmp/output.wav');
       expect(result.duration).toBe(1.5);
-      expect(result.voice).toBe('Chelsie');
+      expect(result.voice).toBe('Ryan');
     });
 
     it('should generate audio with custom voice and language', async () => {
       const generatePromise = service.generate('Hello world', {
-        voice: 'Ethan',
+        voice: 'Aiden',
         language: 'Chinese',
         outputPath: '/tmp/output.wav',
       });
 
       await new Promise(resolve => setTimeout(resolve, 10));
       const request = JSON.parse(mockStdin.lastWrite);
-      expect(request.voice).toBe('Ethan');
+      expect(request.voice).toBe('Aiden');
       expect(request.language).toBe('Chinese');
 
       mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":2.0}\n`);
 
       const result = await generatePromise;
-      expect(result.voice).toBe('Ethan');
+      expect(result.voice).toBe('Aiden');
       expect(result.language).toBe('Chinese');
     });
 
@@ -221,15 +241,16 @@ describe('QwenTTSService', () => {
     beforeEach(async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"custom-voice","features":["tts","custom_voice"],"voices":["Chelsie"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"custom-voice","features":["tts","custom_voice"],"voices":["Ryan"]}\n');
       }, 10);
       await initPromise;
     });
 
     it('should generate audio with emotion instruction', async () => {
       const generatePromise = service.generateCustomVoice('Hello world', {
-        speaker: 'Chelsie',
+        speaker: 'Ryan',
         instruct: 'Very happy and excited',
+        language: 'French',
         outputPath: '/tmp/output.wav',
       });
 
@@ -237,15 +258,17 @@ describe('QwenTTSService', () => {
       const request = JSON.parse(mockStdin.lastWrite);
       expect(request.type).toBe('generate_custom_voice');
       expect(request.text).toBe('Hello world');
-      expect(request.speaker).toBe('Chelsie');
+      expect(request.speaker).toBe('Ryan');
       expect(request.instruct).toBe('Very happy and excited');
+      expect(request.language).toBe('French');
 
       mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.5}\n`);
 
       const result = await generatePromise;
       expect(result.outputPath).toBe('/tmp/output.wav');
-      expect(result.speaker).toBe('Chelsie');
+      expect(result.speaker).toBe('Ryan');
       expect(result.instruct).toBe('Very happy and excited');
+      expect(result.language).toBe('French');
     });
 
     it('should default instruct to empty string when not provided', async () => {
@@ -269,7 +292,7 @@ describe('QwenTTSService', () => {
     beforeEach(async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"voice-design","features":["tts","voice_design"],"voices":["Chelsie"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"voice-design","features":["tts","voice_design"],"voices":[]}\n');
       }, 10);
       await initPromise;
     });
@@ -277,6 +300,7 @@ describe('QwenTTSService', () => {
     it('should generate audio with voice description', async () => {
       const generatePromise = service.generateVoiceDesign('Hello world', {
         instruct: 'A deep male voice with calm tone',
+        language: 'German',
         outputPath: '/tmp/output.wav',
       });
 
@@ -285,12 +309,14 @@ describe('QwenTTSService', () => {
       expect(request.type).toBe('generate_voice_design');
       expect(request.text).toBe('Hello world');
       expect(request.instruct).toBe('A deep male voice with calm tone');
+      expect(request.language).toBe('German');
 
       mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/output.wav","duration":1.5}\n`);
 
       const result = await generatePromise;
       expect(result.outputPath).toBe('/tmp/output.wav');
       expect(result.instruct).toBe('A deep male voice with calm tone');
+      expect(result.language).toBe('German');
     });
 
     it('should require instruct parameter', async () => {
@@ -304,7 +330,7 @@ describe('QwenTTSService', () => {
     beforeEach(async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Chelsie"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Ryan"]}\n');
       }, 10);
       await initPromise;
     });
@@ -457,32 +483,36 @@ describe('QwenTTSService', () => {
     it('should return model info', async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Chelsie","Ethan"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":["tts","voice_cloning"],"voices":["Ryan","Aiden"],"backend":"mlx","model":"mlx-community/qwen","revision":"pinned","precision":"8bit","streaming":true}\n');
       }, 10);
       await initPromise;
 
       const info = service.getModelInfo();
       expect(info.variant).toBe('base-1.7b');
       expect(info.features).toContain('voice_cloning');
-      expect(info.voices).toContain('Chelsie');
+      expect(info.voices).toContain('Ryan');
+      expect(info.backend).toBe('mlx');
+      expect(info.precision).toBe('8bit');
+      expect(info.revision).toBe('pinned');
+      expect(info.streaming).toBe(true);
     });
 
     it('should list voices', async () => {
       const initPromise = service.initialize();
       setTimeout(() => {
-        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":[],"voices":["Chelsie","Ethan","Serena"]}\n');
+        mockStdout.push('{"status":"ready","model_variant":"base-1.7b","features":[],"voices":["Ryan","Aiden","Serena"]}\n');
       }, 10);
       await initPromise;
 
       const voices = service.listVoices();
-      expect(voices).toContain('Chelsie');
-      expect(voices).toContain('Ethan');
+      expect(voices).toContain('Ryan');
+      expect(voices).toContain('Aiden');
       expect(Array.isArray(voices)).toBe(true);
     });
 
     it('should return default voices when daemon not initialized', () => {
       const voices = service.listVoices();
-      expect(voices).toContain('Chelsie');
+      expect(voices).toContain('Ryan');
       expect(voices.length).toBeGreaterThan(0);
     });
 
@@ -559,10 +589,12 @@ describe('QwenTTSService', () => {
         expect(request.type).toBe('validate_voice_clone');
         expect(request.file_path).toBe('/tmp/test.safetensors');
 
-        mockStdout.push(`{"id":"${request.id}","success":true,"valid":true}\n`);
+        mockStdout.push(`{"id":"${request.id}","success":true,"valid":true,"compatible":false,"embedding_dim":2048}\n`);
 
         const result = await validatePromise;
         expect(result.valid).toBe(true);
+        expect(result.compatible).toBe(false);
+        expect(result.embeddingDim).toBe(2048);
       });
 
       it('should return invalid for an unsupported voice clone file', async () => {

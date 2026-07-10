@@ -38,6 +38,16 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.DAEMON_STARTUP_TIMEOUT, 10) || 120000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_TRANSCRIPTION, true),
   },
+  qwenAsr: {
+    enabled: parseEnvBool(process.env.QWEN_ASR_ENABLED, false),
+    modelId: process.env.QWEN_ASR_MODEL_ID || 'mlx-community/Qwen3-ASR-0.6B-8bit',
+    alignerModelId: process.env.QWEN_ASR_ALIGNER_MODEL_ID || 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit',
+    pythonPath: process.env.QWEN_ASR_PYTHON_PATH || './.venv-qwen-asr/bin/python3',
+    defaultLanguage: process.env.QWEN_ASR_DEFAULT_LANGUAGE || 'auto',
+    timeout: parseInt(process.env.QWEN_ASR_TIMEOUT, 10) || 300000,
+    daemonStartupTimeout: parseInt(process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_ASR, false),
+  },
   diarization: {
     enabled: parseEnvBool(process.env.DIARIZATION_ENABLED, false),
     modelId: process.env.DIARIZATION_MODEL_ID || 'pyannote/speaker-diarization-community-1',

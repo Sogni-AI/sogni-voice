@@ -8,6 +8,7 @@ out/
 *.mp3
 .claude/
 .venv/
+.venv-*/
 models/
 __pycache__/
 voice_clones/*.pkl

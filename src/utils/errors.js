@@ -12,6 +12,18 @@ export class TranscriptionError extends Error {
   }
 }
 
+export class QwenASRError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'QwenASRError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}
+
 export class TTSError extends Error {
   constructor(message, cause = null) {
     super(message);

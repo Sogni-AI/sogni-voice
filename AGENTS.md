@@ -51,6 +51,9 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Services**:
 - `transcription.js` → `scripts/parakeet_daemon.py`: Uses Parakeet TDT (parakeet-mlx) for transcription
   - Supports sentence-level and word-level timestamp extraction
+- `qwenAsr.js` → `scripts/qwen_asr_daemon.py`: Uses MLX Qwen3-ASR 0.6B plus lazy Qwen3 ForcedAligner
+  - Uses an isolated `.venv-qwen-asr` with MLX-Audio 0.4.x
+  - Supports 30-language ASR, automatic language detection, and 11-language alignment
 - `diarization.js` → `scripts/diarize_daemon.py`: Uses pyannote Community-1 for optional speaker identification
   - Supports exact or bounded speaker counts and exclusive diarization for transcript alignment
 - `tts.js` → `scripts/tts_daemon.py`: Uses mlx-audio library with Kokoro model for TTS
@@ -73,7 +76,9 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Health**: `GET /health`
 
 **Transcription**: `POST /transcribe`
-- Parameters: `file` (required), `timestamps`, `wordTimestamps`
+- Parameters: `file` (required), `engine`, `language`, `timestamps`, `wordTimestamps`, speaker controls
+- `GET /transcription/models` - List Parakeet/Qwen3-ASR availability and capabilities
+- `POST /qwen-asr/align` - Align a known transcript to audio with Qwen3 ForcedAligner
 
 **Kokoro TTS**:
 - `POST /tts` - Generate speech (params: text, voice, speed, format, timestamps)
@@ -97,6 +102,14 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Transcription**:
 - `TRANSCRIBE_TIMEOUT` (300000ms), `DAEMON_STARTUP_TIMEOUT` (120000ms)
 - `PREWARM_TRANSCRIPTION` (true)
+
+**Qwen3-ASR**:
+- `QWEN_ASR_ENABLED` (false)
+- `QWEN_ASR_MODEL_ID` (mlx-community/Qwen3-ASR-0.6B-8bit)
+- `QWEN_ASR_ALIGNER_MODEL_ID` (mlx-community/Qwen3-ForcedAligner-0.6B-8bit)
+- `QWEN_ASR_PYTHON_PATH` (./.venv-qwen-asr/bin/python3)
+- `QWEN_ASR_TIMEOUT` (300000ms), `QWEN_ASR_DAEMON_STARTUP_TIMEOUT` (300000ms)
+- `PREWARM_QWEN_ASR` (false)
 
 **Speaker diarization**:
 - `DIARIZATION_ENABLED` (false), `DIARIZATION_MODEL_ID` (pyannote/speaker-diarization-community-1)
@@ -128,6 +141,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - **Parakeet TDT** (parakeet-mlx): Audio transcription (~2.5GB model, auto-downloads on first use)
 - **mlx-audio**: TTS via Kokoro model (~300MB, auto-downloads to `models/kokoro-tts/`)
 - **qwen-tts**: Qwen3-TTS for advanced features (optional, enabled via `QWEN_TTS_ENABLED`)
+- **mlx-audio 0.4.x**: Qwen3-ASR and ForcedAligner in isolated `.venv-qwen-asr/`
 - **ffmpeg**: Required for audio processing (`brew install ffmpeg`)
 - **uv**: Python package runner (`brew install uv`)
 
@@ -137,6 +151,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 sogni-voice/
 ├── scripts/
 │   ├── parakeet_daemon.py     # Transcription daemon
+│   ├── qwen_asr_daemon.py     # Qwen3-ASR + ForcedAligner daemon
 │   ├── tts_daemon.py          # Kokoro TTS daemon
 │   └── qwen_tts_daemon.py     # Qwen3-TTS daemon
 ├── src/

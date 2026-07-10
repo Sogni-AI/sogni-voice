@@ -418,6 +418,7 @@ select_tts_engines() {
         ENABLE_KOKORO=0
         ENABLE_QWEN=0
         ENABLE_PARAKEET=1
+        ENABLE_QWEN_ASR=0
         ENABLE_DIARIZATION=0
         QWEN_VARIANT="base-0.6b"
 
@@ -426,6 +427,7 @@ select_tts_engines() {
         print_info "- Kokoro TTS: disabled"
         print_info "- Qwen3-TTS: disabled"
         print_info "- Parakeet STT: enabled"
+        print_info "- Qwen3-ASR: disabled"
         print_info "- Speaker diarization: disabled (requires gated-model access)"
         return
     fi
@@ -468,23 +470,23 @@ select_tts_engines() {
     fi
 
     echo ""
-    local parakeet_options=(
-        "Enable Parakeet (STT) for transcription - Recommended"
-        "Skip Parakeet (no transcription support)"
+    local stt_options=(
+        "Parakeet TDT v3 (fast, 25 European languages) - Recommended"
+        "Qwen3-ASR 0.6B (30 languages, auto detection, forced alignment)"
     )
 
-    show_radio_menu "Enable Parakeet for speech-to-text?" 0 "${parakeet_options[@]}"
-    local parakeet_choice=$MENU_RESULT
+    show_checkbox_menu "Select Speech-to-Text Engines" "1 0" "${stt_options[@]}"
+    IFS=' ' read -ra stt_selected <<< "$MENU_RESULT"
+    ENABLE_PARAKEET=${stt_selected[0]}
+    ENABLE_QWEN_ASR=${stt_selected[1]}
 
-    if [ "$parakeet_choice" = "0" ]; then
-        ENABLE_PARAKEET=1
-        print_success "Parakeet (STT) enabled"
-    else
-        ENABLE_PARAKEET=0
-        print_warning "Parakeet (STT) disabled; transcription endpoints will be unavailable."
+    [ "$ENABLE_PARAKEET" = "1" ] && print_success "Parakeet (STT) enabled"
+    [ "$ENABLE_QWEN_ASR" = "1" ] && print_success "Qwen3-ASR + ForcedAligner enabled"
+    if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ]; then
+        print_warning "No speech-to-text engine selected; transcription will be unavailable."
     fi
 
-    if [ "$ENABLE_PARAKEET" = "1" ]; then
+    if [ "$ENABLE_PARAKEET" = "1" ] || [ "$ENABLE_QWEN_ASR" = "1" ]; then
         echo ""
         local diarization_options=(
             "Skip speaker identification (can be enabled later) - Recommended"
@@ -527,6 +529,11 @@ select_tts_engines() {
         echo -e "  ${CHECK} Parakeet (STT)"
     else
         echo -e "  ${CROSS} Parakeet (STT) (disabled)"
+    fi
+    if [ "$ENABLE_QWEN_ASR" = "1" ]; then
+        echo -e "  ${CHECK} Qwen3-ASR + ForcedAligner"
+    else
+        echo -e "  ${CROSS} Qwen3-ASR + ForcedAligner (disabled)"
     fi
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         echo -e "  ${CHECK} pyannote Community-1 speaker identification"
@@ -600,6 +607,14 @@ configure_environment() {
         upsert_env_key "TRANSCRIPTION_ENABLED" "1"
     else
         upsert_env_key "TRANSCRIPTION_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_QWEN_ASR" = "1" ]; then
+        upsert_env_key "QWEN_ASR_ENABLED" "1"
+        upsert_env_key "QWEN_ASR_MODEL_ID" "mlx-community/Qwen3-ASR-0.6B-8bit"
+        upsert_env_key "QWEN_ASR_ALIGNER_MODEL_ID" "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
+    else
+        upsert_env_key "QWEN_ASR_ENABLED" "0"
     fi
 
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
@@ -813,6 +828,30 @@ install_dependencies() {
     fi
 
     deactivate
+
+    # Qwen3-ASR needs the current MLX-Audio stack, while Kokoro intentionally
+    # remains on the older tested version in .venv. Keep those dependencies
+    # isolated so enabling ASR cannot destabilize existing TTS providers.
+    if [ "$ENABLE_QWEN_ASR" = "1" ]; then
+        if [ -d .venv-qwen-asr ] && ! .venv-qwen-asr/bin/python -c "import pip" >/dev/null 2>&1; then
+            local qwen_asr_backup=".venv-qwen-asr.backup.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Existing Qwen3-ASR environment is broken; moving it to $qwen_asr_backup"
+            mv .venv-qwen-asr "$qwen_asr_backup"
+        fi
+
+        if [ ! -d .venv-qwen-asr ]; then
+            print_info "Creating isolated Qwen3-ASR environment at .venv-qwen-asr/..."
+            # Python 3.11 has wheels for MLX-Audio and the Japanese/Korean
+            # alignment tokenizers. uv downloads it when it is not installed.
+            uv venv --seed --python 3.11 .venv-qwen-asr
+        fi
+
+        print_info "Installing MLX-Audio 0.4.x and alignment tokenizers for Qwen3-ASR..."
+        uv pip install --python .venv-qwen-asr/bin/python \
+            "mlx-audio>=0.4.5,<0.5" nagisa soynlp
+        print_success "Qwen3-ASR environment is ready"
+    fi
+
     print_success "All dependencies installed"
 
     if [ "$NON_INTERACTIVE" != "1" ]; then
@@ -939,6 +978,45 @@ setup_diarization_access() {
 # Predownload Models
 ################################################################################
 
+predownload_qwen_asr_models() {
+    if [ "$ENABLE_QWEN_ASR" != "1" ]; then
+        return
+    fi
+
+    print_info "Predownloading Qwen3-ASR and ForcedAligner (~2.2 GB total)..."
+    if .venv-qwen-asr/bin/python - <<'PY'
+import os
+from pathlib import Path
+from mlx_audio.stt import load
+
+def configured_value(key, default):
+    if os.environ.get(key):
+        return os.environ[key]
+    env_file = Path(".env")
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip() or default
+    return default
+
+asr_model = configured_value(
+    "QWEN_ASR_MODEL_ID", "mlx-community/Qwen3-ASR-0.6B-8bit"
+)
+aligner_model = configured_value(
+    "QWEN_ASR_ALIGNER_MODEL_ID",
+    "mlx-community/Qwen3-ForcedAligner-0.6B-8bit",
+)
+
+load(asr_model)
+load(aligner_model)
+PY
+    then
+        print_success "Qwen3-ASR and ForcedAligner downloaded"
+    else
+        print_warning "Qwen3-ASR model predownload failed; the server will retry on first use"
+    fi
+}
+
 predownload_models() {
     print_header "Step 8: Predownload Models"
 
@@ -1060,6 +1138,7 @@ else:
 PY
 
         deactivate
+        predownload_qwen_asr_models
         return
     fi
 
@@ -1196,6 +1275,7 @@ else:
 PY
 
     deactivate
+    predownload_qwen_asr_models
 
     echo ""
     read -p "Press Enter to continue..."
@@ -1238,6 +1318,11 @@ print_summary() {
     else
         printf '%b\n' "  ${CROSS} Parakeet (STT) disabled"
     fi
+    if [ "$ENABLE_QWEN_ASR" = "1" ]; then
+        printf '%b\n' "  ${CHECK} Qwen3-ASR + ForcedAligner enabled"
+    else
+        printf '%b\n' "  ${CROSS} Qwen3-ASR + ForcedAligner disabled"
+    fi
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         printf '%b\n' "  ${CHECK} pyannote Community-1 speaker identification enabled"
     else
@@ -1267,6 +1352,9 @@ print_summary() {
     echo "  ─────────────────── ─────────── ──────────────"
     if [ "$ENABLE_PARAKEET" = "1" ]; then
         echo "  Parakeet (STT)      ~2.5 GB     2-5 minutes"
+    fi
+    if [ "$ENABLE_QWEN_ASR" = "1" ]; then
+        echo "  Qwen3-ASR + aligner ~2.2 GB     2-5 minutes"
     fi
     if [ "$ENABLE_POCKET" = "1" ]; then
         echo "  Pocket TTS          ~200 MB     30-60 seconds"

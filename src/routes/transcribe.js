@@ -5,6 +5,7 @@ import { createWriteStream } from 'node:fs';
 import { open, stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
+import { qwenAsrService } from '../services/qwenAsr.js';
 import { diarizationService } from '../services/diarization.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import {
@@ -14,8 +15,44 @@ import {
   ALLOWED_AUDIO_EXTENSIONS,
 } from '../utils/audioValidation.js';
 import { mergeSpeakers, summarizeSpeakers } from '../utils/diarizationMerge.js';
+import {
+  QWEN_ASR_LANGUAGES,
+  QWEN_ASR_LANGUAGE_CODES,
+  QWEN_ALIGNER_LANGUAGES,
+} from '../utils/qwenAsrLanguages.js';
 
 export const transcribeRoutes = [
+  {
+    method: 'GET',
+    path: '/transcription/models',
+    options: {
+      description: 'List configured speech recognition providers and capabilities',
+      tags: ['api', 'transcription'],
+    },
+    handler: async () => ({
+      default: 'parakeet',
+      models: [
+        {
+          id: 'parakeet',
+          name: 'Parakeet TDT v3',
+          enabled: Boolean(config.transcription.enabled),
+          timestamps: ['sentence', 'word'],
+          description: 'Fast Apple Silicon transcription for 25 European languages.',
+        },
+        {
+          id: 'qwen3',
+          name: 'Qwen3-ASR 0.6B',
+          enabled: Boolean(config.qwenAsr.enabled),
+          model: config.qwenAsr.modelId,
+          alignerModel: config.qwenAsr.alignerModelId,
+          languages: QWEN_ASR_LANGUAGES,
+          alignmentLanguages: QWEN_ALIGNER_LANGUAGES,
+          timestamps: ['sentence', 'word'],
+          description: 'Multilingual ASR with language detection and forced alignment.',
+        },
+      ],
+    }),
+  },
   {
     method: 'POST',
     path: '/transcribe',
@@ -30,6 +67,11 @@ export const transcribeRoutes = [
       validate: {
         payload: Joi.object({
           file: Joi.any().required().description('Audio file to transcribe'),
+          engine: Joi.string().valid('parakeet', 'qwen3').optional()
+            .description('Speech recognition provider (default: parakeet)'),
+          language: Joi.string().valid('auto', ...QWEN_ASR_LANGUAGES, ...QWEN_ASR_LANGUAGE_CODES)
+            .insensitive().optional()
+            .description('Qwen3-ASR language name/code, or auto (default)'),
           timestamps: Joi.string().valid('true', 'false').optional()
             .description('Include sentence-level subtitle timings in response'),
           wordTimestamps: Joi.string().valid('true', 'false').optional()
@@ -51,12 +93,10 @@ export const transcribeRoutes = [
       let tempDir = null;
 
       try {
-        if (!config.transcription.enabled) {
-          throw Boom.serviceUnavailable('Transcription is disabled');
-        }
-
         const {
           file,
+          engine: engineParam,
+          language: languageParam,
           timestamps: timestampsParam,
           wordTimestamps: wordTimestampsParam,
           diarize: diarizeParam,
@@ -64,6 +104,13 @@ export const transcribeRoutes = [
           minSpeakers: minSpeakersParam,
           maxSpeakers: maxSpeakersParam,
         } = request.payload;
+        const engine = engineParam || 'parakeet';
+        if (engine === 'parakeet' && !config.transcription.enabled) {
+          throw Boom.serviceUnavailable('Parakeet transcription is disabled');
+        }
+        if (engine === 'qwen3' && !config.qwenAsr.enabled) {
+          throw Boom.serviceUnavailable('Qwen3-ASR is disabled');
+        }
         const timestamps = timestampsParam === 'true';
         const wordTimestamps = wordTimestampsParam === 'true';
         // Default diarize=true when the server can actually do it. Avoids noisy
@@ -122,8 +169,13 @@ export const transcribeRoutes = [
           diarizationDisabledReason = 'Diarization is disabled on this server';
         }
 
+        const selectedService = engine === 'qwen3' ? qwenAsrService : transcriptionService;
         const [transcribeOutcome, diarizeOutcome] = await Promise.allSettled([
-          transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps }),
+          selectedService.transcribe(tempFilePath, {
+            timestamps,
+            wordTimestamps,
+            ...(engine === 'qwen3' ? { language: languageParam || 'auto' } : {}),
+          }),
           wantDiarize
             ? diarizationService.diarize(tempFilePath, { numSpeakers, minSpeakers, maxSpeakers })
             : Promise.resolve(null),
@@ -158,6 +210,12 @@ export const transcribeRoutes = [
         if ((timestamps || wordTimestamps) && result.timestamps) {
           const tagged = speakerTurns ? mergeSpeakers(result.timestamps, speakerTurns) : result.timestamps;
           const response = { success: true, timestamps: tagged };
+          if (engine === 'qwen3') {
+            response.engine = engine;
+            response.language = result.language;
+            response.model = result.model;
+            response.timestampLevel = result.timestampLevel;
+          }
           if (diarization) {
             response.diarization = diarization;
             if (speakerTurns) response.speakers = summarizeSpeakers(tagged);
@@ -170,6 +228,12 @@ export const transcribeRoutes = [
           transcript: result.text,
           filename: sanitizeEchoFilename(filename),
         };
+        if (engine === 'qwen3') {
+          response.engine = engine;
+          response.language = result.language;
+          response.languages = result.languages;
+          response.model = result.model;
+        }
         if (diarization) {
           response.diarization = diarization;
           if (speakerTurns) {

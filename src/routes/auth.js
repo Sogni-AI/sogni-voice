@@ -24,6 +24,7 @@ const getVoiceCloneImportStatus = () => {
 const getServiceStatus = () => ({
   tts: { enabled: Boolean(config.tts?.enabled) },
   transcription: { enabled: Boolean(config.transcription?.enabled) },
+  qwenAsr: { enabled: Boolean(config.qwenAsr?.enabled) },
   pocketTts: { enabled: Boolean(config.pocketTts?.enabled) },
   qwenTts: { enabled: Boolean(config.qwenTts?.enabled) },
 });

@@ -6,6 +6,8 @@ dotenv.config();
 
 // Create mock functions before mocking modules
 const mockTranscribe = vi.hoisted(() => vi.fn());
+const mockQwenTranscribe = vi.hoisted(() => vi.fn());
+const mockQwenAlign = vi.hoisted(() => vi.fn());
 const mockDiarize = vi.hoisted(() => vi.fn());
 
 // Mock config using environment variables
@@ -30,6 +32,16 @@ vi.mock('../../src/config/index.js', () => ({
       enabled: process.env.TRANSCRIPTION_ENABLED === '1',
       timeout: 300000,
       daemonStartupTimeout: 120000,
+      preWarmDaemon: false,
+    },
+    qwenAsr: {
+      enabled: true,
+      modelId: 'mlx-community/Qwen3-ASR-0.6B-8bit',
+      alignerModelId: 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit',
+      pythonPath: './.venv-qwen-asr/bin/python3',
+      defaultLanguage: 'auto',
+      timeout: 300000,
+      daemonStartupTimeout: 300000,
       preWarmDaemon: false,
     },
     upload: { maxFileSizeBytes: 100 * 1024 * 1024, transcribeMaxBytes: 25 * 1024 * 1024 },
@@ -71,6 +83,14 @@ vi.mock('../../src/services/transcription.js', () => ({
   },
 }));
 
+vi.mock('../../src/services/qwenAsr.js', () => ({
+  qwenAsrService: {
+    transcribe: mockQwenTranscribe,
+    align: mockQwenAlign,
+    shutdown: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Mock the diarization service
 vi.mock('../../src/services/diarization.js', () => ({
   diarizationService: {
@@ -90,11 +110,30 @@ describe('POST /transcribe', () => {
 
   beforeEach(() => {
     mockTranscribe.mockReset();
+    mockQwenTranscribe.mockReset();
+    mockQwenAlign.mockReset();
     mockDiarize.mockReset();
     // Default mock implementation
     mockTranscribe.mockResolvedValue({
       text: 'This is a test transcript.',
       rawOutput: '',
+    });
+    mockQwenTranscribe.mockResolvedValue({
+      text: 'Hello from Qwen.',
+      rawOutput: '',
+      language: 'English',
+      languages: ['English'],
+      model: 'mlx-community/Qwen3-ASR-0.6B-8bit',
+    });
+    mockQwenAlign.mockResolvedValue({
+      text: 'Hello from Qwen.',
+      language: 'English',
+      model: 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit',
+      timestamps: [
+        { text: 'Hello', start: 0, end: 0.4 },
+        { text: 'from', start: 0.4, end: 0.6 },
+        { text: 'Qwen', start: 0.6, end: 1.0 },
+      ],
     });
   });
 
@@ -398,5 +437,103 @@ describe('POST /transcribe', () => {
     const payload = JSON.parse(response.payload);
     expect(payload.diarization).toBeUndefined();
     expect(payload.speakers).toBeUndefined();
+  });
+
+  it('lists Parakeet and Qwen3-ASR provider capabilities', async () => {
+    const response = await server.inject({ method: 'GET', url: '/transcription/models' });
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.payload);
+    expect(payload.default).toBe('parakeet');
+    expect(payload.models).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: 'parakeet', enabled: true }),
+      expect.objectContaining({
+        id: 'qwen3',
+        enabled: true,
+        languages: expect.arrayContaining(['English', 'Japanese', 'Arabic']),
+        alignmentLanguages: expect.arrayContaining(['English', 'Japanese']),
+      }),
+    ]));
+  });
+
+  it('uses Qwen3-ASR and its aligner for word timestamps', async () => {
+    mockQwenTranscribe.mockResolvedValue({
+      text: 'Hello from Qwen.',
+      rawOutput: '',
+      language: 'English',
+      languages: ['English'],
+      model: 'mlx-community/Qwen3-ASR-0.6B-8bit',
+      timestampLevel: 'word',
+      timestamps: [
+        { text: 'Hello', start: 0, end: 0.4 },
+        { text: 'Qwen', start: 0.6, end: 1.0 },
+      ],
+    });
+
+    const audioContent = Buffer.from('ID3\x04\x00\x00\x00\x00\x00\x00fake audio content');
+    const response = await server.inject({
+      method: 'POST',
+      url: '/transcribe',
+      headers: { 'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary' },
+      payload:
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="file"; filename="qwen.mp3"\r\n' +
+        'Content-Type: audio/mpeg\r\n\r\n' +
+        audioContent.toString() +
+        '\r\n------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="engine"\r\n\r\nqwen3\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="language"\r\n\r\nEnglish\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="wordTimestamps"\r\n\r\ntrue\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="diarize"\r\n\r\nfalse\r\n' +
+        '------WebKitFormBoundary--\r\n',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.payload);
+    expect(payload).toMatchObject({
+      success: true,
+      engine: 'qwen3',
+      language: 'English',
+      timestampLevel: 'word',
+    });
+    expect(payload.timestamps).toHaveLength(2);
+    expect(mockTranscribe).not.toHaveBeenCalled();
+    expect(mockQwenTranscribe).toHaveBeenCalledWith(expect.any(String), {
+      timestamps: false,
+      wordTimestamps: true,
+      language: 'English',
+    });
+  });
+
+  it('aligns a supplied transcript with Qwen3 ForcedAligner', async () => {
+    const audioContent = Buffer.from('RIFF\x24\x00\x00\x00WAVEfake audio content');
+    const response = await server.inject({
+      method: 'POST',
+      url: '/qwen-asr/align',
+      headers: { 'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary' },
+      payload:
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="file"; filename="align.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n' +
+        audioContent.toString() +
+        '\r\n------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="text"\r\n\r\nHello from Qwen.\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="language"\r\n\r\nEnglish\r\n' +
+        '------WebKitFormBoundary--\r\n',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.payload);
+    expect(payload.success).toBe(true);
+    expect(payload.timestamps).toHaveLength(3);
+    expect(payload.model).toContain('ForcedAligner');
+    expect(mockQwenAlign).toHaveBeenCalledWith(
+      expect.any(String),
+      'Hello from Qwen.',
+      'English',
+    );
   });
 });

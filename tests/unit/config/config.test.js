@@ -19,6 +19,14 @@ describe('config', () => {
     process.env.PREWARM_TTS = '';
     process.env.TRANSCRIBE_TIMEOUT = '';
     process.env.DIARIZATION_MODEL_ID = '';
+    process.env.QWEN_ASR_ENABLED = '';
+    process.env.QWEN_ASR_MODEL_ID = '';
+    process.env.QWEN_ASR_ALIGNER_MODEL_ID = '';
+    process.env.QWEN_ASR_PYTHON_PATH = '';
+    process.env.QWEN_ASR_DEFAULT_LANGUAGE = '';
+    process.env.QWEN_ASR_TIMEOUT = '';
+    process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT = '';
+    process.env.PREWARM_QWEN_ASR = '';
     process.env.MAX_FILE_SIZE_MB = '';
   });
 
@@ -203,6 +211,33 @@ describe('config', () => {
       process.env.DIARIZATION_MODEL_ID = 'pyannote/custom-diarization-model';
       const { config } = await import('../../../src/config/index.js');
       expect(config.diarization.modelId).toBe('pyannote/custom-diarization-model');
+    });
+  });
+
+  describe('qwen asr config', () => {
+    it('should be disabled by default and use isolated MLX model defaults', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.qwenAsr).toMatchObject({
+        enabled: false,
+        modelId: 'mlx-community/Qwen3-ASR-0.6B-8bit',
+        alignerModelId: 'mlx-community/Qwen3-ForcedAligner-0.6B-8bit',
+        pythonPath: './.venv-qwen-asr/bin/python3',
+        defaultLanguage: 'auto',
+      });
+    });
+
+    it('should accept Qwen3-ASR environment overrides', async () => {
+      process.env.QWEN_ASR_ENABLED = '1';
+      process.env.QWEN_ASR_MODEL_ID = 'local/asr';
+      process.env.QWEN_ASR_ALIGNER_MODEL_ID = 'local/aligner';
+      process.env.QWEN_ASR_PYTHON_PATH = '/opt/qwen/bin/python';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.qwenAsr).toMatchObject({
+        enabled: true,
+        modelId: 'local/asr',
+        alignerModelId: 'local/aligner',
+        pythonPath: '/opt/qwen/bin/python',
+      });
     });
   });
 

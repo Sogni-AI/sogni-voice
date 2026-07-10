@@ -40,6 +40,7 @@ export const config = {
   },
   diarization: {
     enabled: parseEnvBool(process.env.DIARIZATION_ENABLED, false),
+    modelId: process.env.DIARIZATION_MODEL_ID || 'pyannote/speaker-diarization-community-1',
     hfToken: process.env.HF_TOKEN || null,
     timeout: parseInt(process.env.DIARIZATION_TIMEOUT, 10) || 600000,
     daemonStartupTimeout: parseInt(process.env.DIARIZATION_DAEMON_STARTUP_TIMEOUT, 10) || 180000,

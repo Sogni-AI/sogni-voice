@@ -311,6 +311,21 @@ with open('output.wav', 'wb') as f:
         <td>string</td>
         <td>Set to "true" to include word-level timings with start/end times for each word (overrides timestamps)</td>
       </tr>
+      <tr>
+        <td><code>diarize</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Set to "true" to identify speakers with pyannote Community-1. Request timestamps to attach speaker labels to transcript segments.</td>
+      </tr>
+      <tr>
+        <td><code>numSpeakers</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Exact speaker count from 1-20. Overrides the minimum and maximum.</td>
+      </tr>
+      <tr>
+        <td><code>minSpeakers</code> / <code>maxSpeakers</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Expected speaker-count range from 1-20.</td>
+      </tr>
     </table>
 
     <h3>Response (default)</h3>
@@ -351,6 +366,20 @@ with open('output.wav', 'wb') as f:
       <li><code>text</code> - The transcribed text (sentence or word depending on mode)</li>
     </ul>
 
+    <h3>Response (with speaker identification)</h3>
+    <pre><code>{
+  "success": true,
+  "timestamps": [
+    { "start": 0.00, "end": 1.40, "text": "Welcome.", "speaker": "SPEAKER_00" },
+    { "start": 1.50, "end": 2.80, "text": "Thank you.", "speaker": "SPEAKER_01" }
+  ],
+  "diarization": { "available": true, "numSpeakers": 2 },
+  "speakers": [
+    { "speaker": "SPEAKER_00", "segmentCount": 1, "totalSeconds": 1.4 },
+    { "speaker": "SPEAKER_01", "segmentCount": 1, "totalSeconds": 1.3 }
+  ]
+}</code></pre>
+
     <h3>cURL Examples</h3>
     <pre><code># Basic transcription
 curl -X POST https://voice.sogni.ai/transcribe \
@@ -364,7 +393,15 @@ curl -X POST https://voice.sogni.ai/transcribe \
 # With word-level timings
 curl -X POST https://voice.sogni.ai/transcribe \
   -F "file=@/path/to/audio.mp3" \
-  -F "wordTimestamps=true"</code></pre>
+  -F "wordTimestamps=true"
+
+# With local speaker identification
+curl -X POST https://voice.sogni.ai/transcribe \
+  -F "file=@/path/to/conversation.mp3" \
+  -F "timestamps=true" \
+  -F "diarize=true" \
+  -F "minSpeakers=2" \
+  -F "maxSpeakers=4"</code></pre>
 
     <h3>JavaScript Example</h3>
     <pre><code>const formData = new FormData();

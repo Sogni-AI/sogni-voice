@@ -35,7 +35,8 @@ vi.mock('../../src/config/index.js', () => ({
     upload: { maxFileSizeBytes: 100 * 1024 * 1024, transcribeMaxBytes: 25 * 1024 * 1024 },
     diarization: {
       enabled: true,
-      hfToken: 'test-token',
+      modelId: 'pyannote/speaker-diarization-community-1',
+      hfToken: null,
       timeout: 60000,
       daemonStartupTimeout: 60000,
       preWarmDaemon: false,

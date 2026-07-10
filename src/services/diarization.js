@@ -25,15 +25,8 @@ export class DiarizationService {
 
   async _startDaemon() {
     return new Promise((resolve, reject) => {
-      if (!config.diarization.hfToken) {
-        reject(new DiarizationError(
-          'HF_TOKEN required. Create one at https://hf.co/settings/tokens and accept the model license at https://hf.co/pyannote/speaker-diarization-3.1',
-        ));
-        return;
-      }
-
       const daemonPath = join(__dirname, '../../scripts/diarize_daemon.py');
-      console.log('Starting pyannote diarization daemon (model loading may take a moment)...');
+      console.log(`Starting pyannote diarization daemon (${config.diarization.modelId}; model loading may take a moment)...`);
 
       const pythonPath = join(__dirname, '../../.venv/bin/python3');
       daemonProcess = spawn(pythonPath, [daemonPath], {
@@ -41,7 +34,8 @@ export class DiarizationService {
         env: {
           ...process.env,
           PYTHONUNBUFFERED: '1',
-          HF_TOKEN: config.diarization.hfToken,
+          DIARIZATION_MODEL_ID: config.diarization.modelId,
+          ...(config.diarization.hfToken ? { HF_TOKEN: config.diarization.hfToken } : {}),
         },
       });
 
@@ -56,7 +50,7 @@ export class DiarizationService {
           const response = JSON.parse(line);
 
           if (response.status === 'ready') {
-            console.log('Diarization daemon ready');
+            console.log(`Diarization daemon ready (${response.model || config.diarization.modelId})`);
             daemonReady = true;
             if (startupTimeoutId) {
               clearTimeout(startupTimeoutId);
@@ -67,6 +61,11 @@ export class DiarizationService {
           }
 
           if (response.status === 'error' && !daemonReady) {
+            if (startupTimeoutId) {
+              clearTimeout(startupTimeoutId);
+              startupTimeoutId = null;
+            }
+            initPromise = null;
             reject(new DiarizationError(`Daemon failed to start: ${response.error}`));
             return;
           }
@@ -108,6 +107,10 @@ export class DiarizationService {
       });
 
       daemonProcess.on('error', (error) => {
+        if (startupTimeoutId) {
+          clearTimeout(startupTimeoutId);
+          startupTimeoutId = null;
+        }
         initPromise = null;
         reject(new DiarizationError(`Failed to spawn daemon: ${error.message}`, error));
       });

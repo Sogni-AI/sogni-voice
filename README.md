@@ -43,6 +43,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 - **Audio Transcription**: Upload audio files and get text transcripts using [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
   - Sentence-level timestamps for subtitle generation
   - Word-level timestamps for precise timing
+  - Optional speaker identification with [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 - **Text-to-Speech (Kokoro)**: Convert text to natural-sounding speech using [Kokoro TTS](https://github.com/hexgrad/kokoro)
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
   - Word-level timestamp support
@@ -130,9 +131,22 @@ Examples for local-only, allowlist, and public `CORS_ORIGINS=*` setups are in `e
 #### Transcription
 | Variable | Default | Description |
 |----------|---------|-------------|
+| TRANSCRIPTION_ENABLED | 1 | Enable the Parakeet transcription endpoint |
 | TRANSCRIBE_TIMEOUT | 300000 | Transcription timeout (ms) |
 | DAEMON_STARTUP_TIMEOUT | 120000 | Daemon startup timeout (ms) |
 | PREWARM_TRANSCRIPTION | 1 | Pre-load model on server start |
+
+#### Speaker Diarization (Optional)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| DIARIZATION_ENABLED | 0 | Enable local speaker identification on `/transcribe` |
+| DIARIZATION_MODEL_ID | pyannote/speaker-diarization-community-1 | Hugging Face diarization model |
+| HF_TOKEN | (cached login) | Optional token for headless installs; `uvx hf auth login` is also supported |
+| DIARIZATION_TIMEOUT | 600000 | Diarization timeout (ms) |
+| DIARIZATION_DAEMON_STARTUP_TIMEOUT | 180000 | Model startup timeout (ms) |
+| PREWARM_DIARIZATION | 0 | Pre-load the diarization model on server start |
+
+Before enabling diarization, accept the gated [Community-1 model terms](https://huggingface.co/pyannote/speaker-diarization-community-1) and run `uvx hf auth login`, or provide `HF_TOKEN` on a headless server. `./setup.sh` walks through both steps.
 
 #### Kokoro TTS (Optional)
 | Variable | Default | Description |
@@ -390,6 +404,36 @@ Response:
   "filename": "audio.mp3"
 }
 ```
+
+#### With Speaker Identification
+
+Speaker identification runs locally with pyannote Community-1. Request sentence or word timestamps to receive a `speaker` label on every matching segment:
+
+```bash
+curl -X POST http://localhost:3000/transcribe \
+  -F "file=@conversation.mp3" \
+  -F "timestamps=true" \
+  -F "diarize=true" \
+  -F "minSpeakers=2" \
+  -F "maxSpeakers=4"
+```
+
+```json
+{
+  "success": true,
+  "timestamps": [
+    { "start": 0.0, "end": 1.4, "text": "Welcome.", "speaker": "SPEAKER_00" },
+    { "start": 1.5, "end": 2.8, "text": "Thank you.", "speaker": "SPEAKER_01" }
+  ],
+  "diarization": { "available": true, "numSpeakers": 2 },
+  "speakers": [
+    { "speaker": "SPEAKER_00", "segmentCount": 1, "totalSeconds": 1.4 },
+    { "speaker": "SPEAKER_01", "segmentCount": 1, "totalSeconds": 1.3 }
+  ]
+}
+```
+
+Use `numSpeakers` for an exact count, or `minSpeakers` and `maxSpeakers` for a range. Values must be between 1 and 20.
 
 ### Text-to-Speech (Kokoro)
 
@@ -831,6 +875,7 @@ On first use, ML models are downloaded automatically:
 | Feature | Model Size | Download Time |
 |---------|-----------|---------------|
 | Transcription | ~2.5 GB (parakeet-mlx) | 2-5 minutes |
+| Speaker identification | ~70 MB (pyannote Community-1) | 1-3 minutes |
 | Kokoro TTS | ~300 MB | 30-60 seconds |
 | Pocket TTS | ~200 MB | 30-60 seconds |
 | Qwen3-TTS | 1.5-4 GB (varies by variant) | 2-5 minutes |
@@ -851,6 +896,7 @@ All services use persistent Python daemons that keep ML models loaded in memory:
 
 Daemons start automatically when the server starts and shut down gracefully with the server. To disable pre-loading (lazy load on first request instead), set:
 - `PREWARM_TRANSCRIPTION=0`
+- `PREWARM_DIARIZATION=0`
 - `PREWARM_TTS=0`
 - `PREWARM_POCKET_TTS=0`
 - `PREWARM_QWEN_TTS=0`

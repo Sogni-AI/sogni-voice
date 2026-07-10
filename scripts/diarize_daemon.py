@@ -2,7 +2,7 @@
 """
 pyannote Speaker Diarization Daemon
 
-Loads pyannote/speaker-diarization-3.1 once and serves diarization
+Loads pyannote/speaker-diarization-community-1 once and serves diarization
 requests via stdin/stdout JSON-line protocol. Mirrors the Parakeet daemon
 pattern for lifecycle, request matching, and shutdown.
 
@@ -24,8 +24,9 @@ Protocol:
 
 Setup:
   pip install -r requirements-diarization.txt
-  Set HF_TOKEN env var (https://hf.co/settings/tokens) and accept the
-  model license at https://hf.co/pyannote/speaker-diarization-3.1
+  Accept the model terms at
+  https://hf.co/pyannote/speaker-diarization-community-1, then either run
+  `uvx hf auth login` or set HF_TOKEN (https://hf.co/settings/tokens).
 """
 
 import os
@@ -40,9 +41,11 @@ sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
 
 
+DEFAULT_MODEL_ID = "pyannote/speaker-diarization-community-1"
+MODEL_ID = os.environ.get("DIARIZATION_MODEL_ID", DEFAULT_MODEL_ID)
 HF_TOKEN_HELP = (
-    "HF_TOKEN required. Create one at https://hf.co/settings/tokens and "
-    "accept the model license at https://hf.co/pyannote/speaker-diarization-3.1"
+    f"Access to {MODEL_ID} is required. Accept its terms at "
+    f"https://hf.co/{MODEL_ID}, then run `uvx hf auth login` or set HF_TOKEN."
 )
 
 
@@ -52,17 +55,15 @@ class DiarizationDaemon:
         self.running = True
 
     def load_model(self) -> bool:
-        token = os.environ.get("HF_TOKEN")
-        if not token:
-            print(HF_TOKEN_HELP, file=sys.stderr)
-            self.send_response({"status": "error", "error": HF_TOKEN_HELP})
-            return False
+        # `token=True` tells huggingface_hub to use the locally cached login.
+        # An explicit environment token remains supported for headless servers.
+        token = os.environ.get("HF_TOKEN") or True
 
         try:
             from pyannote.audio import Pipeline
-            print("Loading pyannote/speaker-diarization-3.1...", file=sys.stderr)
+            print(f"Loading {MODEL_ID}...", file=sys.stderr)
             self.pipeline = Pipeline.from_pretrained(
-                "pyannote/speaker-diarization-3.1",
+                MODEL_ID,
                 token=token,
             )
         except ImportError as e:
@@ -71,7 +72,7 @@ class DiarizationDaemon:
             self.send_response({"status": "error", "error": msg})
             return False
         except Exception as e:
-            msg = f"Failed to load pyannote pipeline: {e}"
+            msg = f"Failed to load pyannote pipeline: {e}. {HF_TOKEN_HELP}"
             print(msg, file=sys.stderr)
             traceback.print_exc(file=sys.stderr)
             self.send_response({"status": "error", "error": msg})
@@ -123,7 +124,9 @@ class DiarizationDaemon:
         if not proc.stdout:
             raise RuntimeError("ffmpeg produced no audio (empty or unreadable file)")
 
-        samples = torch.frombuffer(proc.stdout, dtype=torch.float32).clone()
+        # bytearray provides writable storage and avoids PyTorch's warning for
+        # tensors backed by immutable subprocess output bytes.
+        samples = torch.frombuffer(bytearray(proc.stdout), dtype=torch.float32)
         waveform = samples.unsqueeze(0)
         return waveform, 16000
 
@@ -220,7 +223,7 @@ class DiarizationDaemon:
         if not self.load_model():
             sys.exit(1)
 
-        self.send_response({"status": "ready"})
+        self.send_response({"status": "ready", "model": MODEL_ID})
 
         while self.running:
             try:

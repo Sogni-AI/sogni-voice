@@ -42,7 +42,7 @@ vi.mock('../../src/config/index.js', () => ({
       modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',
-      defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+      defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan',
       defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
       timeout: 120000,
       daemonStartupTimeout: 180000,

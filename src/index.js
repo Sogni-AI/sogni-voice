@@ -2,7 +2,11 @@ import { startServer } from './server.js';
 import { tempFileManager } from './utils/tempFile.js';
 import { transcriptionService } from './services/transcription.js';
 import { ttsService } from './services/tts.js';
-import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTts.js';
+import {
+  qwenTtsBaseService,
+  qwenTtsCustomVoiceService,
+  qwenTtsVoiceDesignService,
+} from './services/qwenTts.js';
 import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
@@ -20,6 +24,7 @@ const gracefulShutdown = async (signal) => {
     ttsService.shutdown(),
     qwenTtsBaseService.shutdown(),
     qwenTtsCustomVoiceService.shutdown(),
+    qwenTtsVoiceDesignService.shutdown(),
     pocketTtsService.shutdown(),
     diarizationService.shutdown(),
     qwenAsrService.shutdown(),
@@ -61,10 +66,20 @@ startServer()
     }
 
     if (config.qwenTts.enabled && config.qwenTts.preWarmDaemon) {
-      console.log('Pre-warming Qwen TTS daemons (Base + CustomVoice)...');
+      console.log('Pre-warming Qwen3-TTS MLX daemons (Base + CustomVoice)...');
       preWarmPromises.push(
         preWarmDaemon('Qwen TTS Base daemon', () => qwenTtsBaseService.initialize()),
         preWarmDaemon('Qwen TTS CustomVoice daemon', () => qwenTtsCustomVoiceService.initialize()),
+      );
+    }
+
+    if (config.qwenTts.enabled && config.qwenTts.preWarmVoiceDesign) {
+      console.log('Pre-warming Qwen3-TTS MLX VoiceDesign daemon...');
+      preWarmPromises.push(
+        preWarmDaemon(
+          'Qwen TTS VoiceDesign daemon',
+          () => qwenTtsVoiceDesignService.initialize(),
+        ),
       );
     }
 

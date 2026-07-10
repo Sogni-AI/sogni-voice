@@ -979,8 +979,8 @@
       <label>
         <input type="radio" name="ttsModel" value="qwen" id="qwenRadio">
         <span class="model-label-content">
-          <span class="model-name">Qwen3 TTS <span class="badge warning">Voice Cloning</span></span>
-          <span class="model-desc">11 languages, voice cloning, emotion/style control. Largest model.</span>
+          <span class="model-name">Qwen3 TTS <span class="badge warning">8-bit MLX</span></span>
+          <span class="model-desc">10 languages, voice cloning, emotion/style control, and lazy VoiceDesign.</span>
         </span>
       </label>
       <label>
@@ -1014,14 +1014,25 @@
     <!-- Qwen-specific options -->
     <div id="qwenOptions" class="qwen-options hidden">
       <div class="form-group" style="margin-bottom: 0;">
+        <label for="qwenModeSelect">Qwen mode:</label>
+        <select id="qwenModeSelect">
+          <option value="custom">Named voice</option>
+          <option value="design">Design a voice</option>
+        </select>
+      </div>
+      <div class="form-group" style="margin-bottom: 0;">
         <label for="languageSelect">Language:</label>
         <select id="languageSelect">
+          <option value="auto">Auto</option>
           <option value="English">English</option>
           <option value="Chinese">Chinese</option>
           <option value="Japanese">Japanese</option>
           <option value="Korean">Korean</option>
           <option value="French">French</option>
           <option value="German">German</option>
+          <option value="Italian">Italian</option>
+          <option value="Portuguese">Portuguese</option>
+          <option value="Russian">Russian</option>
           <option value="Spanish">Spanish</option>
         </select>
       </div>
@@ -1030,7 +1041,7 @@
     <!-- Style Instructions - always visible but faded when not available -->
     <div class="form-group" id="styleInstructGroup" style="margin-bottom: 16px;">
       <label for="styleInstruct">
-        Style Instructions: <span style="font-weight: normal; color: #666;">(optional)</span>
+        <span id="styleInstructLabel">Style Instructions:</span> <span id="styleInstructRequirement" style="font-weight: normal; color: #666;">(optional)</span>
         <span id="styleInstructBadge" class="badge" style="font-size: 11px; padding: 2px 6px;">Qwen3 Style</span>
       </label>
       <input type="text" id="styleInstruct" placeholder="e.g., valley girl, excited and bubbly, whispering, angry, sad..." style="margin-bottom: 4px;">
@@ -1382,7 +1393,7 @@
       const inputsToDisable = [
         'transcriptionEngine', 'qwenAsrLanguage', 'mossTdHotwords', 'timestampMode', 'diarizeCheckbox',
         'alignmentText', 'alignmentLanguage', 'ttsText', 'voiceSelect', 'speedRange',
-        'languageSelect', 'styleInstruct', 'cloneName', 'mossCloneName',
+        'qwenModeSelect', 'languageSelect', 'styleInstruct', 'cloneName', 'mossCloneName',
       ];
       inputsToDisable.forEach(id => {
         const input = document.getElementById(id);
@@ -1601,6 +1612,7 @@
     let currentModel = 'pocket';
     let qwenEnabled = false;
     let qwenCustomVoiceEnabled = false;
+    let qwenVoiceDesignEnabled = false;
     let qwenVoiceCloningEnabled = false;
     let pocketEnabled = false;
     let mossEnabled = false;
@@ -1683,16 +1695,48 @@
       const styleHint = document.getElementById('styleInstructHint');
       const styleNotice = document.getElementById('styleInstructNotice');
       const styleBadge = document.getElementById('styleInstructBadge');
+      const styleLabel = document.getElementById('styleInstructLabel');
+      const styleRequirement = document.getElementById('styleInstructRequirement');
+      const qwenMode = document.getElementById('qwenModeSelect');
       const selectedVoice = voiceSelect.value;
 
       // Only show style instructions for Qwen3 TTS
       if (currentModel !== 'qwen') {
         styleGroup.classList.add('hidden');
         styleInput.disabled = true;
+        voiceSelect.disabled = !canMakeAuthenticatedCalls();
         return;
       }
 
       styleGroup.classList.remove('hidden');
+
+      const voiceDesignOption = qwenMode.querySelector('option[value="design"]');
+      voiceDesignOption.disabled = !qwenVoiceDesignEnabled;
+      if (qwenMode.value === 'design' && !qwenVoiceDesignEnabled) {
+        qwenMode.value = 'custom';
+      }
+
+      if (qwenMode.value === 'design') {
+        voiceSelect.disabled = true;
+        styleLabel.textContent = 'Voice Description:';
+        styleRequirement.textContent = '(required)';
+        styleInput.placeholder = 'e.g., a warm documentary narrator with a light British accent...';
+        styleHint.textContent = 'Describe the identity, tone, accent, age, and delivery of the voice to create.';
+        styleGroup.classList.toggle('style-disabled', !qwenVoiceDesignEnabled);
+        styleInput.disabled = !qwenVoiceDesignEnabled || !canMakeAuthenticatedCalls();
+        styleHint.classList.toggle('hidden', !qwenVoiceDesignEnabled);
+        styleNotice.classList.toggle('hidden', qwenVoiceDesignEnabled);
+        styleNotice.textContent = 'VoiceDesign is unavailable on this server.';
+        styleBadge.style.background = qwenVoiceDesignEnabled ? '#6f42c1' : '#6c757d';
+        styleBadge.textContent = 'VoiceDesign';
+        return;
+      }
+
+      voiceSelect.disabled = !canMakeAuthenticatedCalls();
+      styleLabel.textContent = 'Style Instructions:';
+      styleRequirement.textContent = '(optional)';
+      styleInput.placeholder = 'e.g., valley girl, excited and bubbly, whispering, angry, sad...';
+      styleHint.textContent = 'Describe how the voice should sound - emotion, accent, speaking style, etc.';
 
       // Voice clones don't support style instructions
       const isCloneVoice = selectedVoice && selectedVoice.startsWith('clone:');
@@ -2235,6 +2279,7 @@
     // ==================== Text-to-Speech ====================
     const ttsText = document.getElementById('ttsText');
     const voiceSelect = document.getElementById('voiceSelect');
+    const qwenModeSelect = document.getElementById('qwenModeSelect');
     const languageSelect = document.getElementById('languageSelect');
     const speedRange = document.getElementById('speedRange');
     const speedValue = document.getElementById('speedValue');
@@ -2250,6 +2295,7 @@
 
     // Update style input availability when voice selection changes
     voiceSelect.addEventListener('change', updateStyleInstructUI);
+    qwenModeSelect.addEventListener('change', updateStyleInstructUI);
 
     generateBtn.addEventListener('click', generateSpeech);
 
@@ -2290,6 +2336,7 @@
         if (!response.ok) {
           qwenEnabled = false;
           qwenCustomVoiceEnabled = false;
+          qwenVoiceDesignEnabled = false;
           qwenVoiceCloningEnabled = false;
           updateQwenAvailability();
           return;
@@ -2303,6 +2350,7 @@
         // Check which features are available
         const features = data.features || [];
         qwenCustomVoiceEnabled = features.includes('custom_voice');
+        qwenVoiceDesignEnabled = features.includes('voice_design');
         qwenVoiceCloningEnabled = features.includes('voice_cloning');
 
         // Update UI based on feature availability
@@ -2347,6 +2395,7 @@
         console.error('Failed to load Qwen voices:', error);
         qwenEnabled = false;
         qwenCustomVoiceEnabled = false;
+        qwenVoiceDesignEnabled = false;
         qwenVoiceCloningEnabled = false;
         updateQwenAvailability();
       }
@@ -2775,9 +2824,25 @@
         } else {
           // Qwen TTS with built-in voice
           const styleInstruct = document.getElementById('styleInstruct').value.trim();
+          const qwenMode = qwenModeSelect.value;
 
-          // Use custom-voice endpoint if style instructions are provided
-          if (styleInstruct && qwenCustomVoiceEnabled) {
+          if (qwenMode === 'design') {
+            if (!styleInstruct) {
+              throw new Error('Describe the voice you want to design.');
+            }
+            response = await authFetch(`${API_BASE}/qwen-tts/voice-design`, {
+              method: 'POST',
+              headers: {
+                'Content-Type': 'application/json',
+              },
+              body: JSON.stringify({
+                text: text,
+                instruct: styleInstruct,
+                language: languageSelect.value,
+              }),
+            });
+          } else if (styleInstruct && qwenCustomVoiceEnabled) {
+            // Use CustomVoice when a named speaker has style instructions.
             response = await authFetch(`${API_BASE}/qwen-tts/custom-voice`, {
               method: 'POST',
               headers: {
@@ -2787,6 +2852,7 @@
                 text: text,
                 speaker: selectedVoice,
                 instruct: styleInstruct,
+                language: languageSelect.value,
               }),
             });
           } else {
@@ -2821,26 +2887,36 @@
         const isQwenClone = selectedVoice.startsWith('clone:');
         const isPocketClone = selectedVoice.startsWith('pocket-clone:');
         const isMossVoice = selectedVoice.startsWith('moss:');
+        const usedVoiceDesign = currentModel === 'qwen' && qwenModeSelect.value === 'design';
         const isClone = isQwenClone || isPocketClone;
-        const voiceInfo = isMossVoice
+        const voiceInfo = usedVoiceDesign
+          ? 'Voice: generated from description'
+          : isMossVoice
           ? `Reference voice: ${selectedVoice.replace(/^moss:/, '')}`
           : isClone
           ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
         const modelUsed = isMossVoice
           ? 'MOSS-TTS-Nano (Reference)'
+          : usedVoiceDesign
+            ? 'Qwen3 (VoiceDesign)'
           : isPocketClone
             ? 'Pocket (Clone)'
             : isQwenClone
               ? 'Qwen3 (Clone)'
               : (currentModel === 'kokoro' ? 'Kokoro' : currentModel === 'pocket' ? 'Pocket' : 'Qwen3');
         const styleInstruct = document.getElementById('styleInstruct').value.trim();
-        const usedStyle = currentModel === 'qwen' && styleInstruct && qwenCustomVoiceEnabled;
+        const usedStyle = currentModel === 'qwen'
+          && !usedVoiceDesign
+          && styleInstruct
+          && qwenCustomVoiceEnabled;
         let extraInfo = '';
         if (isQwenClone || currentModel === 'qwen') {
           extraInfo = `\nLanguage: ${languageSelect.value}`;
           if (usedStyle) {
             extraInfo += `\nStyle: ${styleInstruct}`;
+          } else if (usedVoiceDesign) {
+            extraInfo += `\nDescription: ${styleInstruct}`;
           }
         } else if (currentModel === 'kokoro') {
           extraInfo = `\nSpeed: ${speedRange.value}x`;
@@ -3796,6 +3872,7 @@
         qwenEnabled = Boolean(serviceStatus.qwenTts?.enabled);
         mossEnabled = Boolean(serviceStatus.mossTts?.enabled);
         qwenCustomVoiceEnabled = false;
+        qwenVoiceDesignEnabled = false;
         qwenVoiceCloningEnabled = false;
         parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
         qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
@@ -3830,16 +3907,19 @@
           qwenClones = data.clones || [];
           const features = data.features || [];
           qwenCustomVoiceEnabled = features.includes('custom_voice');
+          qwenVoiceDesignEnabled = features.includes('voice_design');
           qwenVoiceCloningEnabled = features.includes('voice_cloning');
           updateVoiceCloneList();
         } else {
           qwenEnabled = false;
           qwenCustomVoiceEnabled = false;
+          qwenVoiceDesignEnabled = false;
           qwenVoiceCloningEnabled = false;
         }
       } catch {
         qwenEnabled = false;
         qwenCustomVoiceEnabled = false;
+        qwenVoiceDesignEnabled = false;
         qwenVoiceCloningEnabled = false;
       }
 

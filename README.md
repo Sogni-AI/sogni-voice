@@ -34,13 +34,13 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS | MOSS-TTS-Nano |
 |---------|------------|------------|-----------|----------------|
 | Parameters | 100M | 82M | 0.6B / 1.7B | 100M |
-| Languages | English only | 4 (EN, JA, ZH) | 11 languages | 20 languages |
-| Built-in Voices | 8 | 32 | 8 | None; reference voice required |
+| Languages | English only | 4 (EN, JA, ZH) | 10 + auto detection | 20 languages |
+| Built-in Voices | 8 | 32 | 9 | None; reference voice required |
 | Output | 24 kHz mono | 24 kHz mono | 24 kHz mono | 48 kHz stereo |
-| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (3s audio) | ✅ (1-30s audio) |
+| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (1-30s audio) | ✅ (1-30s audio) |
 | Emotion Control | ❌ | ❌ | ✅ (CustomVoice) | ❌ |
 | Voice Design | ❌ | ❌ | ✅ (VoiceDesign) | ❌ |
-| Hardware | CPU (2-core) | MLX (Apple Silicon) | MPS (Apple Silicon) | MLX (Apple Silicon) |
+| Hardware | CPU (2-core) | MLX (Apple Silicon) | MLX (Apple Silicon) | MLX (Apple Silicon) |
 | Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality | Small multilingual cloned voices |
 
 ## Features
@@ -67,17 +67,19 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
   - 8 built-in English voices
   - Voice cloning from 5-10 second audio samples
   - ~200ms latency, 100M parameters, CPU-only
-- **Text-to-Speech (Qwen3-TTS)**: Advanced TTS with [Qwen3-TTS](https://huggingface.co/Qwen/Qwen3-TTS) (optional)
+- **Text-to-Speech (Qwen3-TTS)**: Advanced TTS with [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) through [MLX-Audio](https://github.com/Blaizzy/mlx-audio) (optional)
   - Voice cloning from reference audio
   - Emotion/style control with custom voice models
-  - Voice design from text descriptions
-  - 11 languages supported
+  - Lazy VoiceDesign model for voices created from text descriptions
+  - 10 languages plus automatic language selection
+  - 8-bit MLX models by default in isolated `.venv-qwen-tts`; BF16 is optional
+  - Existing safe ICL `.safetensors` clones migrate lazily with a speaker-similarity check
 - **Text-to-Speech (MOSS-TTS-Nano)**: 100M multilingual [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) through MLX-Audio (optional)
   - Reference-voice synthesis from a 1-30 second sample; no transcript required
   - 20 advertised languages and 48 kHz stereo output
   - Persistent reference profiles with prompt codes cached in memory
   - Isolated `.venv-moss-tts`; current MLX backend is non-streaming
-- **Fast**: Optimized for Apple Silicon with MLX and MPS backends
+- **Fast**: Optimized for Apple Silicon with MLX, plus MPS where a model has no MLX backend
 
 ## Quick Start
 
@@ -241,12 +243,19 @@ Select MOSS-TTS-Nano in `./setup.sh` to create `.venv-moss-tts`, install MLX-Aud
 | Variable | Default | Description |
 |----------|---------|-------------|
 | QWEN_TTS_ENABLED | 0 | Enable Qwen3-TTS (set to '1') |
-| QWEN_TTS_MODEL_VARIANT | base-0.6b | Model variant (see below) |
-| QWEN_TTS_DEFAULT_VOICE | Chelsie | Default voice |
+| QWEN_TTS_BASE_MODEL | base-0.6b | Base daemon for synthesis with cloned voices |
+| QWEN_TTS_CUSTOM_VOICE_MODEL | custom-voice | CustomVoice daemon for named/style-controlled voices |
+| QWEN_TTS_VOICE_DESIGN_MODEL | voice-design | Lazy VoiceDesign daemon |
+| QWEN_TTS_PYTHON_PATH | ./.venv-qwen-tts/bin/python3 | Isolated MLX-Audio interpreter |
+| QWEN_TTS_MLX_PRECISION | 8bit | MLX model precision (`8bit` or `bf16`) |
+| QWEN_TTS_DEFAULT_VOICE | Ryan | Default CustomVoice speaker |
 | QWEN_TTS_DEFAULT_LANGUAGE | English | Default language |
-| QWEN_TTS_TIMEOUT | 300000 | Request timeout (ms) |
-| QWEN_TTS_DAEMON_STARTUP_TIMEOUT | 180000 | Daemon startup timeout (ms) |
-| PREWARM_QWEN_TTS | 0 | Pre-load model on server start |
+| QWEN_TTS_TIMEOUT | 120000 | Minimum request timeout (ms) |
+| QWEN_TTS_TIMEOUT_PER_CHAR_MS | 40 | Additional long-text timeout budget per character |
+| QWEN_TTS_TIMEOUT_MAX | 900000 | Maximum scaled request timeout (ms) |
+| QWEN_TTS_DAEMON_STARTUP_TIMEOUT | 300000 | Daemon startup timeout (ms) |
+| PREWARM_QWEN_TTS | 0 | Pre-load Base and CustomVoice on server start |
+| PREWARM_QWEN_TTS_VOICE_DESIGN | 0 | Also pre-load the larger VoiceDesign model |
 | QWEN_TTS_VOICE_CLONES_DIR | ./voice_clones | Voice clone storage directory |
 
 #### Authentication (Optional)
@@ -257,12 +266,7 @@ Select MOSS-TTS-Nano in `./setup.sh` to create `.venv-moss-tts`, install MLX-Aud
 | DANGEROUSLY_ALLOW_IMPORTS | 0 | Allow voice clone imports without API key authentication |
 | DANGEROUSLY_ALLOW_VOICE_CLONING | 0 | Allow clone creation, generation, download, rename, and deletion without API key authentication |
 
-**Qwen3-TTS Model Variants:**
-- `base-0.6b` - Basic TTS + voice cloning (smaller, faster)
-- `base-1.7b` - Basic TTS + voice cloning (larger, higher quality)
-- `custom-voice-0.6b` - Emotion/style control (smaller)
-- `custom-voice` - Emotion/style control (larger)
-- `voice-design` - Create voices from descriptions
+`./setup.sh` creates `.venv-qwen-tts`, pins `mlx-audio==0.4.5`, and offers Balanced, Quality, or Compact Base/CustomVoice pairs. VoiceDesign is a separate lazy daemon so ordinary TTS does not pay its memory or startup cost. `QWEN_TTS_MODEL_VARIANT` remains a deprecated rollback key; new deployments should use the three explicit model variables above.
 
 ## Running the Server
 
@@ -656,15 +660,18 @@ curl http://localhost:3000/qwen-tts/voices
 Response:
 ```json
 {
-  "voices": ["Chelsie", "Ethan", "Serena", "Vivian", "Ryan", "Aiden", "Eric", "Dylan"],
+  "voices": ["Ryan", "Aiden", "Serena", "Vivian", "Uncle_Fu", "Dylan", "Eric", "Ono_Anna", "Sohee"],
   "clones": ["my-voice", "customer-voice"],
-  "default": "Chelsie",
+  "default": "Ryan",
   "defaultLanguage": "English",
   "modelVariants": {
     "base": "base-0.6b",
-    "customVoice": "custom-voice"
+    "customVoice": "custom-voice",
+    "voiceDesign": "voice-design"
   },
-  "features": ["tts", "voice_cloning", "custom_voice"]
+  "backend": "mlx",
+  "features": ["tts", "voice_cloning", "custom_voice", "voice_design"],
+  "status": "ready"
 }
 ```
 
@@ -674,8 +681,10 @@ Response:
 | clones | Custom cloned voices (varies by instance) |
 | default | Default voice if none specified |
 | defaultLanguage | Default language for synthesis |
-| modelVariants | Active model variants (dual-daemon mode) |
+| modelVariants | Configured Base, CustomVoice, and VoiceDesign variants |
+| backend | Acceleration backend (`mlx`) |
 | features | Available features based on loaded models |
+| status | `ready` or `degraded` when an optional daemon is unavailable |
 
 #### Standard TTS
 
@@ -684,7 +693,7 @@ Generate speech with a standard voice:
 ```bash
 curl -X POST http://localhost:3000/qwen-tts \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "voice": "Chelsie"}' \
+  -d '{"text": "Hello world", "voice": "Ryan"}' \
   --output output.wav
 ```
 
@@ -693,14 +702,14 @@ Download Opus with query-string format override:
 ```bash
 curl -X POST 'http://localhost:3000/qwen-tts?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello world", "voice": "Chelsie"}' \
+  -d '{"text": "Hello world", "voice": "Ryan"}' \
   --output output.opus
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
-| voice | string | Chelsie | Speaker voice name |
+| voice | string | Ryan | Speaker voice name |
 | language | string | English | Language for synthesis |
 | format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
@@ -711,7 +720,7 @@ Generate speech with emotion and style instructions. This feature uses the Custo
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/custom-voice \
   -H "Content-Type: application/json" \
-  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Speak with excitement and joy"}' \
+  -d '{"text": "I am so excited!", "speaker": "Ryan", "instruct": "Speak with excitement and joy", "language": "English"}' \
   --output output.wav
 ```
 
@@ -720,15 +729,16 @@ To get Opus instead:
 ```bash
 curl -X POST 'http://localhost:3000/qwen-tts/custom-voice?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "I am so excited!", "speaker": "Chelsie", "instruct": "Speak with excitement and joy"}' \
+  -d '{"text": "I am so excited!", "speaker": "Ryan", "instruct": "Speak with excitement and joy", "language": "English"}' \
   --output output.opus
 ```
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
-| speaker | string | Chelsie | Speaker voice name |
+| speaker | string | Ryan | Speaker voice name |
 | instruct | string | - | Style/emotion instruction (e.g., "Speak softly with a gentle tone") |
+| language | string | English | Language for synthesis |
 | format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 **Example style instructions:**
@@ -775,7 +785,7 @@ with open('output.wav', 'wb') as f:
 
 #### Voice Cloning
 
-Create a voice clone from reference audio (3-10 seconds recommended):
+Create a voice clone from reference audio (1-30 seconds accepted; 3-10 clean seconds recommended):
 
 > **Authentication required by default:** clone create/generate/download/delete/rename routes require a valid API key unless you explicitly set `DANGEROUSLY_ALLOW_VOICE_CLONING=1`.
 
@@ -843,17 +853,18 @@ curl -X POST http://localhost:3000/qwen-tts/voices/clone/import \
 
 > Voice clones use the [safetensors](https://github.com/huggingface/safetensors) format, which stores only tensor data and cannot execute code.
 > Pickle-based voice clones are intentionally rejected. Convert or recreate old clones as `.safetensors` before importing them.
+> Safe ICL `.safetensors` clones created by the former PyTorch backend remain supported. They are decoded lazily, verified against their stored speaker embedding, and cached in memory. A 0.6B clone (1,024-dimensional embedding) must be used with `base-0.6b`; a 1.7B clone (2,048-dimensional embedding) requires `base-1.7b`.
 >
 > **Security note:** Voice clone imports are configured separately from global API auth. When `AUTH_ENABLED=0`, imports can still be API-key-only or fully blocked. To allow unauthenticated imports (e.g., for local development), set `DANGEROUSLY_ALLOW_IMPORTS=1`.
 
 #### Voice Design (Create Voice from Description)
 
-Requires `voice-design` model variant:
+The dedicated VoiceDesign daemon loads lazily on the first request:
 
 ```bash
 curl -X POST http://localhost:3000/qwen-tts/voice-design \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello there!", "instruct": "A warm, friendly female voice with a slight British accent"}' \
+  -d '{"text": "Hello there!", "instruct": "A warm, friendly female voice with a slight British accent", "language": "English"}' \
   --output output.wav
 ```
 
@@ -862,7 +873,7 @@ To get Opus instead:
 ```bash
 curl -X POST 'http://localhost:3000/qwen-tts/voice-design?format=opus' \
   -H "Content-Type: application/json" \
-  -d '{"text": "Hello there!", "instruct": "A warm, friendly female voice with a slight British accent"}' \
+  -d '{"text": "Hello there!", "instruct": "A warm, friendly female voice with a slight British accent", "language": "English"}' \
   --output output.opus
 ```
 
@@ -870,6 +881,7 @@ curl -X POST 'http://localhost:3000/qwen-tts/voice-design?format=opus' \
 |-----------|------|---------|-------------|
 | text * | string | - | Text to convert to speech |
 | instruct * | string | - | Description of the desired voice characteristics |
+| language | string | English | Language for synthesis |
 | format | string | wav | Output format (wav, opus, buffer). Also accepted as `?format=` on this endpoint. |
 
 ### Pocket TTS Endpoints
@@ -1079,7 +1091,8 @@ On first use, ML models are downloaded automatically:
 | Speaker identification | ~70 MB (pyannote Community-1) | 1-3 minutes |
 | Kokoro TTS | ~300 MB | 30-60 seconds |
 | Pocket TTS | ~200 MB | 30-60 seconds |
-| Qwen3-TTS | 1.5-4 GB (varies by variant) | 2-5 minutes |
+| Qwen3-TTS MLX Base + CustomVoice | ~3.8-5.8 GB (profile-dependent) | 3-10 minutes |
+| Qwen3-TTS VoiceDesign | ~2.9 GB, lazy | First VoiceDesign request only |
 | MOSS-TTS-Nano + audio tokenizer | ~360 MB | 30-90 seconds |
 
 Models are cached locally after the first download. Subsequent requests will be much faster.
@@ -1104,7 +1117,20 @@ Daemons start automatically when the server starts and shut down gracefully with
 - `PREWARM_TTS=0`
 - `PREWARM_POCKET_TTS=0`
 - `PREWARM_QWEN_TTS=0`
+- `PREWARM_QWEN_TTS_VOICE_DESIGN=0`
 - `PREWARM_MOSS_TTS=0`
+
+### Qwen3-TTS MLX migration benchmark
+
+On an M5 Max, a cached 0.6B Base clone-generation sample produced about six seconds of speech with these wall-clock real-time factors (lower is better):
+
+| Backend | Precision | Generation time | Audio | RTF |
+|---------|-----------|-----------------|-------|-----|
+| Former official PyTorch/MPS backend | FP32 | 37.57s | 6.16s | 6.10 |
+| MLX-Audio | BF16 | 10.34s | 6.48s | 1.60 |
+| MLX-Audio | 8-bit | 2.70s | 5.92s | 0.46 |
+
+The 8-bit output preserved the reference speaker closely (cosine similarity 0.9859 in this sample) and round-tripped through Qwen3-ASR with the expected transcript. These are local single-sample measurements, not universal quality or speed guarantees. The REST API currently returns complete WAV/Opus files even though the underlying MLX model supports streaming generation.
 
 ## Available Voices
 
@@ -1155,13 +1181,13 @@ Custom voices can be created from 5-10 second audio samples using the voice clon
 
 ### Qwen3-TTS Voices
 
-For CustomVoice models: Chelsie, Ethan, Serena, Vivian, Ryan, Aiden, Eric, Dylan
+For CustomVoice models: **Ryan** (default), Aiden, Serena, Vivian, Uncle_Fu, Dylan, Eric, Ono_Anna, Sohee
 
 For Base models: Use voice cloning to create custom voices from reference audio.
 
 ### Qwen3-TTS Languages
 
-auto, Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian, Spanish
+Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish. Use `auto` to let the model choose.
 
 ### MOSS-TTS-Nano Reference Voices and Languages
 

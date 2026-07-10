@@ -422,7 +422,9 @@ select_tts_engines() {
         ENABLE_QWEN_ASR=0
         ENABLE_MOSS_TD=0
         ENABLE_DIARIZATION=0
-        QWEN_VARIANT="base-0.6b"
+        QWEN_BASE_VARIANT="base-0.6b"
+        QWEN_CUSTOM_VARIANT="custom-voice"
+        QWEN_VARIANT="$QWEN_BASE_VARIANT"
 
         print_info "Non-interactive mode: using defaults"
         print_info "- Pocket TTS: enabled"
@@ -440,7 +442,7 @@ select_tts_engines() {
     local tts_options=(
         "Pocket TTS (Fast, CPU-only, 8 English voices, voice cloning) - Recommended"
         "Kokoro TTS (Mid, MLX-based, 32 voices, 4 languages)"
-        "Qwen3-TTS (Slow, 11 languages, voice cloning, audio style prompting)"
+        "Qwen3-TTS (MLX, 10 languages, cloning, style control, voice design)"
         "MOSS-TTS-Nano (100M, multilingual reference voices, MLX, 48 kHz)"
     )
 
@@ -453,26 +455,40 @@ select_tts_engines() {
     ENABLE_QWEN=${tts_selected[2]}
     ENABLE_MOSS=${tts_selected[3]}
 
-    # If Qwen is enabled, ask for variant
+    # Qwen uses separate daemons for cloning, styled voices, and voice design.
+    # Select a paired Base/CustomVoice profile; VoiceDesign remains a lazy model.
     if [ "$ENABLE_QWEN" = "1" ]; then
         echo ""
         local qwen_options=(
-            "base-0.6b (600M params, voice cloning) - Recommended"
-            "base-1.7b (1.7B params, voice cloning, higher quality)"
-            "custom-voice (600M params, emotion/style control)"
+            "Balanced: 0.6B cloning + 1.7B styled voices - Recommended"
+            "Quality: 1.7B cloning + 1.7B styled voices"
+            "Compact: 0.6B cloning + 0.6B styled voices"
         )
 
-        show_radio_menu "Select Qwen3-TTS Model Variant" 0 "${qwen_options[@]}"
+        show_radio_menu "Select Qwen3-TTS MLX Profile" 0 "${qwen_options[@]}"
         local qwen_choice=$MENU_RESULT
 
         case "$qwen_choice" in
-            0) QWEN_VARIANT="base-0.6b" ;;
-            1) QWEN_VARIANT="base-1.7b" ;;
-            2) QWEN_VARIANT="custom-voice" ;;
-            *) QWEN_VARIANT="base-0.6b" ;;
+            0)
+                QWEN_BASE_VARIANT="base-0.6b"
+                QWEN_CUSTOM_VARIANT="custom-voice"
+                ;;
+            1)
+                QWEN_BASE_VARIANT="base-1.7b"
+                QWEN_CUSTOM_VARIANT="custom-voice"
+                ;;
+            2)
+                QWEN_BASE_VARIANT="base-0.6b"
+                QWEN_CUSTOM_VARIANT="custom-voice-0.6b"
+                ;;
+            *)
+                QWEN_BASE_VARIANT="base-0.6b"
+                QWEN_CUSTOM_VARIANT="custom-voice"
+                ;;
         esac
 
-        print_success "Qwen3-TTS variant: $QWEN_VARIANT"
+        QWEN_VARIANT="$QWEN_BASE_VARIANT"
+        print_success "Qwen3-TTS MLX profile: Base $QWEN_BASE_VARIANT + CustomVoice $QWEN_CUSTOM_VARIANT"
     fi
     echo ""
     local stt_options=(
@@ -527,7 +543,7 @@ select_tts_engines() {
         echo -e "  ${CROSS} Kokoro TTS (disabled)"
     fi
     if [ "$ENABLE_QWEN" = "1" ]; then
-        echo -e "  ${CHECK} Qwen3-TTS"
+        echo -e "  ${CHECK} Qwen3-TTS MLX (Base $QWEN_BASE_VARIANT + CustomVoice $QWEN_CUSTOM_VARIANT)"
     else
         echo -e "  ${CROSS} Qwen3-TTS (disabled)"
     fi
@@ -662,7 +678,15 @@ configure_environment() {
 
     # Update Qwen variant if enabled
     if [ "$ENABLE_QWEN" = "1" ]; then
+        # Keep the legacy key for rollback while the service uses the explicit
+        # multi-daemon model keys below.
         upsert_env_key "QWEN_TTS_MODEL_VARIANT" "$QWEN_VARIANT"
+        upsert_env_key "QWEN_TTS_BASE_MODEL" "$QWEN_BASE_VARIANT"
+        upsert_env_key "QWEN_TTS_CUSTOM_VOICE_MODEL" "$QWEN_CUSTOM_VARIANT"
+        upsert_env_key "QWEN_TTS_VOICE_DESIGN_MODEL" "voice-design"
+        upsert_env_key "QWEN_TTS_PYTHON_PATH" "./.venv-qwen-tts/bin/python3"
+        upsert_env_key "QWEN_TTS_MLX_PRECISION" "8bit"
+        upsert_env_key "QWEN_TTS_DEFAULT_VOICE" "Ryan"
     fi
 
     # Clean up backup files
@@ -840,22 +864,6 @@ install_dependencies() {
         fi
     fi
 
-    # Install Qwen TTS dependencies if enabled
-    if [ "$ENABLE_QWEN" = "1" ]; then
-        if ! pip show qwen-tts >/dev/null 2>&1; then
-            print_info "Installing qwen-tts..."
-            pip install --quiet qwen-tts
-            print_success "qwen-tts installed"
-        else
-            print_info "qwen-tts already installed"
-        fi
-        if ! pip show safetensors >/dev/null 2>&1; then
-            print_info "Installing safetensors..."
-            pip install --quiet safetensors
-            print_success "safetensors installed"
-        fi
-    fi
-
     # Install pyannote Community-1 dependencies if diarization is enabled.
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         print_info "Ensuring pyannote.audio 4.x is installed for speaker identification..."
@@ -864,6 +872,26 @@ install_dependencies() {
     fi
 
     deactivate
+
+    # Qwen3-TTS uses the current MLX-Audio stack. Keep it isolated from the
+    # older Kokoro environment and pin the exact backend tested by this repo.
+    if [ "$ENABLE_QWEN" = "1" ]; then
+        if [ -d .venv-qwen-tts ] && ! .venv-qwen-tts/bin/python -c "import pip" >/dev/null 2>&1; then
+            local qwen_tts_backup=".venv-qwen-tts.backup.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Existing Qwen3-TTS environment is broken; moving it to $qwen_tts_backup"
+            mv .venv-qwen-tts "$qwen_tts_backup"
+        fi
+
+        if [ ! -d .venv-qwen-tts ]; then
+            print_info "Creating isolated Qwen3-TTS environment at .venv-qwen-tts/..."
+            uv venv --seed --python 3.11 .venv-qwen-tts
+        fi
+
+        print_info "Installing pinned MLX-Audio 0.4.5 for Qwen3-TTS..."
+        uv pip install --python .venv-qwen-tts/bin/python "mlx-audio==0.4.5"
+        uv pip check --python .venv-qwen-tts/bin/python
+        print_success "Qwen3-TTS MLX environment is ready"
+    fi
 
     # Qwen3-ASR needs the current MLX-Audio stack, while Kokoro intentionally
     # remains on the older tested version in .venv. Keep those dependencies
@@ -1096,6 +1124,50 @@ PY
     fi
 }
 
+predownload_qwen_tts_models() {
+    if [ "$ENABLE_QWEN" != "1" ]; then
+        return
+    fi
+
+    print_info "Predownloading pinned Qwen3-TTS MLX Base and CustomVoice models..."
+    if QWEN_TTS_BASE_MODEL="$QWEN_BASE_VARIANT" \
+        QWEN_TTS_CUSTOM_VOICE_MODEL="$QWEN_CUSTOM_VARIANT" \
+        QWEN_TTS_MLX_PRECISION="8bit" \
+        .venv-qwen-tts/bin/python - <<'PY'
+import importlib.util
+import os
+from pathlib import Path
+
+from huggingface_hub import snapshot_download
+
+daemon_path = Path("scripts/qwen_tts_daemon.py").resolve()
+spec = importlib.util.spec_from_file_location("qwen_tts_daemon", daemon_path)
+module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(module)
+
+precision = os.environ.get("QWEN_TTS_MLX_PRECISION", "8bit")
+variants = [
+    os.environ["QWEN_TTS_BASE_MODEL"],
+    os.environ["QWEN_TTS_CUSTOM_VOICE_MODEL"],
+]
+for variant in variants:
+    try:
+        repo, revision = module.MODEL_VARIANTS[variant]["models"][precision]
+    except KeyError as exc:
+        raise RuntimeError(
+            f"Unsupported Qwen3-TTS model selection: {variant}/{precision}"
+        ) from exc
+    print(f"Downloading {variant}: {repo}@{revision}")
+    snapshot_download(repo_id=repo, revision=revision)
+PY
+    then
+        print_success "Pinned Qwen3-TTS Base and CustomVoice models downloaded"
+        print_info "VoiceDesign remains lazy and downloads on its first request"
+    else
+        print_warning "Qwen3-TTS model predownload failed; the server will retry on first use"
+    fi
+}
+
 predownload_moss_tts_model() {
     if [ "$ENABLE_MOSS" != "1" ]; then
         return
@@ -1198,12 +1270,7 @@ predownload_models() {
         export ENABLE_PARAKEET
         export ENABLE_KOKORO
         export ENABLE_POCKET
-        export ENABLE_QWEN
         export ENABLE_DIARIZATION
-
-        if [ "$ENABLE_QWEN" = "1" ]; then
-            export QWEN_TTS_MODEL_VARIANT="$QWEN_VARIANT"
-        fi
 
         python - <<'PY'
 import os
@@ -1246,19 +1313,6 @@ def download_pocket():
     from pocket_tts import TTSModel
     TTSModel.load_model()
 
-def download_qwen():
-    qwen_path = ROOT / "scripts" / "qwen_tts_daemon.py"
-    qwen_mod = load_module(qwen_path, "qwen_tts_daemon")
-    variant = os.environ.get("QWEN_TTS_MODEL_VARIANT", "base-0.6b")
-    if variant not in qwen_mod.MODEL_VARIANTS:
-        raise RuntimeError(f"Unknown Qwen3-TTS model variant: {variant}")
-    model_repo = qwen_mod.MODEL_VARIANTS[variant]["repo"]
-    import torch
-    with qwen_mod.suppress_flash_attn_warning():
-        from qwen_tts import Qwen3TTSModel
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    Qwen3TTSModel.from_pretrained(model_repo, device_map=device, dtype=torch.float32)
-
 def download_diarization():
     from pyannote.audio import Pipeline
     model_id = os.environ.get(
@@ -1276,7 +1330,6 @@ def download_diarization():
 enable_parakeet = os.environ.get("ENABLE_PARAKEET") == "1"
 enable_kokoro = os.environ.get("ENABLE_KOKORO") == "1"
 enable_pocket = os.environ.get("ENABLE_POCKET") == "1"
-enable_qwen = os.environ.get("ENABLE_QWEN") == "1"
 enable_diarization = os.environ.get("ENABLE_DIARIZATION") == "1"
 
 if enable_parakeet:
@@ -1294,11 +1347,6 @@ if enable_pocket:
 else:
     print("\n==> Pocket TTS: skipped (disabled)")
 
-if enable_qwen:
-    run_step("Qwen3-TTS", download_qwen)
-else:
-    print("\n==> Qwen3-TTS: skipped (disabled)")
-
 if enable_diarization:
     run_step("pyannote Community-1", download_diarization)
 else:
@@ -1306,6 +1354,7 @@ else:
 PY
 
         deactivate
+        predownload_qwen_tts_models
         predownload_qwen_asr_models
         predownload_moss_tts_model
         predownload_moss_td_model
@@ -1337,12 +1386,7 @@ PY
     export ENABLE_PARAKEET
     export ENABLE_KOKORO
     export ENABLE_POCKET
-    export ENABLE_QWEN
     export ENABLE_DIARIZATION
-
-    if [ "$ENABLE_QWEN" = "1" ]; then
-        export QWEN_TTS_MODEL_VARIANT="$QWEN_VARIANT"
-    fi
 
     python - <<'PY'
 import os
@@ -1385,19 +1429,6 @@ def download_pocket():
     from pocket_tts import TTSModel
     TTSModel.load_model()
 
-def download_qwen():
-    qwen_path = ROOT / "scripts" / "qwen_tts_daemon.py"
-    qwen_mod = load_module(qwen_path, "qwen_tts_daemon")
-    variant = os.environ.get("QWEN_TTS_MODEL_VARIANT", "base-0.6b")
-    if variant not in qwen_mod.MODEL_VARIANTS:
-        raise RuntimeError(f"Unknown Qwen3-TTS model variant: {variant}")
-    model_repo = qwen_mod.MODEL_VARIANTS[variant]["repo"]
-    import torch
-    with qwen_mod.suppress_flash_attn_warning():
-        from qwen_tts import Qwen3TTSModel
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    Qwen3TTSModel.from_pretrained(model_repo, device_map=device, dtype=torch.float32)
-
 def download_diarization():
     from pyannote.audio import Pipeline
     model_id = os.environ.get(
@@ -1415,7 +1446,6 @@ def download_diarization():
 enable_parakeet = os.environ.get("ENABLE_PARAKEET") == "1"
 enable_kokoro = os.environ.get("ENABLE_KOKORO") == "1"
 enable_pocket = os.environ.get("ENABLE_POCKET") == "1"
-enable_qwen = os.environ.get("ENABLE_QWEN") == "1"
 enable_diarization = os.environ.get("ENABLE_DIARIZATION") == "1"
 
 if enable_parakeet:
@@ -1433,11 +1463,6 @@ if enable_pocket:
 else:
     print("\n==> Pocket TTS: skipped (disabled)")
 
-if enable_qwen:
-    run_step("Qwen3-TTS", download_qwen)
-else:
-    print("\n==> Qwen3-TTS: skipped (disabled)")
-
 if enable_diarization:
     run_step("pyannote Community-1", download_diarization)
 else:
@@ -1445,6 +1470,7 @@ else:
 PY
 
     deactivate
+    predownload_qwen_tts_models
     predownload_qwen_asr_models
     predownload_moss_tts_model
     predownload_moss_td_model
@@ -1477,7 +1503,7 @@ print_summary() {
         printf '%b\n' "  ${CROSS} Kokoro TTS (disabled)"
     fi
     if [ "$ENABLE_QWEN" = "1" ]; then
-        printf '%b\n' "  ${CHECK} Qwen3-TTS ($QWEN_VARIANT)"
+        printf '%b\n' "  ${CHECK} Qwen3-TTS MLX (Base $QWEN_BASE_VARIANT + CustomVoice $QWEN_CUSTOM_VARIANT)"
     else
         printf '%b\n' "  ${CROSS} Qwen3-TTS (disabled)"
     fi
@@ -1548,11 +1574,14 @@ print_summary() {
         echo "  Kokoro TTS          ~300 MB     30-60 seconds"
     fi
     if [ "$ENABLE_QWEN" = "1" ]; then
-        if [ "$QWEN_VARIANT" = "base-1.7b" ]; then
-            echo "  Qwen3-TTS (1.7B)    ~3.5 GB     5-10 minutes"
+        if [ "$QWEN_BASE_VARIANT" = "base-1.7b" ]; then
+            echo "  Qwen3-TTS MLX pair  ~5.8 GB     5-10 minutes"
+        elif [ "$QWEN_CUSTOM_VARIANT" = "custom-voice-0.6b" ]; then
+            echo "  Qwen3-TTS MLX pair  ~3.8 GB     3-7 minutes"
         else
-            echo "  Qwen3-TTS           ~1.2 GB     2-4 minutes"
+            echo "  Qwen3-TTS MLX pair  ~4.8 GB     4-8 minutes"
         fi
+        echo "  VoiceDesign (lazy)  ~2.9 GB     first request only"
     fi
     if [ "$ENABLE_MOSS" = "1" ]; then
         echo "  MOSS-TTS-Nano     ~360 MB     30-90 seconds"

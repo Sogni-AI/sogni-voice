@@ -59,12 +59,13 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `tts.js` → `scripts/tts_daemon.py`: Uses mlx-audio library with Kokoro model for TTS
   - Model stored locally at `models/kokoro-tts/`, auto-downloaded from HuggingFace on first run
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
-- `qwenTts.js` → `scripts/qwen_tts_daemon.py`: Qwen3-TTS with PyTorch/MPS backend
-  - Multiple model variants (Base, CustomVoice, VoiceDesign)
+- `qwenTts.js` → `scripts/qwen_tts_daemon.py`: Qwen3-TTS through pinned MLX-Audio 0.4.5 in `.venv-qwen-tts`
+  - Separate Base, CustomVoice, and lazy VoiceDesign daemons; 8-bit models by default
   - Voice cloning from reference audio (Base models)
   - Emotion/style instruction control (CustomVoice)
   - Voice design from descriptions (VoiceDesign)
-  - 11 languages supported
+  - 10 languages plus automatic language selection
+  - Safely migrates legacy ICL `.safetensors` clones after a speaker-similarity check
 
 **Testing structure**:
 - `tests/unit/` - Unit tests organized by source directory (config, services, utils)
@@ -124,10 +125,11 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 
 **Qwen TTS**:
 - `QWEN_TTS_ENABLED` (false - set to 'true' to enable)
-- `QWEN_TTS_MODEL_VARIANT` (base-0.6b) - Options: base-0.6b, base-1.7b, custom-voice-0.6b, custom-voice, voice-design
-- `QWEN_TTS_DEFAULT_VOICE` (Chelsie), `QWEN_TTS_DEFAULT_LANGUAGE` (English)
-- `QWEN_TTS_TIMEOUT` (300000ms), `QWEN_TTS_DAEMON_STARTUP_TIMEOUT` (180000ms)
-- `PREWARM_QWEN_TTS` (false)
+- `QWEN_TTS_BASE_MODEL` (base-0.6b), `QWEN_TTS_CUSTOM_VOICE_MODEL` (custom-voice), `QWEN_TTS_VOICE_DESIGN_MODEL` (voice-design)
+- `QWEN_TTS_PYTHON_PATH` (./.venv-qwen-tts/bin/python3), `QWEN_TTS_MLX_PRECISION` (8bit)
+- `QWEN_TTS_DEFAULT_VOICE` (Ryan), `QWEN_TTS_DEFAULT_LANGUAGE` (English)
+- `QWEN_TTS_TIMEOUT` (120000ms), `QWEN_TTS_DAEMON_STARTUP_TIMEOUT` (300000ms)
+- `PREWARM_QWEN_TTS` (false), `PREWARM_QWEN_TTS_VOICE_DESIGN` (false)
 - `QWEN_TTS_VOICE_CLONES_DIR` (./voice_clones)
 
 **Upload**: `MAX_FILE_SIZE_MB` (100)
@@ -140,7 +142,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - **Python 3.10+** with virtual environment at `.venv/`
 - **Parakeet TDT** (parakeet-mlx): Audio transcription (~2.5GB model, auto-downloads on first use)
 - **mlx-audio**: TTS via Kokoro model (~300MB, auto-downloads to `models/kokoro-tts/`)
-- **qwen-tts**: Qwen3-TTS for advanced features (optional, enabled via `QWEN_TTS_ENABLED`)
+- **mlx-audio 0.4.5**: Qwen3-TTS in isolated `.venv-qwen-tts/`
 - **mlx-audio 0.4.x**: Qwen3-ASR and ForcedAligner in isolated `.venv-qwen-asr/`
 - **ffmpeg**: Required for audio processing (`brew install ffmpeg`)
 - **uv**: Python package runner (`brew install uv`)

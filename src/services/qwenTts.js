@@ -1,12 +1,13 @@
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
-import { join, dirname } from 'node:path';
+import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { access } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { QwenTTSError } from '../utils/errors.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
+const projectRoot = resolvePath(__dirname, '../..');
 
 /**
  * Compute a per-request timeout that scales with text length. The daemon
@@ -26,7 +27,7 @@ export class QwenTTSService {
    * Create a new QwenTTSService instance
    * @param {string} variant - Model variant to use (e.g., 'base-0.6b', 'custom-voice')
    */
-  constructor(variant) {
+  constructor(variant = config.qwenTts.baseModelVariant || 'base-0.6b') {
     this.variant = variant;
     this.daemonProcess = null;
     this.daemonReady = false;
@@ -39,6 +40,11 @@ export class QwenTTSService {
       variant: null,
       features: [],
       voices: [],
+      backend: null,
+      model: null,
+      revision: null,
+      precision: null,
+      streaming: false,
     };
   }
 
@@ -55,12 +61,15 @@ export class QwenTTSService {
   }
 
   async _startDaemon() {
-    return new Promise((resolve, reject) => {
+    return new Promise((resolveReady, reject) => {
       const daemonPath = join(__dirname, '../../scripts/qwen_tts_daemon.py');
 
       console.log(`Starting Qwen3-TTS daemon (variant: ${this.variant})...`);
 
-      const pythonPath = join(__dirname, '../../.venv/bin/python3');
+      const configuredPython = config.qwenTts.pythonPath || './.venv-qwen-tts/bin/python3';
+      const pythonPath = isAbsolute(configuredPython)
+        ? configuredPython
+        : resolvePath(projectRoot, configuredPython);
       this.daemonProcess = spawn(pythonPath, [daemonPath], {
         stdio: ['pipe', 'pipe', 'pipe'],
         env: {
@@ -68,6 +77,7 @@ export class QwenTTSService {
           PYTHONUNBUFFERED: '1',
           QWEN_TTS_MODEL_VARIANT: this.variant,
           QWEN_TTS_VOICE_CLONES_DIR: config.qwenTts.voiceClonesDir,
+          QWEN_TTS_MLX_PRECISION: config.qwenTts.mlxPrecision || '8bit',
         },
       });
 
@@ -99,13 +109,18 @@ export class QwenTTSService {
               variant: response.model_variant,
               features: response.features || [],
               voices: response.speakers || response.voices || [],
+              backend: response.backend || null,
+              model: response.model || null,
+              revision: response.revision || null,
+              precision: response.precision || null,
+              streaming: Boolean(response.streaming),
             };
             this.daemonReady = true;
             if (this.startupTimeoutId) {
               clearTimeout(this.startupTimeoutId);
               this.startupTimeoutId = null;
             }
-            resolve();
+            resolveReady();
             return;
           }
 
@@ -277,6 +292,7 @@ export class QwenTTSService {
     const {
       speaker = config.qwenTts.defaultVoice,
       instruct = '',
+      language = config.qwenTts.defaultLanguage,
       outputPath,
     } = options;
 
@@ -289,6 +305,7 @@ export class QwenTTSService {
       text,
       speaker,
       instruct,
+      language,
       output_path: outputPath,
     }, { timeout: computeGenerationTimeout(text) });
 
@@ -297,6 +314,7 @@ export class QwenTTSService {
       duration: result.duration,
       speaker,
       instruct,
+      language,
     };
   }
 
@@ -309,7 +327,11 @@ export class QwenTTSService {
    * @returns {Promise<{outputPath: string, duration: number}>}
    */
   async generateVoiceDesign(text, options = {}) {
-    const { instruct, outputPath } = options;
+    const {
+      instruct,
+      language = config.qwenTts.defaultLanguage,
+      outputPath,
+    } = options;
 
     if (!outputPath) {
       throw new QwenTTSError('outputPath is required');
@@ -323,6 +345,7 @@ export class QwenTTSService {
       type: 'generate_voice_design',
       text,
       instruct,
+      language,
       output_path: outputPath,
     }, { timeout: computeGenerationTimeout(text) });
 
@@ -330,6 +353,7 @@ export class QwenTTSService {
       outputPath: result.output_path,
       duration: result.duration,
       instruct,
+      language,
     };
   }
 
@@ -516,6 +540,8 @@ export class QwenTTSService {
 
     return {
       valid: result.valid,
+      compatible: result.compatible,
+      embeddingDim: result.embedding_dim,
       error: result.error,
     };
   }
@@ -601,7 +627,7 @@ export class QwenTTSService {
   listVoices() {
     return this.modelInfo.voices.length > 0
       ? this.modelInfo.voices
-      : ['Chelsie', 'Ethan', 'Serena', 'Vivian', 'Ryan', 'Aiden', 'Eric', 'Dylan'];
+      : ['Ryan', 'Aiden', 'Serena', 'Vivian', 'Uncle_Fu', 'Dylan', 'Eric', 'Ono_Anna', 'Sohee'];
   }
 
   /**
@@ -615,6 +641,9 @@ export class QwenTTSService {
 // Export dual service instances for Base (voice cloning) and CustomVoice (style instructions)
 export const qwenTtsBaseService = new QwenTTSService(config.qwenTts.baseModelVariant || 'base-0.6b');
 export const qwenTtsCustomVoiceService = new QwenTTSService(config.qwenTts.customVoiceModelVariant || 'custom-voice');
+export const qwenTtsVoiceDesignService = new QwenTTSService(
+  config.qwenTts.voiceDesignModelVariant || 'voice-design',
+);
 
 // Legacy export for backward compatibility
 export const qwenTtsService = qwenTtsBaseService;

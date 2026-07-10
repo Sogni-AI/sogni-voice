@@ -19,6 +19,22 @@ describe('config', () => {
     process.env.PREWARM_TTS = '';
     process.env.TRANSCRIBE_TIMEOUT = '';
     process.env.DIARIZATION_MODEL_ID = '';
+    process.env.QWEN_TTS_ENABLED = '';
+    process.env.QWEN_TTS_MODEL_VARIANT = '';
+    process.env.QWEN_TTS_BASE_MODEL = '';
+    process.env.QWEN_TTS_CUSTOM_VOICE_MODEL = '';
+    process.env.QWEN_TTS_VOICE_DESIGN_MODEL = '';
+    process.env.QWEN_TTS_PYTHON_PATH = '';
+    process.env.QWEN_TTS_MLX_PRECISION = '';
+    process.env.QWEN_TTS_DEFAULT_VOICE = '';
+    process.env.QWEN_TTS_DEFAULT_LANGUAGE = '';
+    process.env.QWEN_TTS_TIMEOUT = '';
+    process.env.QWEN_TTS_TIMEOUT_PER_CHAR_MS = '';
+    process.env.QWEN_TTS_TIMEOUT_MAX = '';
+    process.env.QWEN_TTS_DAEMON_STARTUP_TIMEOUT = '';
+    process.env.PREWARM_QWEN_TTS = '';
+    process.env.PREWARM_QWEN_TTS_VOICE_DESIGN = '';
+    process.env.QWEN_TTS_VOICE_CLONES_DIR = '';
     process.env.QWEN_ASR_ENABLED = '';
     process.env.QWEN_ASR_MODEL_ID = '';
     process.env.QWEN_ASR_ALIGNER_MODEL_ID = '';
@@ -233,6 +249,53 @@ describe('config', () => {
       process.env.DIARIZATION_MODEL_ID = 'pyannote/custom-diarization-model';
       const { config } = await import('../../../src/config/index.js');
       expect(config.diarization.modelId).toBe('pyannote/custom-diarization-model');
+    });
+  });
+
+  describe('qwen tts config', () => {
+    it('is disabled by default and uses the pinned MLX topology', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.qwenTts).toMatchObject({
+        enabled: false,
+        baseModelVariant: 'base-0.6b',
+        customVoiceModelVariant: 'custom-voice',
+        voiceDesignModelVariant: 'voice-design',
+        pythonPath: './.venv-qwen-tts/bin/python3',
+        mlxPrecision: '8bit',
+        defaultVoice: 'Ryan',
+        defaultLanguage: 'English',
+        timeout: 120000,
+        timeoutPerChar: 40,
+        timeoutMax: 900000,
+        daemonStartupTimeout: 300000,
+        preWarmDaemon: false,
+        preWarmVoiceDesign: false,
+        voiceClonesDir: './voice_clones',
+      });
+    });
+
+    it('accepts Qwen3-TTS MLX environment overrides', async () => {
+      process.env.QWEN_TTS_ENABLED = '1';
+      process.env.QWEN_TTS_BASE_MODEL = 'base-1.7b';
+      process.env.QWEN_TTS_CUSTOM_VOICE_MODEL = 'custom-voice-0.6b';
+      process.env.QWEN_TTS_VOICE_DESIGN_MODEL = 'voice-design';
+      process.env.QWEN_TTS_PYTHON_PATH = '/opt/qwen-tts/bin/python';
+      process.env.QWEN_TTS_MLX_PRECISION = 'bf16';
+      process.env.QWEN_TTS_DEFAULT_VOICE = 'Aiden';
+      process.env.PREWARM_QWEN_TTS = '1';
+      process.env.PREWARM_QWEN_TTS_VOICE_DESIGN = '1';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.qwenTts).toMatchObject({
+        enabled: true,
+        baseModelVariant: 'base-1.7b',
+        customVoiceModelVariant: 'custom-voice-0.6b',
+        voiceDesignModelVariant: 'voice-design',
+        pythonPath: '/opt/qwen-tts/bin/python',
+        mlxPrecision: 'bf16',
+        defaultVoice: 'Aiden',
+        preWarmDaemon: true,
+        preWarmVoiceDesign: true,
+      });
     });
   });
 

@@ -89,7 +89,9 @@ vi.mock('../../src/config/index.js', () => ({
       modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-1.7b',
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',
-      defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+      voiceDesignModelVariant: 'voice-design',
+      mlxPrecision: '8bit',
+      defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan',
       defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
       timeout: 120000,
       daemonStartupTimeout: 180000,
@@ -132,7 +134,7 @@ vi.mock('../../src/services/qwenTts.js', () => {
       return {
         outputPath: options.outputPath,
         duration: 1.5,
-        voice: options.voice || 'Chelsie',
+        voice: options.voice || 'Ryan',
         language: options.language || 'English',
       };
     }),
@@ -143,8 +145,9 @@ vi.mock('../../src/services/qwenTts.js', () => {
       return {
         outputPath: options.outputPath,
         duration: 1.5,
-        speaker: options.speaker || 'Chelsie',
+        speaker: options.speaker || 'Ryan',
         instruct: options.instruct,
+        language: options.language || 'English',
       };
     }),
     generateVoiceDesign: vi.fn().mockImplementation(async (text, options) => {
@@ -155,6 +158,7 @@ vi.mock('../../src/services/qwenTts.js', () => {
         outputPath: options.outputPath,
         duration: 1.5,
         instruct: options.instruct,
+        language: options.language || 'English',
       };
     }),
     createVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'clone_test123' }),
@@ -172,12 +176,18 @@ vi.mock('../../src/services/qwenTts.js', () => {
     deleteVoiceClone: vi.fn().mockResolvedValue({ cloneId: 'clone_test123' }),
     renameVoiceClone: vi.fn().mockResolvedValue({ oldCloneId: 'clone_test123', newCloneId: 'renamed_clone' }),
     listVoiceClones: vi.fn().mockResolvedValue({ clones: ['clone_test123', 'clone_test456'] }),
-    listVoices: vi.fn().mockReturnValue(['Chelsie', 'Ethan', 'Serena', 'Vivian']),
+    listVoices: vi.fn().mockReturnValue(['Ryan', 'Aiden', 'Serena', 'Vivian']),
     getModelInfo: vi.fn().mockReturnValue({
       variant,
       features,
-      voices: ['Chelsie', 'Ethan'],
+      voices: ['Ryan', 'Aiden'],
+      backend: 'mlx',
+      model: `mlx-community/${variant}`,
+      revision: `${variant}-revision`,
+      precision: '8bit',
+      streaming: true,
     }),
+    isReady: vi.fn().mockReturnValue(false),
     supportsFeature: vi.fn().mockImplementation((feature) => features.includes(feature)),
     shutdown: vi.fn().mockResolvedValue(undefined),
     isEnabled: vi.fn().mockReturnValue(true),
@@ -189,9 +199,10 @@ vi.mock('../../src/services/qwenTts.js', () => {
   });
 
   return {
-    qwenTtsBaseService: createMockService('base-0.6b', ['tts', 'voice_cloning', 'voice_design']),
+    qwenTtsBaseService: createMockService('base-0.6b', ['tts', 'voice_cloning']),
     qwenTtsCustomVoiceService: createMockService('custom-voice', ['tts', 'custom_voice']),
-    qwenTtsService: createMockService('base-0.6b', ['tts', 'voice_cloning', 'voice_design']),
+    qwenTtsVoiceDesignService: createMockService('voice-design', ['tts', 'voice_design']),
+    qwenTtsService: createMockService('base-0.6b', ['tts', 'voice_cloning']),
   };
 });
 
@@ -205,7 +216,11 @@ vi.mock('../../src/services/tts.js', () => ({
 }));
 
 import { initServer } from '../../src/server.js';
-import { qwenTtsBaseService, qwenTtsCustomVoiceService } from '../../src/services/qwenTts.js';
+import {
+  qwenTtsBaseService,
+  qwenTtsCustomVoiceService,
+  qwenTtsVoiceDesignService,
+} from '../../src/services/qwenTts.js';
 
 describe('Qwen TTS Routes', () => {
   let server;
@@ -265,7 +280,7 @@ describe('Qwen TTS Routes', () => {
       expect(payload.success).toBe(true);
       expect(payload.audio).toBeDefined();
       // Default voice comes from env config
-      expect(payload.voice).toBe(process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie');
+      expect(payload.voice).toBe(process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan');
       expect(payload.language).toBe(process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English');
     });
 
@@ -275,7 +290,7 @@ describe('Qwen TTS Routes', () => {
         url: '/qwen-tts',
         payload: {
           text: 'Hello',
-          voice: 'Ethan',
+          voice: 'Aiden',
           language: 'Chinese',
           format: 'buffer',
         },
@@ -283,8 +298,12 @@ describe('Qwen TTS Routes', () => {
 
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
-      expect(payload.voice).toBe('Ethan');
+      expect(payload.voice).toBe('Aiden');
       expect(payload.language).toBe('Chinese');
+      expect(qwenTtsCustomVoiceService.generateCustomVoice).toHaveBeenLastCalledWith(
+        'Hello',
+        expect.objectContaining({ speaker: 'Aiden', language: 'Chinese' }),
+      );
     });
 
     it('should return 400 for empty text', async () => {
@@ -343,8 +362,9 @@ describe('Qwen TTS Routes', () => {
         url: '/qwen-tts/custom-voice',
         payload: {
           text: 'Hello world',
-          speaker: 'Chelsie',
+          speaker: 'Ryan',
           instruct: 'Very happy and excited',
+          language: 'French',
           format: 'buffer',
         },
       });
@@ -352,8 +372,13 @@ describe('Qwen TTS Routes', () => {
       expect(response.statusCode).toBe(200);
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
-      expect(payload.speaker).toBe('Chelsie');
+      expect(payload.speaker).toBe('Ryan');
       expect(payload.instruct).toBe('Very happy and excited');
+      expect(payload.language).toBe('French');
+      expect(qwenTtsCustomVoiceService.generateCustomVoice).toHaveBeenLastCalledWith(
+        'Hello world',
+        expect.objectContaining({ language: 'French' }),
+      );
     });
 
     it('should return 400 for missing instruct', async () => {
@@ -390,6 +415,7 @@ describe('Qwen TTS Routes', () => {
         payload: {
           text: 'Hello world',
           instruct: 'A deep male voice with calm tone',
+          language: 'German',
           format: 'buffer',
         },
       });
@@ -398,6 +424,11 @@ describe('Qwen TTS Routes', () => {
       const payload = JSON.parse(response.payload);
       expect(payload.success).toBe(true);
       expect(payload.instruct).toBe('A deep male voice with calm tone');
+      expect(payload.language).toBe('German');
+      expect(qwenTtsVoiceDesignService.generateVoiceDesign).toHaveBeenCalledWith(
+        'Hello world',
+        expect.objectContaining({ language: 'German' }),
+      );
     });
 
     it('should return 400 for missing instruct', async () => {
@@ -491,15 +522,20 @@ describe('Qwen TTS Routes', () => {
       expect(payload.voices.length).toBeGreaterThan(0);
       expect(payload.clones).toEqual(['clone_test123', 'clone_test456']);
       // Default values come from config (env vars)
-      expect(payload.default).toBe(process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie');
+      expect(payload.default).toBe(process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan');
       expect(payload.defaultLanguage).toBe(process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English');
       // Dual-daemon setup returns modelVariants object
       expect(payload.modelVariants).toBeDefined();
       expect(payload.modelVariants.base).toBe('base-0.6b');
       expect(payload.modelVariants.customVoice).toBe('custom-voice');
+      expect(payload.modelVariants.voiceDesign).toBe('voice-design');
+      expect(payload.backend).toBe('mlx');
+      expect(payload.models.base.precision).toBe('8bit');
+      expect(payload.models.voiceDesign.lazy).toBe(true);
       // Features merged from both daemons
       expect(payload.features).toContain('voice_cloning');
       expect(payload.features).toContain('custom_voice');
+      expect(payload.features).toContain('voice_design');
     });
 
     it('should remain available when the CustomVoice daemon is unavailable', async () => {
@@ -645,7 +681,9 @@ describe('Qwen TTS Routes', () => {
             modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-1.7b',
             baseModelVariant: 'base-0.6b',
             customVoiceModelVariant: 'custom-voice',
-            defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Chelsie',
+            voiceDesignModelVariant: 'voice-design',
+            mlxPrecision: '8bit',
+            defaultVoice: process.env.QWEN_TTS_DEFAULT_VOICE || 'Ryan',
             defaultLanguage: process.env.QWEN_TTS_DEFAULT_LANGUAGE || 'English',
             timeout: 120000,
             daemonStartupTimeout: 180000,
@@ -728,7 +766,9 @@ describe('Qwen TTS Routes (disabled)', () => {
           modelVariant: 'base-1.7b',
           baseModelVariant: 'base-0.6b',
           customVoiceModelVariant: 'custom-voice',
-          defaultVoice: 'Chelsie',
+          voiceDesignModelVariant: 'voice-design',
+          mlxPrecision: '8bit',
+          defaultVoice: 'Ryan',
           defaultLanguage: 'English',
           timeout: 120000,
           daemonStartupTimeout: 180000,
@@ -746,6 +786,7 @@ describe('Qwen TTS Routes (disabled)', () => {
     vi.doMock('../../src/services/qwenTts.js', () => ({
       qwenTtsBaseService: disabledMockService,
       qwenTtsCustomVoiceService: disabledMockService,
+      qwenTtsVoiceDesignService: disabledMockService,
       qwenTtsService: disabledMockService,
     }));
 

@@ -15,6 +15,7 @@ voice_clones/*.pkl
 !voice_clones/Marvin.pkl
 # Ignore all Pocket TTS voice clones except specific ones
 pocket_voice_clones/*
+moss_voice_clones/*
 # Allow default Pocket TTS voice clone (Marvin)
 !pocket_voice_clones/Marvin/
 # Allow Motivator voice clone

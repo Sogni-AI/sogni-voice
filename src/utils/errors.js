@@ -59,6 +59,18 @@ export class PocketTTSError extends Error {
   }
 }
 
+export class MossTTSError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'MossTTSError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}
+
 export class QwenTTSError extends Error {
   constructor(message, cause = null) {
     super(message);

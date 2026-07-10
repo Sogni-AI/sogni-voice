@@ -27,6 +27,16 @@ describe('config', () => {
     process.env.QWEN_ASR_TIMEOUT = '';
     process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT = '';
     process.env.PREWARM_QWEN_ASR = '';
+    process.env.MOSS_TTS_ENABLED = '';
+    process.env.MOSS_TTS_MODEL_ID = '';
+    process.env.MOSS_TTS_PYTHON_PATH = '';
+    process.env.MOSS_TTS_DEFAULT_VOICE = '';
+    process.env.MOSS_TTS_TIMEOUT = '';
+    process.env.MOSS_TTS_TIMEOUT_PER_CHAR_MS = '';
+    process.env.MOSS_TTS_TIMEOUT_MAX = '';
+    process.env.MOSS_TTS_DAEMON_STARTUP_TIMEOUT = '';
+    process.env.PREWARM_MOSS_TTS = '';
+    process.env.MOSS_TTS_VOICES_DIR = '';
     process.env.MAX_FILE_SIZE_MB = '';
   });
 
@@ -237,6 +247,36 @@ describe('config', () => {
         modelId: 'local/asr',
         alignerModelId: 'local/aligner',
         pythonPath: '/opt/qwen/bin/python',
+      });
+    });
+  });
+
+  describe('moss tts config', () => {
+    it('is disabled by default and uses an isolated MLX environment', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.mossTts).toMatchObject({
+        enabled: false,
+        modelId: 'mlx-community/MOSS-TTS-Nano-100M',
+        pythonPath: './.venv-moss-tts/bin/python3',
+        defaultVoice: null,
+        voicesDir: './moss_voice_clones',
+        preWarmDaemon: false,
+      });
+    });
+
+    it('accepts MOSS-TTS-Nano environment overrides', async () => {
+      process.env.MOSS_TTS_ENABLED = '1';
+      process.env.MOSS_TTS_MODEL_ID = 'local/moss';
+      process.env.MOSS_TTS_PYTHON_PATH = '/opt/moss/bin/python';
+      process.env.MOSS_TTS_DEFAULT_VOICE = 'narrator';
+      process.env.MOSS_TTS_VOICES_DIR = '/srv/moss-voices';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.mossTts).toMatchObject({
+        enabled: true,
+        modelId: 'local/moss',
+        pythonPath: '/opt/moss/bin/python',
+        defaultVoice: 'narrator',
+        voicesDir: '/srv/moss-voices',
       });
     });
   });

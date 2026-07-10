@@ -713,7 +713,8 @@
       #recordedAudio,
       #generatedAudio,
       #cloneRecordedAudio,
-      #pocketCloneRecordedAudio {
+      #pocketCloneRecordedAudio,
+      #mossCloneRecordedAudio {
         margin-top: 10px;
       }
       .confirm-dialog {
@@ -976,6 +977,13 @@
           <span class="model-desc">11 languages, voice cloning, emotion/style control. Largest model.</span>
         </span>
       </label>
+      <label>
+        <input type="radio" name="ttsModel" value="moss" id="mossRadio">
+        <span class="model-label-content">
+          <span class="model-name">MOSS-TTS-Nano <span class="badge" style="background:#6f42c1">100M + Multilingual</span></span>
+          <span class="model-desc">20 languages, 48 kHz stereo, saved reference voices. MLX, non-streaming.</span>
+        </span>
+      </label>
     </div>
 
     <div class="form-group">
@@ -1061,6 +1069,10 @@
       <label>
         <input type="radio" name="cloneModel" value="qwen">
         Qwen3 TTS <span class="badge warning">Advanced</span>
+      </label>
+      <label>
+        <input type="radio" name="cloneModel" value="moss">
+        MOSS-TTS-Nano <span class="badge" style="background:#6f42c1">Multilingual</span>
       </label>
     </div>
 
@@ -1215,6 +1227,54 @@
       </div>
     </div>
 
+    <!-- MOSS-TTS-Nano Reference Voice Tab -->
+    <div class="clone-tab-content" id="mossCloneTabContent">
+      <div id="mossDisabledMessage" class="result error hidden">
+        MOSS-TTS-Nano is not enabled on this server. Set <code>MOSS_TTS_ENABLED=1</code> to enable it.
+      </div>
+
+      <div id="mossVoiceCloningContent">
+        <div class="subsection">
+          <h3>Create MOSS Reference Voice</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">Use 1-30 seconds of clean speech (5-10 seconds recommended). No transcript is needed.</p>
+
+          <div class="form-group">
+            <label for="mossCloneName">Reference Voice Name:</label>
+            <input type="text" id="mossCloneName" placeholder="Enter a name (letters, numbers, underscores, hyphens)">
+          </div>
+
+          <div class="controls">
+            <button id="mossRecordCloneBtn">Record Voice Sample</button>
+            <button id="mossStopCloneBtn" style="display: none;">Stop Recording</button>
+            <span style="color: #666; margin: 0 8px;">or</span>
+            <label for="mossUploadCloneFile" class="upload-btn" id="mossUploadCloneLabel">
+              Upload Audio File
+              <input type="file" id="mossUploadCloneFile" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/*" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="mossCloneRecordStatus">Ready to record or upload a voice sample</div>
+          <label>Reference Audio:</label>
+          <audio id="mossCloneRecordedAudio" controls style="display: none;"></audio>
+
+          <div class="controls" style="margin-top: 12px;">
+            <button id="mossCreateCloneBtn" disabled>Create Reference Voice</button>
+          </div>
+          <div class="result" id="mossCloneResult">Record or upload a voice sample to create a reference profile.</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Your MOSS Reference Voices</h3>
+          <div id="mossVoiceCloneList" class="voice-clone-list">
+            <p style="color: #666;">No reference voices yet. Create one above!</p>
+          </div>
+          <button id="mossRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+        </div>
+      </div>
+    </div>
+
     </div><!-- .clone-section-content -->
   </details>
 
@@ -1250,12 +1310,14 @@
     let apiKeyConfigured = false;
     let dangerouslyAllowImports = false;
     let voiceCloneImportMode = 'blocked';
+    let voiceCloningMode = 'blocked';
     let serviceStatus = {
       tts: { enabled: false },
       transcription: { enabled: false },
       qwenAsr: { enabled: false },
       pocketTts: { enabled: false },
       qwenTts: { enabled: false },
+      mossTts: { enabled: false },
     };
     let apiKey = localStorage.getItem('sogni_api_key') || '';
 
@@ -1301,7 +1363,8 @@
     function setUIDisabledState(disabled) {
       // Buttons to disable when no API key
       const buttonsToDisable = [
-        'recordBtn', 'uploadBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn'
+        'recordBtn', 'uploadBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn',
+        'mossRecordCloneBtn', 'mossCreateCloneBtn', 'mossRefreshClonesBtn'
       ];
       buttonsToDisable.forEach(id => {
         const btn = document.getElementById(id);
@@ -1312,7 +1375,7 @@
       const inputsToDisable = [
         'transcriptionEngine', 'qwenAsrLanguage', 'timestampMode', 'diarizeCheckbox',
         'alignmentText', 'alignmentLanguage', 'ttsText', 'voiceSelect', 'speedRange',
-        'languageSelect', 'styleInstruct', 'cloneName',
+        'languageSelect', 'styleInstruct', 'cloneName', 'mossCloneName',
       ];
       inputsToDisable.forEach(id => {
         const input = document.getElementById(id);
@@ -1325,6 +1388,11 @@
         uploadLabel.style.pointerEvents = disabled ? 'none' : 'auto';
         uploadLabel.style.opacity = disabled ? '0.5' : '1';
       }
+      const mossUploadLabel = document.getElementById('mossUploadCloneLabel');
+      if (mossUploadLabel) {
+        mossUploadLabel.style.pointerEvents = disabled ? 'none' : 'auto';
+        mossUploadLabel.style.opacity = disabled ? '0.5' : '1';
+      }
     }
 
     clearApiKeyBtn.addEventListener('click', () => {
@@ -1334,6 +1402,7 @@
       authStatus.textContent = 'API key cleared';
       authStatus.className = 'auth-status info';
       updateImportAccessUI();
+      updateMossAvailability();
     });
 
     // Helper function to get fetch headers with auth
@@ -1461,18 +1530,22 @@
         dangerouslyAllowImports = Boolean(data.dangerouslyAllowImports);
         voiceCloneImportMode = data.voiceCloneImports?.mode
           || (dangerouslyAllowImports ? 'public' : (apiKeyConfigured ? 'api_key' : 'blocked'));
+        voiceCloningMode = data.voiceCloning?.mode
+          || (apiKeyConfigured ? 'api_key' : 'blocked');
         serviceStatus = {
           ...serviceStatus,
           ...(data.services || {}),
         };
 
-        const shouldShowApiKeyEntry = authEnabled || voiceCloneImportMode === 'api_key';
+        const shouldShowApiKeyEntry = authEnabled
+          || voiceCloneImportMode === 'api_key'
+          || voiceCloningMode === 'api_key';
 
         if (shouldShowApiKeyEntry) {
           authSection.classList.remove('auth-disabled');
           authContent.classList.remove('hidden');
           authDisabledContent.classList.add('hidden');
-          authTitle.textContent = authEnabled ? 'API Authentication Required' : 'API Key Required For Voice Imports';
+          authTitle.textContent = authEnabled ? 'API Authentication Required' : 'API Key Required For Voice Features';
           if (apiKey) {
             authStatus.textContent = 'API key loaded from browser storage';
             authStatus.className = 'auth-status success';
@@ -1480,7 +1553,7 @@
             authStatus.textContent = 'Enter your API key to access the API';
             authStatus.className = 'auth-status info';
           } else {
-            authStatus.textContent = 'Other API endpoints are public, but voice clone imports require your API key.';
+            authStatus.textContent = 'Other API endpoints are public, but protected voice features require your API key.';
             authStatus.className = 'auth-status info';
           }
         } else {
@@ -1488,8 +1561,8 @@
           authContent.classList.add('hidden');
           authDisabledContent.classList.remove('hidden');
           authTitle.textContent = 'Authentication';
-          authDisabledText.textContent = voiceCloneImportMode === 'blocked'
-            ? 'Authentication is not enabled on this server, but voice clone imports are blocked. Set AUTH_API_KEY or DANGEROUSLY_ALLOW_IMPORTS=1 in .env to enable them.'
+          authDisabledText.textContent = voiceCloneImportMode === 'blocked' || voiceCloningMode === 'blocked'
+            ? 'Authentication is not enabled on this server, but protected voice operations are blocked. Configure AUTH_API_KEY or the relevant DANGEROUSLY_ALLOW_* local override to enable them.'
             : 'Authentication is not enabled on this server. All API endpoints are publicly accessible.';
         }
 
@@ -1501,6 +1574,7 @@
         apiKeyConfigured = false;
         dangerouslyAllowImports = false;
         voiceCloneImportMode = 'blocked';
+        voiceCloningMode = 'blocked';
         authSection.classList.add('auth-disabled');
         authContent.classList.add('hidden');
         authDisabledContent.classList.remove('hidden');
@@ -1522,12 +1596,15 @@
     let qwenCustomVoiceEnabled = false;
     let qwenVoiceCloningEnabled = false;
     let pocketEnabled = false;
+    let mossEnabled = false;
     let kokoroVoices = [];
     let qwenVoices = [];
     let qwenClones = [];
     let pocketVoices = [];
     let pocketClones = [];
+    let mossVoices = [];
     let pocketAvailabilityMessage = '';
+    let mossAvailabilityMessage = '';
 
     modelRadios.forEach(radio => {
       radio.addEventListener('change', (e) => {
@@ -1537,6 +1614,7 @@
     });
 
     function updateModelUI() {
+      if (canMakeAuthenticatedCalls()) generateBtn.disabled = false;
       if (currentModel === 'qwen') {
         qwenOptions.classList.remove('hidden');
         speedControl.classList.add('hidden');
@@ -1545,6 +1623,12 @@
         qwenOptions.classList.add('hidden');
         speedControl.classList.add('hidden');
         loadPocketVoices();
+      } else if (currentModel === 'moss') {
+        qwenOptions.classList.add('hidden');
+        speedControl.classList.add('hidden');
+        generateBtn.disabled = true;
+        voiceSelect.innerHTML = '<option value="">Loading MOSS reference voices…</option>';
+        loadMossVoices();
       } else {
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
@@ -1582,6 +1666,7 @@
         const model = e.target.value;
         document.getElementById('pocketCloneTabContent').classList.toggle('active', model === 'pocket');
         document.getElementById('qwenCloneTabContent').classList.toggle('active', model === 'qwen');
+        document.getElementById('mossCloneTabContent').classList.toggle('active', model === 'moss');
       });
     });
 
@@ -2271,6 +2356,106 @@
       }
     }
 
+    function canUseProtectedVoiceFeatures() {
+      return voiceCloningMode === 'public'
+        || (voiceCloningMode === 'api_key' && Boolean(apiKey));
+    }
+
+    async function loadMossVoices(showAuthError = true) {
+      try {
+        const response = await authFetch(`${API_BASE}/moss-tts/voices`, {}, showAuthError);
+        if (!response.ok) {
+          const errorMessage = await getResponseErrorMessage(response);
+          mossEnabled = false;
+          mossAvailabilityMessage = response.status === 404 && errorMessage.includes('not enabled')
+            ? ''
+            : `MOSS-TTS-Nano is unavailable (${errorMessage}).`;
+          updateMossAvailability();
+          return;
+        }
+
+        const data = await response.json();
+        mossEnabled = true;
+        mossAvailabilityMessage = '';
+        mossVoices = (data.voices || []).sort((a, b) => a.localeCompare(b));
+
+        if (currentModel === 'moss') {
+          voiceSelect.innerHTML = '';
+          if (mossVoices.length > 0) {
+            mossVoices.forEach(voice => {
+              const option = document.createElement('option');
+              option.value = `moss:${voice}`;
+              option.textContent = voice;
+              if (voice === data.default) option.selected = true;
+              voiceSelect.appendChild(option);
+            });
+          } else {
+            voiceSelect.innerHTML = '<option value="">Create a MOSS reference voice below</option>';
+          }
+        }
+
+        updateMossAvailability();
+        updateMossVoiceList();
+      } catch (error) {
+        console.error('Failed to load MOSS reference voices:', error);
+        mossEnabled = false;
+        mossAvailabilityMessage = `MOSS-TTS-Nano status could not be checked (${error.message}).`;
+        updateMossAvailability();
+      }
+    }
+
+    function updateMossAvailability() {
+      const disabledMessage = document.getElementById('mossDisabledMessage');
+      const content = document.getElementById('mossVoiceCloningContent');
+      const hasVoiceAccess = canUseProtectedVoiceFeatures();
+      const unavailable = !mossEnabled || !hasVoiceAccess;
+
+      if (unavailable) {
+        content?.classList.add('hidden');
+        if (disabledMessage) {
+          if (!mossEnabled) {
+            disabledMessage.innerHTML = mossAvailabilityMessage
+              || 'MOSS-TTS-Nano is not enabled on this server. Set <code>MOSS_TTS_ENABLED=1</code> to enable it.';
+          } else if (voiceCloningMode === 'api_key') {
+            disabledMessage.textContent = 'Enter your API key above to create and use MOSS reference voices.';
+          } else {
+            disabledMessage.innerHTML = 'MOSS reference-voice operations are blocked. Configure <code>AUTH_API_KEY</code> or set <code>DANGEROUSLY_ALLOW_VOICE_CLONING=1</code> for local public use.';
+          }
+          disabledMessage.classList.remove('hidden');
+        }
+        if (currentModel === 'moss') {
+          voiceSelect.innerHTML = '<option value="">MOSS reference voices unavailable</option>';
+        }
+      } else {
+        disabledMessage?.classList.add('hidden');
+        content?.classList.remove('hidden');
+      }
+
+      if (currentModel === 'moss') {
+        generateBtn.disabled = unavailable || mossVoices.length === 0;
+      }
+      const label = document.getElementById('mossRadio')?.closest('label');
+      if (label) label.classList.toggle('model-unavailable', !mossEnabled);
+    }
+
+    function updateMossVoiceList() {
+      const listContainer = document.getElementById('mossVoiceCloneList');
+      if (!listContainer) return;
+      if (mossVoices.length === 0) {
+        listContainer.innerHTML = '<p style="color: #666;">No reference voices yet. Create one above!</p>';
+        return;
+      }
+      listContainer.innerHTML = mossVoices.map(voice => `
+        <div class="voice-clone-item">
+          <span class="clone-name">${escapeHtml(voice)}</span>
+          <div class="clone-actions">
+            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(voice)}', 'moss')">Rename</button>
+            <button class="danger small" onclick="confirmDeleteMossVoice('${escapeHtml(voice)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
+    }
+
     function updatePocketAvailability() {
       const pocketDisabledMessage = document.getElementById('pocketDisabledMessage');
       const pocketContent = document.getElementById('pocketVoiceCloningContent');
@@ -2482,7 +2667,15 @@
         const selectedVoice = voiceSelect.value;
 
         // Route cloned voices to appropriate TTS backend
-        if (selectedVoice.startsWith('pocket-clone:')) {
+        if (currentModel === 'moss') {
+          const voiceId = selectedVoice.replace(/^moss:/, '');
+          if (!voiceId) throw new Error('Create or select a MOSS reference voice first.');
+          response = await authFetch(`${API_BASE}/moss-tts`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text, voice: voiceId }),
+          });
+        } else if (selectedVoice.startsWith('pocket-clone:')) {
           const cloneId = selectedVoice.replace('pocket-clone:', '');
           response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
             method: 'POST',
@@ -2563,11 +2756,20 @@
 
         const isQwenClone = selectedVoice.startsWith('clone:');
         const isPocketClone = selectedVoice.startsWith('pocket-clone:');
+        const isMossVoice = selectedVoice.startsWith('moss:');
         const isClone = isQwenClone || isPocketClone;
-        const voiceInfo = isClone
+        const voiceInfo = isMossVoice
+          ? `Reference voice: ${selectedVoice.replace(/^moss:/, '')}`
+          : isClone
           ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
-        const modelUsed = isPocketClone ? 'Pocket (Clone)' : isQwenClone ? 'Qwen3 (Clone)' : (currentModel === 'kokoro' ? 'Kokoro' : currentModel === 'pocket' ? 'Pocket' : 'Qwen3');
+        const modelUsed = isMossVoice
+          ? 'MOSS-TTS-Nano (Reference)'
+          : isPocketClone
+            ? 'Pocket (Clone)'
+            : isQwenClone
+              ? 'Qwen3 (Clone)'
+              : (currentModel === 'kokoro' ? 'Kokoro' : currentModel === 'pocket' ? 'Pocket' : 'Qwen3');
         const styleInstruct = document.getElementById('styleInstruct').value.trim();
         const usedStyle = currentModel === 'qwen' && styleInstruct && qwenCustomVoiceEnabled;
         let extraInfo = '';
@@ -2589,7 +2791,9 @@
         ttsResult.textContent = 'Error: ' + error.message;
         ttsStatus.textContent = 'Generation failed';
       } finally {
-        generateBtn.disabled = false;
+        generateBtn.disabled = currentModel === 'moss'
+          ? (!mossEnabled || mossVoices.length === 0 || !canUseProtectedVoiceFeatures())
+          : false;
       }
     }
 
@@ -2884,6 +3088,7 @@
     const confirmNo = document.getElementById('confirmNo');
     let pendingDeleteCloneId = null;
     let pendingDeletePocketCloneId = null;
+    let pendingDeleteMossVoiceId = null;
 
     function confirmDeleteClone(cloneId) {
       pendingDeleteCloneId = cloneId;
@@ -2891,8 +3096,17 @@
       confirmDialog.classList.remove('hidden');
     }
 
+    function confirmDeleteMossVoice(voiceId) {
+      pendingDeleteMossVoiceId = voiceId;
+      confirmMessage.textContent = `Are you sure you want to delete the MOSS reference voice "${voiceId}"? This cannot be undone.`;
+      confirmDialog.classList.remove('hidden');
+    }
+
     confirmYes.addEventListener('click', async () => {
-      if (pendingDeletePocketCloneId) {
+      if (pendingDeleteMossVoiceId) {
+        await deleteMossVoice(pendingDeleteMossVoiceId);
+        pendingDeleteMossVoiceId = null;
+      } else if (pendingDeletePocketCloneId) {
         await deletePocketVoiceClone(pendingDeletePocketCloneId);
         pendingDeletePocketCloneId = null;
       } else if (pendingDeleteCloneId) {
@@ -2906,6 +3120,7 @@
       confirmDialog.classList.add('hidden');
       pendingDeleteCloneId = null;
       pendingDeletePocketCloneId = null;
+      pendingDeleteMossVoiceId = null;
     });
 
     async function deleteVoiceClone(cloneId) {
@@ -2945,6 +3160,22 @@
       }
     }
 
+    async function deleteMossVoice(voiceId) {
+      try {
+        const response = await authFetch(`${API_BASE}/moss-tts/voices/clone/${encodeURIComponent(voiceId)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+          await loadMossVoices();
+        } else {
+          throw new Error(data.message || 'Failed to delete MOSS reference voice');
+        }
+      } catch (error) {
+        alert('Error deleting MOSS reference voice: ' + error.message);
+      }
+    }
+
     // ==================== Rename Dialog ====================
     const renameDialog = document.getElementById('renameDialog');
     const renameOldName = document.getElementById('renameOldName');
@@ -2953,7 +3184,7 @@
     const renameConfirm = document.getElementById('renameConfirm');
     const renameCancel = document.getElementById('renameCancel');
     let pendingRenameCloneId = null;
-    let pendingRenameService = null; // 'qwen' or 'pocket'
+    let pendingRenameService = null; // 'qwen', 'pocket', or 'moss'
 
     function openRenameDialog(cloneId, service = 'qwen') {
       pendingRenameCloneId = cloneId;
@@ -2990,13 +3221,21 @@
       renameConfirm.textContent = 'Renaming...';
 
       try {
-        const apiBase = pendingRenameService === 'pocket' ? 'pocket-tts' : 'qwen-tts';
+        const apiBase = pendingRenameService === 'pocket'
+          ? 'pocket-tts'
+          : pendingRenameService === 'moss'
+            ? 'moss-tts'
+            : 'qwen-tts';
         const response = await authFetch(`${API_BASE}/${apiBase}/voices/clone/${encodeURIComponent(pendingRenameCloneId)}`, {
           method: 'PATCH',
           headers: {
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify({ newCloneId: newName }),
+          body: JSON.stringify(
+            pendingRenameService === 'moss'
+              ? { newVoiceId: newName }
+              : { newCloneId: newName },
+          ),
         });
 
         const data = await response.json();
@@ -3008,6 +3247,8 @@
           // Refresh the appropriate list
           if (apiBase === 'pocket-tts') {
             await loadPocketVoices();
+          } else if (apiBase === 'moss-tts') {
+            await loadMossVoices();
           } else {
             await loadQwenVoices();
           }
@@ -3179,6 +3420,157 @@
       }
     }
 
+    // ==================== MOSS-TTS-Nano Reference Voices ====================
+    let mossCloneMediaRecorder = null;
+    let mossCloneAudioChunks = [];
+    let mossCloneAudioBlob = null;
+    let mossCloneAudioFilename = 'reference.webm';
+
+    const mossRecordCloneBtn = document.getElementById('mossRecordCloneBtn');
+    const mossStopCloneBtn = document.getElementById('mossStopCloneBtn');
+    const mossUploadCloneFile = document.getElementById('mossUploadCloneFile');
+    const mossCloneRecordStatus = document.getElementById('mossCloneRecordStatus');
+    const mossCloneRecordedAudio = document.getElementById('mossCloneRecordedAudio');
+    const mossCloneName = document.getElementById('mossCloneName');
+    const mossCreateCloneBtn = document.getElementById('mossCreateCloneBtn');
+    const mossCloneResult = document.getElementById('mossCloneResult');
+    const mossRefreshClonesBtn = document.getElementById('mossRefreshClonesBtn');
+
+    mossRecordCloneBtn.addEventListener('click', startMossCloneRecording);
+    mossStopCloneBtn.addEventListener('click', stopMossCloneRecording);
+    mossUploadCloneFile.addEventListener('change', handleMossFileUpload);
+    mossCreateCloneBtn.addEventListener('click', createMossVoice);
+    mossRefreshClonesBtn.addEventListener('click', () => loadMossVoices());
+
+    function handleMossFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      if (!['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'flac'].includes(extension)) {
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Choose an MP3, WAV, M4A, MP4, WebM, OGG, or FLAC file.';
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Reference audio must be 25 MB or smaller.';
+        return;
+      }
+
+      mossCloneAudioBlob = file;
+      mossCloneAudioFilename = file.name;
+      mossCloneRecordedAudio.src = URL.createObjectURL(file);
+      mossCloneRecordedAudio.style.display = 'block';
+      mossCloneRecordStatus.textContent = `Audio loaded: ${file.name}. The server accepts 1-30 seconds.`;
+      mossCloneResult.className = 'result success';
+      mossCloneResult.textContent = 'Ready to create a MOSS reference voice.';
+      mossCreateCloneBtn.disabled = false;
+    }
+
+    async function startMossCloneRecording() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Microphone access requires HTTPS or localhost.');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const preferredMimeType = ['audio/webm', 'audio/mp4', 'audio/ogg']
+          .find(type => MediaRecorder.isTypeSupported(type));
+        const options = preferredMimeType ? { mimeType: preferredMimeType } : undefined;
+        mossCloneMediaRecorder = new MediaRecorder(stream, options);
+        mossCloneAudioChunks = [];
+        mossCloneMediaRecorder.ondataavailable = event => {
+          if (event.data.size > 0) mossCloneAudioChunks.push(event.data);
+        };
+        mossCloneMediaRecorder.onstop = () => {
+          const mimeType = mossCloneMediaRecorder.mimeType
+            || mossCloneAudioChunks[0]?.type
+            || 'audio/webm';
+          const extension = mimeType.includes('mp4')
+            ? 'm4a'
+            : mimeType.includes('ogg')
+              ? 'ogg'
+              : 'webm';
+          mossCloneAudioBlob = new Blob(mossCloneAudioChunks, { type: mimeType });
+          mossCloneAudioFilename = `reference.${extension}`;
+          mossCloneRecordedAudio.src = URL.createObjectURL(mossCloneAudioBlob);
+          mossCloneRecordedAudio.style.display = 'block';
+          mossCloneRecordStatus.textContent = 'Voice sample recorded. Enter a name and create the reference voice.';
+          mossCloneResult.className = 'result success';
+          mossCloneResult.textContent = 'Ready to create a MOSS reference voice.';
+          mossCreateCloneBtn.disabled = false;
+          stream.getTracks().forEach(track => track.stop());
+        };
+
+        mossCloneMediaRecorder.start();
+        mossRecordCloneBtn.style.display = 'none';
+        mossStopCloneBtn.style.display = 'inline-block';
+        mossCloneRecordStatus.textContent = 'Recording… stop between 5 and 10 seconds for best results.';
+        mossCloneResult.textContent = 'Recording reference audio…';
+        mossCreateCloneBtn.disabled = true;
+      } catch (error) {
+        mossCloneRecordStatus.textContent = 'Error: ' + error.message;
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Failed to access microphone: ' + error.message;
+      }
+    }
+
+    function stopMossCloneRecording() {
+      if (mossCloneMediaRecorder && mossCloneMediaRecorder.state !== 'inactive') {
+        mossCloneMediaRecorder.stop();
+        mossRecordCloneBtn.style.display = 'inline-block';
+        mossStopCloneBtn.style.display = 'none';
+      }
+    }
+
+    async function createMossVoice() {
+      const voiceId = mossCloneName.value.trim()
+        .replace(/\s+/g, '_')
+        .replace(/[^A-Za-z0-9_-]/g, '');
+      if (!voiceId) {
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Enter a valid reference voice name.';
+        return;
+      }
+      if (!mossCloneAudioBlob) {
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Record or upload a voice sample first.';
+        return;
+      }
+
+      mossCreateCloneBtn.disabled = true;
+      mossCloneRecordStatus.textContent = 'Creating reference voice…';
+      mossCloneResult.innerHTML = '<span class="loading"></span>Loading MOSS and encoding the reference…';
+      mossCloneResult.className = 'result';
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', mossCloneAudioBlob, mossCloneAudioFilename);
+        formData.append('voiceId', voiceId);
+        const response = await authFetch(`${API_BASE}/moss-tts/voices/clone`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Failed to create MOSS reference voice');
+        }
+
+        mossCloneResult.className = 'result success';
+        mossCloneResult.textContent = `Reference voice "${data.voiceId}" created from ${Number(data.duration).toFixed(1)} seconds of audio. Select MOSS-TTS-Nano above to use it.`;
+        mossCloneRecordStatus.textContent = 'Reference voice created!';
+        mossCloneName.value = '';
+        mossCloneAudioBlob = null;
+        mossCloneRecordedAudio.style.display = 'none';
+        mossUploadCloneFile.value = '';
+        await loadMossVoices();
+      } catch (error) {
+        mossCloneResult.className = 'result error';
+        mossCloneResult.textContent = 'Error: ' + error.message;
+        mossCloneRecordStatus.textContent = 'Reference-voice creation failed';
+        mossCreateCloneBtn.disabled = false;
+      }
+    }
+
     function confirmDeletePocketClone(cloneId) {
       pendingDeletePocketCloneId = cloneId;
       confirmMessage.textContent = `Are you sure you want to delete the voice clone "${cloneId}"? This cannot be undone.`;
@@ -3338,12 +3730,14 @@
           ? 'Enter your API key above to load Pocket TTS voices and clones.'
           : '';
         qwenEnabled = Boolean(serviceStatus.qwenTts?.enabled);
+        mossEnabled = Boolean(serviceStatus.mossTts?.enabled);
         qwenCustomVoiceEnabled = false;
         qwenVoiceCloningEnabled = false;
         parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
         qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
         updatePocketAvailability();
         updateQwenAvailability();
+        updateMossAvailability();
         updateTranscriptionModelUI();
         updateStyleInstructUI();
         updateImportAccessUI();
@@ -3360,6 +3754,7 @@
 
       // Load Pocket voices first (default) - use silent mode for init
       await loadPocketVoices(false);
+      await loadMossVoices(false);
 
       // Check if Qwen is available and load voice clones list
       try {
@@ -3385,6 +3780,7 @@
 
       updateQwenAvailability();
       updatePocketAvailability();
+      updateMossAvailability();
       updateStyleInstructUI();
       updateImportAccessUI();
 

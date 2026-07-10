@@ -68,6 +68,18 @@ export const config = {
     preWarmDaemon: parseEnvBool(process.env.PREWARM_POCKET_TTS, true),
     voiceClonesDir: process.env.POCKET_TTS_VOICE_CLONES_DIR || './pocket_voice_clones',
   },
+  mossTts: {
+    enabled: parseEnvBool(process.env.MOSS_TTS_ENABLED, false),
+    modelId: process.env.MOSS_TTS_MODEL_ID || 'mlx-community/MOSS-TTS-Nano-100M',
+    pythonPath: process.env.MOSS_TTS_PYTHON_PATH || './.venv-moss-tts/bin/python3',
+    defaultVoice: process.env.MOSS_TTS_DEFAULT_VOICE || null,
+    timeout: parseInt(process.env.MOSS_TTS_TIMEOUT, 10) || 300000,
+    timeoutPerChar: parseInt(process.env.MOSS_TTS_TIMEOUT_PER_CHAR_MS, 10) || 120,
+    timeoutMax: parseInt(process.env.MOSS_TTS_TIMEOUT_MAX, 10) || 1800000,
+    daemonStartupTimeout: parseInt(process.env.MOSS_TTS_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_MOSS_TTS, false),
+    voicesDir: process.env.MOSS_TTS_VOICES_DIR || './moss_voice_clones',
+  },
   qwenTts: {
     enabled: parseEnvBool(process.env.QWEN_TTS_ENABLED, false),
     // Legacy single-model variant (unused in dual-daemon mode)

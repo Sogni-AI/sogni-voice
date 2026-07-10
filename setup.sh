@@ -5,7 +5,7 @@
 #
 # This script provides one-click setup for the Sogni Voice API, including:
 # - System requirements verification
-# - TTS engine selection (Kokoro, Pocket, Qwen)
+# - TTS engine selection (Kokoro, Pocket, MOSS, Qwen)
 # - STT and speaker diarization selection
 # - Environment configuration
 # - API key setup
@@ -417,6 +417,7 @@ select_tts_engines() {
         ENABLE_POCKET=1
         ENABLE_KOKORO=0
         ENABLE_QWEN=0
+        ENABLE_MOSS=0
         ENABLE_PARAKEET=1
         ENABLE_QWEN_ASR=0
         ENABLE_DIARIZATION=0
@@ -426,6 +427,7 @@ select_tts_engines() {
         print_info "- Pocket TTS: enabled"
         print_info "- Kokoro TTS: disabled"
         print_info "- Qwen3-TTS: disabled"
+        print_info "- MOSS-TTS-Nano: disabled"
         print_info "- Parakeet STT: enabled"
         print_info "- Qwen3-ASR: disabled"
         print_info "- Speaker diarization: disabled (requires gated-model access)"
@@ -437,15 +439,17 @@ select_tts_engines() {
         "Pocket TTS (Fast, CPU-only, 8 English voices, voice cloning) - Recommended"
         "Kokoro TTS (Mid, MLX-based, 32 voices, 4 languages)"
         "Qwen3-TTS (Slow, 11 languages, voice cloning, audio style prompting)"
+        "MOSS-TTS-Nano (100M, multilingual reference voices, MLX, 48 kHz)"
     )
 
-    # Get selections via global MENU_RESULT (Pocket=yes, Kokoro=no, Qwen=no by default)
-    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0" "${tts_options[@]}"
+    # Get selections via global MENU_RESULT (Pocket=yes; others disabled by default)
+    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0 0" "${tts_options[@]}"
     IFS=' ' read -ra tts_selected <<< "$MENU_RESULT"
 
     ENABLE_POCKET=${tts_selected[0]}
     ENABLE_KOKORO=${tts_selected[1]}
     ENABLE_QWEN=${tts_selected[2]}
+    ENABLE_MOSS=${tts_selected[3]}
 
     # If Qwen is enabled, ask for variant
     if [ "$ENABLE_QWEN" = "1" ]; then
@@ -468,7 +472,6 @@ select_tts_engines() {
 
         print_success "Qwen3-TTS variant: $QWEN_VARIANT"
     fi
-
     echo ""
     local stt_options=(
         "Parakeet TDT v3 (fast, 25 European languages) - Recommended"
@@ -522,6 +525,11 @@ select_tts_engines() {
         echo -e "  ${CHECK} Qwen3-TTS"
     else
         echo -e "  ${CROSS} Qwen3-TTS (disabled)"
+    fi
+    if [ "$ENABLE_MOSS" = "1" ]; then
+        echo -e "  ${CHECK} MOSS-TTS-Nano"
+    else
+        echo -e "  ${CROSS} MOSS-TTS-Nano (disabled)"
     fi
     echo ""
     echo "Transcription:"
@@ -601,6 +609,14 @@ configure_environment() {
         upsert_env_key "QWEN_TTS_ENABLED" "1"
     else
         upsert_env_key "QWEN_TTS_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_MOSS" = "1" ]; then
+        upsert_env_key "MOSS_TTS_ENABLED" "1"
+        upsert_env_key "MOSS_TTS_MODEL_ID" "mlx-community/MOSS-TTS-Nano-100M"
+        upsert_env_key "MOSS_TTS_PYTHON_PATH" "./.venv-moss-tts/bin/python3"
+    else
+        upsert_env_key "MOSS_TTS_ENABLED" "0"
     fi
 
     if [ "$ENABLE_PARAKEET" = "1" ]; then
@@ -852,6 +868,25 @@ install_dependencies() {
         print_success "Qwen3-ASR environment is ready"
     fi
 
+    # MOSS-TTS-Nano uses the current MLX-Audio stack and stays isolated from
+    # both the legacy Kokoro environment and Qwen3-ASR lifecycle.
+    if [ "$ENABLE_MOSS" = "1" ]; then
+        if [ -d .venv-moss-tts ] && ! .venv-moss-tts/bin/python -c "import pip" >/dev/null 2>&1; then
+            local moss_backup=".venv-moss-tts.backup.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Existing MOSS-TTS-Nano environment is broken; moving it to $moss_backup"
+            mv .venv-moss-tts "$moss_backup"
+        fi
+
+        if [ ! -d .venv-moss-tts ]; then
+            print_info "Creating isolated MOSS-TTS-Nano environment at .venv-moss-tts/..."
+            uv venv --seed --python 3.11 .venv-moss-tts
+        fi
+
+        print_info "Installing MLX-Audio 0.4.x for MOSS-TTS-Nano..."
+        uv pip install --python .venv-moss-tts/bin/python "mlx-audio>=0.4.5,<0.5"
+        print_success "MOSS-TTS-Nano environment is ready"
+    fi
+
     print_success "All dependencies installed"
 
     if [ "$NON_INTERACTIVE" != "1" ]; then
@@ -1017,6 +1052,41 @@ PY
     fi
 }
 
+predownload_moss_tts_model() {
+    if [ "$ENABLE_MOSS" != "1" ]; then
+        return
+    fi
+
+    print_info "Predownloading MOSS-TTS-Nano and its audio tokenizer (~360 MB total)..."
+    if .venv-moss-tts/bin/python - <<'PY'
+import os
+from pathlib import Path
+from huggingface_hub import snapshot_download
+from mlx_audio.tts import load
+
+def configured_value(key, default):
+    if os.environ.get(key):
+        return os.environ[key]
+    env_file = Path(".env")
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip() or default
+    return default
+
+model = load(configured_value(
+    "MOSS_TTS_MODEL_ID",
+    "mlx-community/MOSS-TTS-Nano-100M",
+))
+snapshot_download(repo_id=model.config.audio_tokenizer_pretrained_name_or_path)
+PY
+    then
+        print_success "MOSS-TTS-Nano and audio tokenizer downloaded"
+    else
+        print_warning "MOSS-TTS-Nano predownload failed; the server will retry on first use"
+    fi
+}
+
 predownload_models() {
     print_header "Step 8: Predownload Models"
 
@@ -1139,6 +1209,7 @@ PY
 
         deactivate
         predownload_qwen_asr_models
+        predownload_moss_tts_model
         return
     fi
 
@@ -1276,6 +1347,7 @@ PY
 
     deactivate
     predownload_qwen_asr_models
+    predownload_moss_tts_model
 
     echo ""
     read -p "Press Enter to continue..."
@@ -1308,6 +1380,11 @@ print_summary() {
         printf '%b\n' "  ${CHECK} Qwen3-TTS ($QWEN_VARIANT)"
     else
         printf '%b\n' "  ${CROSS} Qwen3-TTS (disabled)"
+    fi
+    if [ "$ENABLE_MOSS" = "1" ]; then
+        printf '%b\n' "  ${CHECK} MOSS-TTS-Nano"
+    else
+        printf '%b\n' "  ${CROSS} MOSS-TTS-Nano (disabled)"
     fi
     echo ""
 
@@ -1368,6 +1445,9 @@ print_summary() {
         else
             echo "  Qwen3-TTS           ~1.2 GB     2-4 minutes"
         fi
+    fi
+    if [ "$ENABLE_MOSS" = "1" ]; then
+        echo "  MOSS-TTS-Nano     ~360 MB     30-90 seconds"
     fi
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         echo "  pyannote Community-1 ~70 MB      1-3 minutes"

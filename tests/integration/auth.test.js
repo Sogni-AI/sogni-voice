@@ -72,12 +72,17 @@ describe('Authentication Integration Tests', () => {
         enabled: false,
         mode: 'blocked',
       });
+      expect(payload.voiceCloning).toEqual({
+        enabled: false,
+        mode: 'blocked',
+      });
       expect(payload.services).toEqual({
         tts: { enabled: true },
         transcription: { enabled: true },
         qwenAsr: { enabled: false },
         pocketTts: { enabled: false },
         qwenTts: { enabled: false },
+        mossTts: { enabled: false },
       });
     });
 
@@ -171,12 +176,17 @@ describe('Authentication Integration Tests', () => {
         enabled: true,
         mode: 'api_key',
       });
+      expect(payload.voiceCloning).toEqual({
+        enabled: true,
+        mode: 'api_key',
+      });
       expect(payload.services).toEqual({
         tts: { enabled: true },
         transcription: { enabled: true },
         qwenAsr: { enabled: true },
         pocketTts: { enabled: true },
         qwenTts: { enabled: true },
+        mossTts: { enabled: false },
       });
     });
 

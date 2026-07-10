@@ -195,7 +195,7 @@
   <details class="section">
     <summary><h2>Authentication (Optional)</h2></summary>
     <div class="section-content">
-    <p>API key authentication can be enabled for production deployments. When enabled, <strong>all API endpoints</strong> (including Kokoro TTS, Pocket TTS, Qwen3 TTS, and Transcription) require authentication, except health check and auth status. Voice clone imports are configured separately and can be public, API-key-only, or fully blocked.</p>
+    <p>API key authentication can be enabled for production deployments. When enabled, <strong>all API endpoints</strong> (including Kokoro, Pocket, Qwen3, MOSS-TTS-Nano, and Transcription) require authentication, except health check and auth status. Voice clone imports and reference-voice operations report their access modes separately.</p>
 
     <h3>Check Auth Status</h3>
     <div class="endpoint">
@@ -211,10 +211,14 @@
   "voiceCloneImports": {
     "enabled": true,
     "mode": "api_key"
+  },
+  "voiceCloning": {
+    "enabled": true,
+    "mode": "api_key"
   }
 }</code></pre>
 
-    <p><code>voiceCloneImports.mode</code> is one of <code>public</code>, <code>api_key</code>, or <code>blocked</code>.</p>
+    <p><code>voiceCloneImports.mode</code> and <code>voiceCloning.mode</code> are each one of <code>public</code>, <code>api_key</code>, or <code>blocked</code>.</p>
 
     <h3>Authenticating Requests</h3>
     <p>When authentication is enabled, include your API key using one of these methods:</p>
@@ -1208,9 +1212,80 @@ print(f"Imported clone: {data['cloneId']}")</code></pre>
     </div>
   </details>
 
+  <!-- MOSS-TTS-Nano Section -->
+  <details class="section">
+    <summary><h2>5. TTS (Text-to-Speech) - MOSS-TTS-Nano</h2></summary>
+    <div class="section-content">
+    <p>MOSS-TTS-Nano is an Apache-2.0, 100M-parameter multilingual reference-voice model running through MLX-Audio. It produces 48 kHz stereo audio and requires a saved reference voice; it has no built-in speaker roster. Enable it with <code>MOSS_TTS_ENABLED=1</code>.</p>
+    <p><strong>Current limitation:</strong> the MLX implementation does not implement streaming, so capability responses explicitly return <code>"streaming": false</code>.</p>
+
+    <h3>List Capabilities and Reference Voices</h3>
+    <div class="endpoint">
+      <span class="method get">GET</span> /moss-tts/voices
+    </div>
+    <p>This lightweight endpoint does not load the model. Saved voice IDs are hidden unless the caller has clone access.</p>
+    <pre><code>{
+  "voices": ["narrator"],
+  "default": "narrator",
+  "model": "mlx-community/MOSS-TTS-Nano-100M",
+  "features": ["multilingual_tts", "voice_cloning"],
+  "streaming": false,
+  "sampleRate": 48000,
+  "languages": [{"code": "en", "name": "English"}, ...],
+  "referenceAudio": {"minSeconds": 1, "maxSeconds": 30, "recommendedSeconds": "5-10"}
+}</code></pre>
+
+    <h3>Create a Reference Voice</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /moss-tts/voices/clone
+    </div>
+    <p>Upload 1-30 seconds of clean, single-speaker audio; 5-10 seconds is recommended. No transcript is required. MP3, WAV, M4A, MP4, WebM, OGG, and FLAC are accepted and normalized to a frozen 48 kHz PCM WAV.</p>
+    <p><strong>Authentication required by default:</strong> send a valid API key, or explicitly set <code>DANGEROUSLY_ALLOW_VOICE_CLONING=1</code> for public local use.</p>
+    <pre><code>curl -X POST https://voice.sogni.ai/moss-tts/voices/clone \
+  -H "X-API-Key: your_api_key_here" \
+  -F "audio=@reference.wav" \
+  -F "voiceId=narrator"</code></pre>
+
+    <h3>Generate Speech</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /moss-tts
+    </div>
+    <table>
+      <tr><th>Parameter</th><th>Type</th><th>Default</th><th>Description</th></tr>
+      <tr><td><code>text</code> <span class="required">*</span></td><td>string</td><td>-</td><td>Text to synthesize (1-10,000 characters)</td></tr>
+      <tr><td><code>voice</code></td><td>string</td><td><code>MOSS_TTS_DEFAULT_VOICE</code></td><td>Saved reference-voice ID; required if no default is configured</td></tr>
+      <tr><td><code>format</code></td><td>string</td><td>wav</td><td><code>wav</code>, <code>opus</code>, or <code>buffer</code>; also accepted as <code>?format=</code></td></tr>
+    </table>
+    <pre><code>curl -X POST https://voice.sogni.ai/moss-tts \
+  -H "X-API-Key: your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hola desde MOSS-TTS-Nano.","voice":"narrator"}' \
+  --output output.wav</code></pre>
+
+    <h3>Rename a Reference Voice</h3>
+    <div class="endpoint">
+      <span class="method" style="background:#6f42c1">PATCH</span> /moss-tts/voices/clone/{voiceId}
+    </div>
+    <pre><code>curl -X PATCH https://voice.sogni.ai/moss-tts/voices/clone/narrator \
+  -H "X-API-Key: your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"newVoiceId":"studio_voice"}'</code></pre>
+
+    <h3>Delete a Reference Voice</h3>
+    <div class="endpoint">
+      <span class="method" style="background:#dc3545">DELETE</span> /moss-tts/voices/clone/{voiceId}
+    </div>
+    <pre><code>curl -X DELETE https://voice.sogni.ai/moss-tts/voices/clone/studio_voice \
+  -H "X-API-Key: your_api_key_here"</code></pre>
+
+    <h3>Supported Languages</h3>
+    <p>Chinese, English, German, Spanish, French, Japanese, Italian, Hebrew, Korean, Russian, Persian, Arabic, Polish, Portuguese, Czech, Danish, Swedish, Hungarian, Greek, and Turkish.</p>
+    </div>
+  </details>
+
   <!-- Health Check Section -->
   <details class="section">
-    <summary><h2>5. Health Check</h2></summary>
+    <summary><h2>6. Health Check</h2></summary>
     <div class="section-content">
     <p>Check if the API server is running and healthy.</p>
 

@@ -48,6 +48,18 @@ export const testConfig = {
     preWarmDaemon: false,
     voiceClonesDir: process.env.POCKET_TTS_VOICE_CLONES_DIR || './pocket_voice_clones',
   },
+  mossTts: {
+    enabled: toBool(process.env.MOSS_TTS_ENABLED, false),
+    modelId: process.env.MOSS_TTS_MODEL_ID || 'mlx-community/MOSS-TTS-Nano-100M',
+    pythonPath: process.env.MOSS_TTS_PYTHON_PATH || './.venv-moss-tts/bin/python3',
+    defaultVoice: process.env.MOSS_TTS_DEFAULT_VOICE || null,
+    timeout: parseInt(process.env.MOSS_TTS_TIMEOUT) || 300000,
+    timeoutPerChar: parseInt(process.env.MOSS_TTS_TIMEOUT_PER_CHAR_MS) || 120,
+    timeoutMax: parseInt(process.env.MOSS_TTS_TIMEOUT_MAX) || 1800000,
+    daemonStartupTimeout: parseInt(process.env.MOSS_TTS_DAEMON_STARTUP_TIMEOUT) || 300000,
+    preWarmDaemon: false,
+    voicesDir: process.env.MOSS_TTS_VOICES_DIR || './moss_voice_clones',
+  },
   qwenTts: {
     enabled: toBool(process.env.QWEN_TTS_ENABLED, false),
     modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',

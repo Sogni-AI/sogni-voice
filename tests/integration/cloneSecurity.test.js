@@ -64,6 +64,18 @@ vi.mock('../../src/config/index.js', () => ({
       preWarmDaemon: false,
       voiceClonesDir: './voice_clones',
     },
+    mossTts: {
+      enabled: true,
+      modelId: 'mlx-community/MOSS-TTS-Nano-100M',
+      pythonPath: './.venv-moss-tts/bin/python3',
+      defaultVoice: null,
+      timeout: 120000,
+      timeoutPerChar: 120,
+      timeoutMax: 1800000,
+      daemonStartupTimeout: 180000,
+      preWarmDaemon: false,
+      voicesDir: './moss_voice_clones',
+    },
   },
 }));
 
@@ -99,6 +111,32 @@ vi.mock('../../src/services/pocketTts.js', () => ({
     }),
     listVoices: vi.fn().mockResolvedValue({ voices: ['alba'], clones: ['secret-pocket-clone'] }),
     shutdown: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
+vi.mock('../../src/services/mossTts.js', () => ({
+  mossTtsService: {
+    generate: vi.fn().mockImplementation(async (text, options) => {
+      writeFileSync(options.outputPath, createFakeWavBuffer());
+      return {
+        outputPath: options.outputPath,
+        duration: 1,
+        voiceId: options.voiceId,
+        sampleRate: 48000,
+        channels: 2,
+        processingSeconds: 1,
+        realTimeFactor: 1,
+        model: 'mlx-community/MOSS-TTS-Nano-100M',
+      };
+    }),
+    listVoices: vi.fn().mockResolvedValue(['secret-moss-voice']),
+    getModelInfo: vi.fn().mockReturnValue({
+      model: 'mlx-community/MOSS-TTS-Nano-100M',
+      features: ['multilingual_tts', 'voice_cloning'],
+      streaming: false,
+      sampleRate: 48000,
+      languages: [{ code: 'en', name: 'English' }],
+    }),
   },
 }));
 
@@ -200,6 +238,29 @@ describe('Voice Clone Security', () => {
       },
     });
 
+    expect(authorized.statusCode).toBe(200);
+  });
+
+  it('hides MOSS reference-voice IDs from unauthenticated callers', async () => {
+    const response = await server.inject({ method: 'GET', url: '/moss-tts/voices' });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.payload).voices).toEqual([]);
+  });
+
+  it('requires an API key for MOSS reference-voice synthesis', async () => {
+    const unauthorized = await server.inject({
+      method: 'POST',
+      url: '/moss-tts',
+      payload: { text: 'test', voice: 'secret-moss-voice', format: 'buffer' },
+    });
+    expect(unauthorized.statusCode).toBe(401);
+
+    const authorized = await server.inject({
+      method: 'POST',
+      url: '/moss-tts',
+      headers: { 'X-API-Key': 'test-clone-key' },
+      payload: { text: 'test', voice: 'secret-moss-voice', format: 'buffer' },
+    });
     expect(authorized.statusCode).toBe(200);
   });
 });

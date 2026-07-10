@@ -15,6 +15,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Kokoro TTS | Dec 25, 2024 (v0.19) → Jan 27, 2025 (v1.0) | First to market |
 | Pocket TTS | Jan 13, 2026 (v1.0.3) | ~1 year after Kokoro |
 | Qwen3-TTS | Jan 21-22, 2026 | ~8 days after Pocket |
+| MOSS-TTS-Nano | Apr 10, 2026 | 100M multilingual reference-voice model |
 
 ### Licensing
 
@@ -24,20 +25,21 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Kokoro TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-ASR + ForcedAligner | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| MOSS-TTS-Nano | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 
 ### Feature Comparison
 
-| Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS |
-|---------|------------|------------|-----------|
-| Parameters | 100M | 82M | 0.6B / 1.7B |
-| Languages | English only | 4 (EN, JA, ZH) | 11 languages |
-| Built-in Voices | 8 | 32 | 8 |
-| Latency | ~200ms | Fast | 97ms |
-| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (3s audio) |
-| Emotion Control | ❌ | ❌ | ✅ (CustomVoice) |
-| Voice Design | ❌ | ❌ | ✅ (VoiceDesign) |
-| Hardware | CPU (2-core) | MLX (Apple Silicon) | MPS (Apple Silicon) |
-| Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality |
+| Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS | MOSS-TTS-Nano |
+|---------|------------|------------|-----------|----------------|
+| Parameters | 100M | 82M | 0.6B / 1.7B | 100M |
+| Languages | English only | 4 (EN, JA, ZH) | 11 languages | 20 languages |
+| Built-in Voices | 8 | 32 | 8 | None; reference voice required |
+| Output | 24 kHz mono | 24 kHz mono | 24 kHz mono | 48 kHz stereo |
+| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (3s audio) | ✅ (1-30s audio) |
+| Emotion Control | ❌ | ❌ | ✅ (CustomVoice) | ❌ |
+| Voice Design | ❌ | ❌ | ✅ (VoiceDesign) | ❌ |
+| Hardware | CPU (2-core) | MLX (Apple Silicon) | MPS (Apple Silicon) | MLX (Apple Silicon) |
+| Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality | Small multilingual cloned voices |
 
 ## Features
 
@@ -63,6 +65,11 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
   - Emotion/style control with custom voice models
   - Voice design from text descriptions
   - 11 languages supported
+- **Text-to-Speech (MOSS-TTS-Nano)**: 100M multilingual [MOSS-TTS-Nano](https://github.com/OpenMOSS/MOSS-TTS-Nano) through MLX-Audio (optional)
+  - Reference-voice synthesis from a 1-30 second sample; no transcript required
+  - 20 advertised languages and 48 kHz stereo output
+  - Persistent reference profiles with prompt codes cached in memory
+  - Isolated `.venv-moss-tts`; current MLX backend is non-streaming
 - **Fast**: Optimized for Apple Silicon with MLX and MPS backends
 
 ## Quick Start
@@ -188,6 +195,22 @@ Select Qwen3-ASR in `./setup.sh` to create the isolated environment, install MLX
 | POCKET_TTS_DAEMON_STARTUP_TIMEOUT | 60000 | Daemon startup timeout (ms) |
 | PREWARM_POCKET_TTS | 0 | Pre-load model on server start |
 | POCKET_TTS_VOICE_CLONES_DIR | ./pocket_voice_clones | Voice clone storage directory |
+
+#### MOSS-TTS-Nano (Optional)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| MOSS_TTS_ENABLED | 0 | Enable MOSS-TTS-Nano endpoints |
+| MOSS_TTS_MODEL_ID | mlx-community/MOSS-TTS-Nano-100M | MLX model ID |
+| MOSS_TTS_PYTHON_PATH | ./.venv-moss-tts/bin/python3 | Isolated backend interpreter |
+| MOSS_TTS_DEFAULT_VOICE | (none) | Optional saved reference-voice ID used when `voice` is omitted |
+| MOSS_TTS_TIMEOUT | 300000 | Minimum generation/profile-operation timeout (ms) |
+| MOSS_TTS_TIMEOUT_PER_CHAR_MS | 120 | Long-text timeout budget per character |
+| MOSS_TTS_TIMEOUT_MAX | 1800000 | Maximum scaled generation timeout (ms) |
+| MOSS_TTS_DAEMON_STARTUP_TIMEOUT | 300000 | Initial model-load timeout (ms) |
+| PREWARM_MOSS_TTS | 0 | Load the model on server start |
+| MOSS_TTS_VOICES_DIR | ./moss_voice_clones | Saved reference-profile directory |
+
+Select MOSS-TTS-Nano in `./setup.sh` to create `.venv-moss-tts`, install MLX-Audio 0.4.x, and optionally predownload the model plus its audio tokenizer (~360 MB total).
 
 #### Qwen3-TTS (Optional)
 | Variable | Default | Description |
@@ -919,6 +942,62 @@ Delete a voice clone:
 curl -X DELETE http://localhost:3000/pocket-tts/voices/clone/my-voice
 ```
 
+### MOSS-TTS-Nano Endpoints
+
+> **Note**: Enable with `MOSS_TTS_ENABLED=1`. MOSS has no built-in voices: create a reference profile first. Clone creation, synthesis, rename, and deletion require a valid API key unless `DANGEROUSLY_ALLOW_VOICE_CLONING=1` is explicitly set.
+
+#### List Capabilities and Reference Voices
+
+```bash
+curl http://localhost:3000/moss-tts/voices \
+  -H "X-API-Key: your_api_key_here"
+```
+
+The response includes saved `voices`, the model ID, 20 language entries, 48 kHz sample rate, reference-audio limits, and `"streaming": false`. Listing capabilities does not load the model; voice IDs are hidden from callers without clone access.
+
+#### Create a Reference Voice
+
+No transcript is needed. A clean 5-10 second sample is recommended; the accepted range is 1-30 seconds.
+
+```bash
+curl -X POST http://localhost:3000/moss-tts/voices/clone \
+  -H "X-API-Key: your_api_key_here" \
+  -F "audio=@reference.wav" \
+  -F "voiceId=my_voice"
+```
+
+Accepted uploads are MP3, WAV, M4A, MP4, WebM, OGG, and FLAC. The server validates the file content and freezes a normalized 48 kHz PCM reference at `MOSS_TTS_VOICES_DIR/<voiceId>/reference.wav`.
+
+#### Generate Speech
+
+```bash
+curl -X POST http://localhost:3000/moss-tts \
+  -H "X-API-Key: your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"text":"Hola, esta voz funciona en varios idiomas.","voice":"my_voice"}' \
+  --output output.wav
+```
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| text * | string | - | Text to synthesize (max 10,000 characters) |
+| voice | string | `MOSS_TTS_DEFAULT_VOICE` | Saved reference-voice ID; required when no default is configured |
+| format | string | wav | `wav`, `opus`, or `buffer`; also accepted as `?format=` |
+
+The `buffer` response includes base64 WAV audio plus duration, processing time, real-time factor, sample rate, channels, and model ID. The current MLX implementation is intentionally exposed as non-streaming because upstream `mlx-audio` does not implement MOSS streaming yet.
+
+#### Rename or Delete a Reference Voice
+
+```bash
+curl -X PATCH http://localhost:3000/moss-tts/voices/clone/my_voice \
+  -H "X-API-Key: your_api_key_here" \
+  -H "Content-Type: application/json" \
+  -d '{"newVoiceId":"narrator"}'
+
+curl -X DELETE http://localhost:3000/moss-tts/voices/clone/narrator \
+  -H "X-API-Key: your_api_key_here"
+```
+
 ## Testing
 
 ```bash
@@ -944,6 +1023,7 @@ On first use, ML models are downloaded automatically:
 | Kokoro TTS | ~300 MB | 30-60 seconds |
 | Pocket TTS | ~200 MB | 30-60 seconds |
 | Qwen3-TTS | 1.5-4 GB (varies by variant) | 2-5 minutes |
+| MOSS-TTS-Nano + audio tokenizer | ~360 MB | 30-90 seconds |
 
 Models are cached locally after the first download. Subsequent requests will be much faster.
 Only enabled services will download models. For example, if you only use Pocket TTS, set `TTS_ENABLED=0` to avoid Kokoro downloads.
@@ -966,6 +1046,7 @@ Daemons start automatically when the server starts and shut down gracefully with
 - `PREWARM_TTS=0`
 - `PREWARM_POCKET_TTS=0`
 - `PREWARM_QWEN_TTS=0`
+- `PREWARM_MOSS_TTS=0`
 
 ## Available Voices
 
@@ -1024,6 +1105,10 @@ For Base models: Use voice cloning to create custom voices from reference audio.
 
 auto, Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, Russian, Spanish
 
+### MOSS-TTS-Nano Reference Voices and Languages
+
+MOSS-TTS-Nano has no built-in speakers. Create named reference profiles from 1-30 second samples; 5-10 seconds of clean, single-speaker audio is recommended. The model metadata lists Chinese, English, German, Spanish, French, Japanese, Italian, Hebrew, Korean, Russian, Persian, Arabic, Polish, Portuguese, Czech, Danish, Swedish, Hungarian, Greek, and Turkish.
+
 ## Project Structure
 
 ```
@@ -1033,7 +1118,8 @@ sogni-voice/
 │   ├── qwen_asr_daemon.py     # Qwen3-ASR + ForcedAligner daemon
 │   ├── tts_daemon.py          # Kokoro TTS daemon
 │   ├── pocket_tts_daemon.py   # Pocket TTS daemon
-│   └── qwen_tts_daemon.py     # Qwen3-TTS daemon
+│   ├── qwen_tts_daemon.py     # Qwen3-TTS daemon
+│   └── moss_tts_daemon.py     # MOSS-TTS-Nano MLX daemon
 ├── src/
 │   ├── index.js               # Entry point
 │   ├── server.js              # Hapi server setup
@@ -1049,21 +1135,25 @@ sogni-voice/
 │   │   ├── tts.js             # Kokoro TTS endpoints
 │   │   ├── pocketTts.js       # Pocket TTS endpoints
 │   │   ├── qwenTts.js         # Qwen3-TTS endpoints
+│   │   ├── mossTts.js         # MOSS-TTS-Nano endpoints
 │   │   └── static.js          # Static file serving
 │   ├── services/
 │   │   ├── transcription.js   # Parakeet daemon integration
 │   │   ├── qwenAsr.js          # Qwen3-ASR daemon integration
 │   │   ├── tts.js             # Kokoro TTS integration
 │   │   ├── pocketTts.js       # Pocket TTS integration
-│   │   └── qwenTts.js         # Qwen3-TTS integration
+│   │   ├── qwenTts.js         # Qwen3-TTS integration
+│   │   └── mossTts.js         # MOSS-TTS-Nano integration
 │   └── utils/
 │       ├── tempFile.js        # Temp file management
 │       └── errors.js          # Custom error classes
 ├── models/
 │   └── kokoro-tts/            # Kokoro model (auto-downloaded)
 ├── .venv-qwen-asr/            # Isolated MLX-Audio 0.4.x environment
+├── .venv-moss-tts/            # Isolated MOSS MLX-Audio environment
 ├── voice_clones/              # Qwen TTS voice clone storage
 ├── pocket_voice_clones/       # Pocket TTS voice clone storage
+├── moss_voice_clones/         # MOSS reference-profile storage
 ├── public/                    # Static files (demo UI)
 └── tests/
     ├── unit/                  # Unit tests

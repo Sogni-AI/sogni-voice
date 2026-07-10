@@ -6,6 +6,7 @@ import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTt
 import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
+import { mossTtsService } from './services/mossTts.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -21,6 +22,7 @@ const gracefulShutdown = async (signal) => {
     pocketTtsService.shutdown(),
     diarizationService.shutdown(),
     qwenAsrService.shutdown(),
+    mossTtsService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -77,6 +79,13 @@ startServer()
     if (config.qwenAsr.enabled && config.qwenAsr.preWarmDaemon) {
       console.log('Pre-warming Qwen3-ASR daemon...');
       preWarmPromises.push(preWarmDaemon('Qwen3-ASR daemon', () => qwenAsrService.initialize()));
+    }
+
+    if (config.mossTts.enabled && config.mossTts.preWarmDaemon) {
+      console.log('Pre-warming MOSS-TTS-Nano daemon...');
+      preWarmPromises.push(
+        preWarmDaemon('MOSS-TTS-Nano daemon', () => mossTtsService.initialize()),
+      );
     }
 
     await Promise.all(preWarmPromises);

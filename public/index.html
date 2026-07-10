@@ -870,12 +870,21 @@
     <h2>1. Voice Recording to Text</h2>
     <p>Record your voice and get a text transcript back from the server.</p>
 
-    <div class="controls">
-      <button id="recordBtn">Start Recording</button>
-      <button id="stopBtn" style="display: none;">Stop Recording</button>
-      <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
-      <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac,video/mp4" hidden>
-      <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0; margin-left: 12px;">
+    <div class="controls" style="align-items: flex-end; margin-bottom: 12px;">
+      <div class="form-group" style="margin-bottom: 0; min-width: 220px;">
+        <label for="transcriptionEngine" style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Recognition model:</label>
+        <select id="transcriptionEngine" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
+          <option value="parakeet">Parakeet — fast default</option>
+          <option value="qwen3">Qwen3-ASR — multilingual + alignment</option>
+        </select>
+      </div>
+      <div class="form-group hidden" id="qwenAsrLanguageGroup" style="margin-bottom: 0; min-width: 170px;">
+        <label for="qwenAsrLanguage" style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Qwen language:</label>
+        <select id="qwenAsrLanguage" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
+          <option value="auto">Auto detect</option>
+        </select>
+      </div>
+      <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0;">
         <label style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Subtitle timings:</label>
         <select id="timestampMode" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px;">
           <option value="none">None</option>
@@ -883,10 +892,18 @@
           <option value="word">By word</option>
         </select>
       </div>
-      <label id="diarizeLabel" title="Labels speakers with pyannote Community-1. Sentence timings turn on automatically." style="display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; color: #555; cursor: pointer;">
+      <label id="diarizeLabel" title="Labels speakers with pyannote Community-1. Sentence timings turn on automatically." style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 7px; font-size: 14px; color: #555; cursor: pointer;">
         <input type="checkbox" id="diarizeCheckbox" style="margin: 0;">
         <span>Identify speakers <span class="badge" style="background:#5b8def">Community-1</span></span>
       </label>
+    </div>
+    <div id="transcriptionModelHint" style="font-size: 12px; color: #666; margin: -5px 0 12px;">Parakeet is the fast default for 25 European languages.</div>
+
+    <div class="controls">
+      <button id="recordBtn">Start Recording</button>
+      <button id="stopBtn" style="display: none;">Stop Recording</button>
+      <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
+      <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac,video/mp4" hidden>
     </div>
 
     <div class="status" id="recordStatus">Ready to record</div>
@@ -900,6 +917,36 @@
     <label style="margin-top: 16px;">Transcript Result:</label>
     <div class="result" id="transcriptResult">No transcript yet. Record audio and it will appear here.</div>
     <div class="status" id="transcriptTiming"></div>
+
+    <details id="alignmentLab" style="margin-top: 18px; border-top: 1px solid #e4e4e4; padding-top: 12px;">
+      <summary style="cursor: pointer; font-weight: 600; color: #444;">Forced alignment lab <span class="badge" style="background:#6f42c1">Qwen3</span></summary>
+      <p style="font-size: 13px; color: #666; margin: 10px 0;">Match a known transcript to the audio above. Supports audio up to 5 minutes in 11 languages and returns word timings.</p>
+      <div class="form-group">
+        <label for="alignmentText">Known transcript:</label>
+        <textarea id="alignmentText" placeholder="Record or upload audio, then paste the exact words spoken..." style="min-height: 72px;"></textarea>
+      </div>
+      <div class="controls">
+        <div class="form-group" style="margin-bottom: 0; min-width: 170px;">
+          <label for="alignmentLanguage">Alignment language:</label>
+          <select id="alignmentLanguage">
+            <option>English</option>
+            <option>Chinese</option>
+            <option>Cantonese</option>
+            <option>French</option>
+            <option>German</option>
+            <option>Italian</option>
+            <option>Japanese</option>
+            <option>Korean</option>
+            <option>Portuguese</option>
+            <option>Russian</option>
+            <option>Spanish</option>
+          </select>
+        </div>
+        <button id="alignmentButton" type="button" disabled>Align Current Audio</button>
+      </div>
+      <div class="result" id="alignmentResult" style="margin-top: 12px;">Choose audio above and enter its transcript.</div>
+      <div class="status" id="alignmentTiming"></div>
+    </details>
   </div>
 
   <!-- TTS Section -->
@@ -1206,6 +1253,7 @@
     let serviceStatus = {
       tts: { enabled: false },
       transcription: { enabled: false },
+      qwenAsr: { enabled: false },
       pocketTts: { enabled: false },
       qwenTts: { enabled: false },
     };
@@ -1253,7 +1301,7 @@
     function setUIDisabledState(disabled) {
       // Buttons to disable when no API key
       const buttonsToDisable = [
-        'recordBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn'
+        'recordBtn', 'uploadBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn'
       ];
       buttonsToDisable.forEach(id => {
         const btn = document.getElementById(id);
@@ -1261,7 +1309,11 @@
       });
 
       // Also disable form inputs
-      const inputsToDisable = ['ttsText', 'voiceSelect', 'speedRange', 'languageSelect', 'styleInstruct', 'cloneName'];
+      const inputsToDisable = [
+        'transcriptionEngine', 'qwenAsrLanguage', 'timestampMode', 'diarizeCheckbox',
+        'alignmentText', 'alignmentLanguage', 'ttsText', 'voiceSelect', 'speedRange',
+        'languageSelect', 'styleInstruct', 'cloneName',
+      ];
       inputsToDisable.forEach(id => {
         const input = document.getElementById(id);
         if (input) input.disabled = disabled;
@@ -1574,22 +1626,134 @@
     // ==================== Transcription ====================
     let mediaRecorder = null;
     let audioChunks = [];
+    let currentTranscriptionAudio = null;
+    let currentTranscriptionFilename = 'recording.webm';
+    let parakeetEnabled = false;
+    let qwenAsrEnabled = false;
+    let qwenAsrLanguages = [];
+    let qwenAlignmentLanguages = [];
 
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
     const uploadBtn = document.getElementById('uploadBtn');
     const audioFileInput = document.getElementById('audioFileInput');
     const audioDropZone = document.getElementById('audioDropZone');
+    const transcriptionEngine = document.getElementById('transcriptionEngine');
+    const qwenAsrLanguageGroup = document.getElementById('qwenAsrLanguageGroup');
+    const qwenAsrLanguage = document.getElementById('qwenAsrLanguage');
+    const transcriptionModelHint = document.getElementById('transcriptionModelHint');
     const timestampMode = document.getElementById('timestampMode');
     const diarizeCheckbox = document.getElementById('diarizeCheckbox');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
     const transcriptTiming = document.getElementById('transcriptTiming');
+    const alignmentLab = document.getElementById('alignmentLab');
+    const alignmentText = document.getElementById('alignmentText');
+    const alignmentLanguage = document.getElementById('alignmentLanguage');
+    const alignmentButton = document.getElementById('alignmentButton');
+    const alignmentResult = document.getElementById('alignmentResult');
+    const alignmentTiming = document.getElementById('alignmentTiming');
 
     const ALLOWED_UPLOAD_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'flac'];
     const MAX_UPLOAD_BYTES = 25 * 1024 * 1024;
     const SPEAKER_PALETTE = ['#5b8def', '#e15554', '#3bb273', '#e1b400', '#9b5de5', '#f15bb5', '#00bbf9', '#ff6b35'];
+
+    function populateQwenLanguages(languages) {
+      const selected = qwenAsrLanguage.value || 'auto';
+      qwenAsrLanguage.replaceChildren();
+      const autoOption = document.createElement('option');
+      autoOption.value = 'auto';
+      autoOption.textContent = 'Auto detect';
+      qwenAsrLanguage.appendChild(autoOption);
+      languages.forEach((language) => {
+        const option = document.createElement('option');
+        option.value = language;
+        option.textContent = language;
+        qwenAsrLanguage.appendChild(option);
+      });
+      qwenAsrLanguage.value = [...qwenAsrLanguage.options].some((option) => option.value === selected)
+        ? selected
+        : 'auto';
+    }
+
+    function syncQwenTimingAvailability() {
+      const isQwen = transcriptionEngine.value === 'qwen3';
+      const language = qwenAsrLanguage.value;
+      const alignmentSupported = language === 'auto' || qwenAlignmentLanguages.includes(language);
+      [...timestampMode.options].forEach((option) => {
+        if (option.value !== 'none') option.disabled = isQwen && !alignmentSupported;
+      });
+      if (isQwen && !alignmentSupported && timestampMode.value !== 'none') {
+        timestampMode.value = 'none';
+        diarizeCheckbox.checked = false;
+      }
+    }
+
+    function updateAlignmentButtonState() {
+      alignmentButton.disabled = !qwenAsrEnabled
+        || !currentTranscriptionAudio
+        || !alignmentText.value.trim()
+        || !canMakeAuthenticatedCalls();
+    }
+
+    function updateTranscriptionModelUI() {
+      const parakeetOption = transcriptionEngine.querySelector('option[value="parakeet"]');
+      const qwenOption = transcriptionEngine.querySelector('option[value="qwen3"]');
+      parakeetOption.disabled = !parakeetEnabled;
+      qwenOption.disabled = !qwenAsrEnabled;
+      parakeetOption.textContent = parakeetEnabled
+        ? 'Parakeet — fast default'
+        : 'Parakeet — not enabled';
+      qwenOption.textContent = qwenAsrEnabled
+        ? 'Qwen3-ASR — multilingual + alignment'
+        : 'Qwen3-ASR — not enabled';
+
+      if (transcriptionEngine.value === 'parakeet' && !parakeetEnabled && qwenAsrEnabled) {
+        transcriptionEngine.value = 'qwen3';
+      } else if (transcriptionEngine.value === 'qwen3' && !qwenAsrEnabled && parakeetEnabled) {
+        transcriptionEngine.value = 'parakeet';
+      }
+
+      const isQwen = transcriptionEngine.value === 'qwen3';
+      qwenAsrLanguageGroup.classList.toggle('hidden', !isQwen);
+      alignmentLab.style.display = qwenAsrEnabled ? 'block' : 'none';
+      if (isQwen) {
+        transcriptionModelHint.textContent = qwenAsrLanguage.value === 'auto'
+          ? 'Qwen3-ASR detects among 30 languages. Sentence/word timings use the 11-language ForcedAligner after detection.'
+          : `Qwen3-ASR will transcribe in ${qwenAsrLanguage.value}. Timings are available for the ForcedAligner languages.`;
+      } else {
+        transcriptionModelHint.textContent = 'Parakeet is the fast default for 25 European languages.';
+      }
+
+      const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled;
+      recordBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
+      uploadBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
+      transcriptionEngine.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
+      syncQwenTimingAvailability();
+      updateAlignmentButtonState();
+    }
+
+    async function loadTranscriptionModels(showAuthError = false) {
+      parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
+      qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
+      try {
+        const response = await authFetch(`${API_BASE}/transcription/models`, {}, showAuthError);
+        if (response.ok) {
+          const data = await response.json();
+          const parakeet = data.models?.find((model) => model.id === 'parakeet');
+          const qwen = data.models?.find((model) => model.id === 'qwen3');
+          parakeetEnabled = Boolean(parakeet?.enabled);
+          qwenAsrEnabled = Boolean(qwen?.enabled);
+          qwenAsrLanguages = qwen?.languages || [];
+          qwenAlignmentLanguages = qwen?.alignmentLanguages || [];
+          populateQwenLanguages(qwenAsrLanguages);
+        }
+      } catch (error) {
+        console.error('Failed to load transcription model status:', error);
+      }
+      updateTranscriptionModelUI();
+    }
 
     function speakerColor(speakerLabel) {
       if (!speakerLabel) return '#999';
@@ -1597,6 +1761,10 @@
       const idx = m ? parseInt(m[1], 10) : 0;
       return SPEAKER_PALETTE[idx % SPEAKER_PALETTE.length];
     }
+
+    transcriptionEngine.addEventListener('change', updateTranscriptionModelUI);
+    qwenAsrLanguage.addEventListener('change', updateTranscriptionModelUI);
+    alignmentText.addEventListener('input', updateAlignmentButtonState);
 
     diarizeCheckbox.addEventListener('change', () => {
       // Speaker labels need timestamp segments. Choose the least noisy timing
@@ -1607,6 +1775,7 @@
     });
     timestampMode.addEventListener('change', () => {
       if (timestampMode.value === 'none') diarizeCheckbox.checked = false;
+      syncQwenTimingAvailability();
     });
 
     recordBtn.addEventListener('click', startRecording);
@@ -1731,6 +1900,15 @@
     function renderTranscriptResult(data, mode) {
       transcriptResult.replaceChildren();
 
+      if (data.engine === 'qwen3') {
+        const meta = document.createElement('div');
+        meta.style.fontSize = '12px';
+        meta.style.color = '#6f42c1';
+        meta.style.marginBottom = '6px';
+        meta.textContent = `Qwen3-ASR · ${data.language || 'language auto-detected'}`;
+        transcriptResult.appendChild(meta);
+      }
+
       const useTimestamps = data.timestamps && data.timestamps.length > 0;
       if (useTimestamps) {
         const label = document.createElement('div');
@@ -1789,6 +1967,9 @@
     }
 
     async function transcribeAudio(audioBlob, filename = 'recording.webm') {
+      currentTranscriptionAudio = audioBlob;
+      currentTranscriptionFilename = filename;
+      updateAlignmentButtonState();
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
 
       const startTime = performance.now();
@@ -1798,6 +1979,10 @@
       try {
         const formData = new FormData();
         formData.append('file', audioBlob, filename);
+        formData.append('engine', transcriptionEngine.value);
+        if (transcriptionEngine.value === 'qwen3') {
+          formData.append('language', qwenAsrLanguage.value || 'auto');
+        }
         if (mode === 'sentence') {
           formData.append('timestamps', 'true');
         } else if (mode === 'word') {
@@ -1817,6 +2002,15 @@
         if (response.ok && data.success) {
           transcriptResult.className = 'result success';
           renderTranscriptResult(data, mode);
+          const alignedText = data.transcript
+            || (Array.isArray(data.timestamps) ? data.timestamps.map((segment) => segment.text).join(' ') : '');
+          if (alignedText.trim()) {
+            alignmentText.value = alignedText.trim();
+            if (data.language && qwenAlignmentLanguages.includes(data.language)) {
+              alignmentLanguage.value = data.language;
+            }
+            updateAlignmentButtonState();
+          }
           transcriptTiming.textContent = `Elapsed time: ${elapsed}s`;
           recordStatus.textContent = 'Transcription complete!';
         } else {
@@ -1828,6 +2022,59 @@
         recordStatus.textContent = 'Transcription failed';
       }
     }
+
+    alignmentButton.addEventListener('click', async () => {
+      if (!currentTranscriptionAudio) {
+        alignmentResult.className = 'result error';
+        alignmentResult.textContent = 'Record or upload audio first.';
+        return;
+      }
+      const text = alignmentText.value.trim();
+      if (!text) {
+        alignmentResult.className = 'result error';
+        alignmentResult.textContent = 'Enter the known transcript first.';
+        return;
+      }
+
+      alignmentButton.disabled = true;
+      alignmentResult.className = 'result';
+      alignmentResult.innerHTML = '<span class="loading"></span>Aligning transcript to audio...';
+      const startedAt = performance.now();
+      try {
+        const formData = new FormData();
+        formData.append('file', currentTranscriptionAudio, currentTranscriptionFilename);
+        formData.append('text', text);
+        formData.append('language', alignmentLanguage.value);
+        const response = await authFetch(`${API_BASE}/qwen-asr/align`, {
+          method: 'POST',
+          body: formData,
+        });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Forced alignment failed');
+        }
+
+        alignmentResult.replaceChildren();
+        alignmentResult.className = 'result success';
+        const label = document.createElement('div');
+        label.style.fontWeight = '600';
+        label.style.marginBottom = '6px';
+        label.textContent = `Word timings · ${data.language}`;
+        alignmentResult.appendChild(label);
+        data.timestamps.forEach((item) => {
+          const line = document.createElement('div');
+          line.textContent = `[${formatTime(item.start)} → ${formatTime(item.end)}] ${item.text}`;
+          alignmentResult.appendChild(line);
+        });
+        alignmentTiming.textContent = `Aligned ${data.timestamps.length} units in ${((performance.now() - startedAt) / 1000).toFixed(2)}s`;
+      } catch (error) {
+        alignmentResult.className = 'result error';
+        alignmentResult.textContent = 'Error: ' + error.message;
+        alignmentTiming.textContent = '';
+      } finally {
+        updateAlignmentButtonState();
+      }
+    });
 
     // Helper to format seconds as MM:SS.ms
     function formatTime(seconds) {
@@ -3093,8 +3340,11 @@
         qwenEnabled = Boolean(serviceStatus.qwenTts?.enabled);
         qwenCustomVoiceEnabled = false;
         qwenVoiceCloningEnabled = false;
+        parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
+        qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
         updatePocketAvailability();
         updateQwenAvailability();
+        updateTranscriptionModelUI();
         updateStyleInstructUI();
         updateImportAccessUI();
         // Disable all interactive elements
@@ -3104,6 +3354,9 @@
 
       // Auth not required or key is present - enable UI and load data
       setUIDisabledState(false);
+
+      // Load STT provider capabilities and the Qwen language lists.
+      await loadTranscriptionModels(false);
 
       // Load Pocket voices first (default) - use silent mode for init
       await loadPocketVoices(false);

@@ -23,6 +23,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Pocket TTS | MIT | CC-BY-4.0 | ✅ Permitted |
 | Kokoro TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| Qwen3-ASR + ForcedAligner | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 
 ### Feature Comparison
 
@@ -44,6 +45,11 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
   - Sentence-level timestamps for subtitle generation
   - Word-level timestamps for precise timing
   - Optional speaker identification with [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
+- **Multilingual Transcription + Alignment**: Optional [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) MLX backend
+  - 0.6B 8-bit model with auto detection across 30 languages
+  - Sentence or word timings generated with Qwen3 ForcedAligner
+  - Explicit supplied-transcript alignment for captions and dubbing
+  - Isolated `.venv-qwen-asr` keeps MLX-Audio 0.4.x separate from existing TTS dependencies
 - **Text-to-Speech (Kokoro)**: Convert text to natural-sounding speech using [Kokoro TTS](https://github.com/hexgrad/kokoro)
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
   - Word-level timestamp support
@@ -147,6 +153,20 @@ Examples for local-only, allowlist, and public `CORS_ORIGINS=*` setups are in `e
 | PREWARM_DIARIZATION | 0 | Pre-load the diarization model on server start |
 
 Before enabling diarization, accept the gated [Community-1 model terms](https://huggingface.co/pyannote/speaker-diarization-community-1) and run `uvx hf auth login`, or provide `HF_TOKEN` on a headless server. `./setup.sh` walks through both steps.
+
+#### Qwen3-ASR + ForcedAligner (Optional)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| QWEN_ASR_ENABLED | 0 | Enable Qwen3-ASR as an additional `/transcribe` engine |
+| QWEN_ASR_MODEL_ID | mlx-community/Qwen3-ASR-0.6B-8bit | MLX speech-recognition model |
+| QWEN_ASR_ALIGNER_MODEL_ID | mlx-community/Qwen3-ForcedAligner-0.6B-8bit | MLX forced-alignment model |
+| QWEN_ASR_PYTHON_PATH | ./.venv-qwen-asr/bin/python3 | Isolated backend interpreter |
+| QWEN_ASR_DEFAULT_LANGUAGE | auto | Language name/code, or automatic detection |
+| QWEN_ASR_TIMEOUT | 300000 | Transcription/alignment timeout (ms) |
+| QWEN_ASR_DAEMON_STARTUP_TIMEOUT | 300000 | Initial model-load timeout (ms) |
+| PREWARM_QWEN_ASR | 0 | Load Qwen3-ASR on server start; the aligner remains lazy |
+
+Select Qwen3-ASR in `./setup.sh` to create the isolated environment, install MLX-Audio 0.4.x plus Japanese/Korean tokenizers, and optionally predownload both models. Parakeet remains the default engine.
 
 #### Kokoro TTS (Optional)
 | Variable | Default | Description |
@@ -434,6 +454,50 @@ curl -X POST http://localhost:3000/transcribe \
 ```
 
 Use `numSpeakers` for an exact count, or `minSpeakers` and `maxSpeakers` for a range. Values must be between 1 and 20.
+
+#### Qwen3-ASR Multilingual Transcription
+
+Use `engine=qwen3` to select Qwen3-ASR. Omit `language` or send `auto` for detection. When sentence or word timestamps are requested, the ForcedAligner runs after transcription; alignment is available in Chinese, English, Cantonese, French, German, Italian, Japanese, Korean, Portuguese, Russian, and Spanish.
+
+```bash
+curl -X POST http://localhost:3000/transcribe \
+  -F "file=@speech.m4a" \
+  -F "engine=qwen3" \
+  -F "language=auto" \
+  -F "wordTimestamps=true" \
+  -F "diarize=false"
+```
+
+```json
+{
+  "success": true,
+  "engine": "qwen3",
+  "language": "English",
+  "model": "mlx-community/Qwen3-ASR-0.6B-8bit",
+  "timestampLevel": "word",
+  "timestamps": [
+    { "text": "Hello", "start": 0.0, "end": 0.4 },
+    { "text": "world", "start": 0.4, "end": 0.8 }
+  ]
+}
+```
+
+List configured recognition providers and their language capabilities:
+
+```bash
+curl http://localhost:3000/transcription/models
+```
+
+#### Align a Known Transcript
+
+`POST /qwen-asr/align` aligns supplied text to audio without transcribing it first. Audio is limited to 5 minutes by the upstream aligner.
+
+```bash
+curl -X POST http://localhost:3000/qwen-asr/align \
+  -F "file=@speech.wav" \
+  -F "text=The exact words spoken in the recording." \
+  -F "language=English"
+```
 
 ### Text-to-Speech (Kokoro)
 
@@ -875,6 +939,7 @@ On first use, ML models are downloaded automatically:
 | Feature | Model Size | Download Time |
 |---------|-----------|---------------|
 | Transcription | ~2.5 GB (parakeet-mlx) | 2-5 minutes |
+| Qwen3-ASR + ForcedAligner | ~2.2 GB total | 2-5 minutes |
 | Speaker identification | ~70 MB (pyannote Community-1) | 1-3 minutes |
 | Kokoro TTS | ~300 MB | 30-60 seconds |
 | Pocket TTS | ~200 MB | 30-60 seconds |
@@ -896,6 +961,7 @@ All services use persistent Python daemons that keep ML models loaded in memory:
 
 Daemons start automatically when the server starts and shut down gracefully with the server. To disable pre-loading (lazy load on first request instead), set:
 - `PREWARM_TRANSCRIPTION=0`
+- `PREWARM_QWEN_ASR=0`
 - `PREWARM_DIARIZATION=0`
 - `PREWARM_TTS=0`
 - `PREWARM_POCKET_TTS=0`
@@ -964,6 +1030,7 @@ auto, Chinese, English, French, German, Italian, Japanese, Korean, Portuguese, R
 sogni-voice/
 ├── scripts/
 │   ├── parakeet_daemon.py     # Transcription daemon
+│   ├── qwen_asr_daemon.py     # Qwen3-ASR + ForcedAligner daemon
 │   ├── tts_daemon.py          # Kokoro TTS daemon
 │   ├── pocket_tts_daemon.py   # Pocket TTS daemon
 │   └── qwen_tts_daemon.py     # Qwen3-TTS daemon
@@ -978,12 +1045,14 @@ sogni-voice/
 │   │   ├── index.js           # Route aggregator
 │   │   ├── health.js          # GET /health
 │   │   ├── transcribe.js      # POST /transcribe
+│   │   ├── qwenAsr.js         # POST /qwen-asr/align
 │   │   ├── tts.js             # Kokoro TTS endpoints
 │   │   ├── pocketTts.js       # Pocket TTS endpoints
 │   │   ├── qwenTts.js         # Qwen3-TTS endpoints
 │   │   └── static.js          # Static file serving
 │   ├── services/
 │   │   ├── transcription.js   # Parakeet daemon integration
+│   │   ├── qwenAsr.js          # Qwen3-ASR daemon integration
 │   │   ├── tts.js             # Kokoro TTS integration
 │   │   ├── pocketTts.js       # Pocket TTS integration
 │   │   └── qwenTts.js         # Qwen3-TTS integration
@@ -992,6 +1061,7 @@ sogni-voice/
 │       └── errors.js          # Custom error classes
 ├── models/
 │   └── kokoro-tts/            # Kokoro model (auto-downloaded)
+├── .venv-qwen-asr/            # Isolated MLX-Audio 0.4.x environment
 ├── voice_clones/              # Qwen TTS voice clone storage
 ├── pocket_voice_clones/       # Pocket TTS voice clone storage
 ├── public/                    # Static files (demo UI)

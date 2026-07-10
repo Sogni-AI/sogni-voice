@@ -34,6 +34,7 @@ describe('Authentication Integration Tests', () => {
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
           },
+          qwenAsr: { enabled: false },
           upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
           pocketTts: { enabled: false },
           qwenTts: { enabled: false },
@@ -74,6 +75,7 @@ describe('Authentication Integration Tests', () => {
       expect(payload.services).toEqual({
         tts: { enabled: true },
         transcription: { enabled: true },
+        qwenAsr: { enabled: false },
         pocketTts: { enabled: false },
         qwenTts: { enabled: false },
       });
@@ -123,6 +125,7 @@ describe('Authentication Integration Tests', () => {
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
           },
+          qwenAsr: { enabled: true },
           upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
           pocketTts: { enabled: true },
           qwenTts: { enabled: true },
@@ -171,6 +174,7 @@ describe('Authentication Integration Tests', () => {
       expect(payload.services).toEqual({
         tts: { enabled: true },
         transcription: { enabled: true },
+        qwenAsr: { enabled: true },
         pocketTts: { enabled: true },
         qwenTts: { enabled: true },
       });

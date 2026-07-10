@@ -5,6 +5,7 @@ import { ttsService } from './services/tts.js';
 import { qwenTtsBaseService, qwenTtsCustomVoiceService } from './services/qwenTts.js';
 import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
+import { qwenAsrService } from './services/qwenAsr.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -19,6 +20,7 @@ const gracefulShutdown = async (signal) => {
     qwenTtsCustomVoiceService.shutdown(),
     pocketTtsService.shutdown(),
     diarizationService.shutdown(),
+    qwenAsrService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -70,6 +72,11 @@ startServer()
     if (config.diarization.enabled && config.diarization.preWarmDaemon) {
       console.log('Pre-warming diarization daemon...');
       preWarmPromises.push(preWarmDaemon('Diarization daemon', () => diarizationService.initialize()));
+    }
+
+    if (config.qwenAsr.enabled && config.qwenAsr.preWarmDaemon) {
+      console.log('Pre-warming Qwen3-ASR daemon...');
+      preWarmPromises.push(preWarmDaemon('Qwen3-ASR daemon', () => qwenAsrService.initialize()));
     }
 
     await Promise.all(preWarmPromises);

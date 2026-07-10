@@ -279,9 +279,14 @@ with open('output.wav', 'wb') as f:
 
   <!-- Transcription Section -->
   <details class="section">
-    <summary><h2>1. STT (Speech-to-Text) - Parakeet</h2></summary>
+    <summary><h2>1. STT (Speech-to-Text) - Parakeet + Qwen3-ASR</h2></summary>
     <div class="section-content">
-    <p>Upload an audio file and receive a text transcript.</p>
+    <p>Upload an audio file and receive a text transcript. Parakeet is the fast default; optional Qwen3-ASR adds 30-language recognition, automatic language detection, and forced alignment.</p>
+
+    <div class="endpoint">
+      <span class="method get">GET</span> /transcription/models
+    </div>
+    <p>Lists configured recognition providers, whether each is enabled, and Qwen3-ASR/alignment language capabilities.</p>
 
     <div class="endpoint">
       <span class="method">POST</span> /transcribe
@@ -300,6 +305,16 @@ with open('output.wav', 'wb') as f:
         <td><code>file</code> <span class="required">*</span></td>
         <td>File</td>
         <td>Audio file to transcribe (supports common formats: mp3, wav, webm, m4a, etc.)</td>
+      </tr>
+      <tr>
+        <td><code>engine</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td><code>parakeet</code> (default) or <code>qwen3</code></td>
+      </tr>
+      <tr>
+        <td><code>language</code> <span class="optional">(optional)</span></td>
+        <td>string</td>
+        <td>Qwen3-ASR language name/code or <code>auto</code> (default). Ignored by Parakeet.</td>
       </tr>
       <tr>
         <td><code>timestamps</code> <span class="optional">(optional)</span></td>
@@ -380,6 +395,20 @@ with open('output.wav', 'wb') as f:
   ]
 }</code></pre>
 
+    <h3>Qwen3-ASR with word alignment</h3>
+    <p>When Qwen3-ASR receives <code>timestamps=true</code> or <code>wordTimestamps=true</code>, the Qwen3 ForcedAligner generates the requested spans. Alignment supports audio up to 5 minutes in 11 languages.</p>
+    <pre><code>{
+  "success": true,
+  "engine": "qwen3",
+  "language": "English",
+  "model": "mlx-community/Qwen3-ASR-0.6B-8bit",
+  "timestampLevel": "word",
+  "timestamps": [
+    { "text": "Hello", "start": 0.0, "end": 0.4 },
+    { "text": "world", "start": 0.4, "end": 0.8 }
+  ]
+}</code></pre>
+
     <h3>cURL Examples</h3>
     <pre><code># Basic transcription
 curl -X POST https://voice.sogni.ai/transcribe \
@@ -401,7 +430,35 @@ curl -X POST https://voice.sogni.ai/transcribe \
   -F "timestamps=true" \
   -F "diarize=true" \
   -F "minSpeakers=2" \
-  -F "maxSpeakers=4"</code></pre>
+  -F "maxSpeakers=4"
+
+# Qwen3-ASR with auto language detection and word alignment
+curl -X POST https://voice.sogni.ai/transcribe \
+  -F "file=@/path/to/speech.m4a" \
+  -F "engine=qwen3" \
+  -F "language=auto" \
+  -F "wordTimestamps=true" \
+  -F "diarize=false"</code></pre>
+
+    <h3>Forced Alignment of Known Text</h3>
+    <div class="endpoint">
+      <span class="method">POST</span> /qwen-asr/align
+    </div>
+    <p>Align an exact transcript to an audio file. Send <code>file</code>, <code>text</code>, and one of the 11 supported <code>language</code> names as multipart fields.</p>
+    <pre><code>curl -X POST https://voice.sogni.ai/qwen-asr/align \
+  -F "file=@/path/to/speech.wav" \
+  -F "text=The exact words spoken in the recording." \
+  -F "language=English"</code></pre>
+
+    <pre><code>{
+  "success": true,
+  "language": "English",
+  "model": "mlx-community/Qwen3-ForcedAligner-0.6B-8bit",
+  "timestamps": [
+    { "text": "The", "start": 0.0, "end": 0.18 },
+    { "text": "exact", "start": 0.18, "end": 0.52 }
+  ]
+}</code></pre>
 
     <h3>JavaScript Example</h3>
     <pre><code>const formData = new FormData();

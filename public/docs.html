@@ -283,14 +283,14 @@ with open('output.wav', 'wb') as f:
 
   <!-- Transcription Section -->
   <details class="section">
-    <summary><h2>1. STT (Speech-to-Text) - Parakeet + Qwen3-ASR</h2></summary>
+    <summary><h2>1. STT - Parakeet, Qwen3-ASR, MOSS Transcribe-Diarize</h2></summary>
     <div class="section-content">
-    <p>Upload an audio file and receive a text transcript. Parakeet is the fast default; optional Qwen3-ASR adds 30-language recognition, automatic language detection, and forced alignment.</p>
+    <p>Upload an audio file and receive a text transcript. Parakeet is the fast default; Qwen3-ASR adds multilingual recognition and alignment; experimental MOSS Transcribe-Diarize jointly emits English/Chinese text, speakers, and segment timestamps.</p>
 
     <div class="endpoint">
       <span class="method get">GET</span> /transcription/models
     </div>
-    <p>Lists configured recognition providers, whether each is enabled, and Qwen3-ASR/alignment language capabilities.</p>
+    <p>Lists configured recognition providers, enabled state, language/timestamp capabilities, and whether diarization is built in.</p>
 
     <div class="endpoint">
       <span class="method">POST</span> /transcribe
@@ -313,12 +313,12 @@ with open('output.wav', 'wb') as f:
       <tr>
         <td><code>engine</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td><code>parakeet</code> (default) or <code>qwen3</code></td>
+        <td><code>parakeet</code> (default), <code>qwen3</code>, or experimental <code>moss-td</code></td>
       </tr>
       <tr>
         <td><code>language</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Qwen3-ASR language name/code or <code>auto</code> (default). Ignored by Parakeet.</td>
+        <td>Qwen3-ASR language name/code or <code>auto</code> (default). Not accepted by <code>moss-td</code>, which handles English/Chinese automatically.</td>
       </tr>
       <tr>
         <td><code>timestamps</code> <span class="optional">(optional)</span></td>
@@ -328,12 +328,12 @@ with open('output.wav', 'wb') as f:
       <tr>
         <td><code>wordTimestamps</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to include word-level timings with start/end times for each word (overrides timestamps)</td>
+        <td>Set to "true" to include word-level timings (overrides timestamps). Not supported by <code>moss-td</code>.</td>
       </tr>
       <tr>
         <td><code>diarize</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to identify speakers with pyannote Community-1. Request timestamps to attach speaker labels to transcript segments.</td>
+        <td>Set to "true" to identify speakers with pyannote Community-1. MOSS always performs built-in diarization instead.</td>
       </tr>
       <tr>
         <td><code>numSpeakers</code> <span class="optional">(optional)</span></td>
@@ -344,6 +344,16 @@ with open('output.wav', 'wb') as f:
         <td><code>minSpeakers</code> / <code>maxSpeakers</code> <span class="optional">(optional)</span></td>
         <td>string</td>
         <td>Expected speaker-count range from 1-20.</td>
+      </tr>
+      <tr>
+        <td><code>hotwords</code> / <code>prompt</code> <span class="optional">(MOSS only)</span></td>
+        <td>string</td>
+        <td>Optional vocabulary hints or a custom transcription instruction for <code>moss-td</code>.</td>
+      </tr>
+      <tr>
+        <td><code>maxNewTokens</code> <span class="optional">(MOSS only)</span></td>
+        <td>string</td>
+        <td>Generation limit from 64-65536; raise it for long recordings.</td>
       </tr>
     </table>
 
@@ -413,6 +423,21 @@ with open('output.wav', 'wb') as f:
   ]
 }</code></pre>
 
+    <h3>MOSS Transcribe-Diarize (experimental)</h3>
+    <p>This opt-in 0.9B engine performs English/Chinese transcription, diarization, and segment timing in one model pass. It is pinned to reviewed package/model commits, runs in an isolated Python 3.12 environment, and uses local model classes with remote code disabled. Word timestamps, language selection, and speaker-count constraints are not supported.</p>
+    <pre><code>{
+  "success": true,
+  "engine": "moss-td",
+  "experimental": true,
+  "transcript": "Good morning. Thanks for joining.",
+  "segments": [
+    { "start": 0.0, "end": 1.2, "speaker": "S01", "text": "Good morning." },
+    { "start": 1.25, "end": 2.8, "speaker": "S02", "text": "Thanks for joining." }
+  ],
+  "diarization": { "available": true, "builtIn": true, "numSpeakers": 2 },
+  "timestampLevel": "segment"
+}</code></pre>
+
     <h3>cURL Examples</h3>
     <pre><code># Basic transcription
 curl -X POST https://voice.sogni.ai/transcribe \
@@ -427,6 +452,12 @@ curl -X POST https://voice.sogni.ai/transcribe \
 curl -X POST https://voice.sogni.ai/transcribe \
   -F "file=@/path/to/audio.mp3" \
   -F "wordTimestamps=true"
+
+# Experimental one-pass transcript + speakers
+curl -X POST https://voice.sogni.ai/transcribe \
+  -F "file=@/path/to/meeting.wav" \
+  -F "engine=moss-td" \
+  -F "hotwords=Sogni, MLX"
 
 # With local speaker identification
 curl -X POST https://voice.sogni.ai/transcribe \

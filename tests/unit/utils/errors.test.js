@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { TranscriptionError, TTSError, FileUploadError, MossTTSError } from '../../../src/utils/errors.js';
+import {
+  TranscriptionError,
+  TTSError,
+  FileUploadError,
+  MossTTSError,
+  MossTranscribeDiarizeError,
+} from '../../../src/utils/errors.js';
 
 describe('TranscriptionError', () => {
   it('should set correct name and message', () => {
@@ -92,6 +98,16 @@ describe('MossTTSError', () => {
     const cause = new Error('backend');
     const error = new MossTTSError('MOSS failed', cause);
     expect(error.name).toBe('MossTTSError');
+    expect(error.cause).toBe(cause);
+    expect(error.toBoom().output.statusCode).toBe(500);
+  });
+});
+
+describe('MossTranscribeDiarizeError', () => {
+  it('keeps its cause and converts to a 500 Boom error', () => {
+    const cause = new Error('backend');
+    const error = new MossTranscribeDiarizeError('MOSS transcription failed', cause);
+    expect(error.name).toBe('MossTranscribeDiarizeError');
     expect(error.cause).toBe(cause);
     expect(error.toBoom().output.statusCode).toBe(500);
   });

@@ -27,6 +27,18 @@ describe('config', () => {
     process.env.QWEN_ASR_TIMEOUT = '';
     process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT = '';
     process.env.PREWARM_QWEN_ASR = '';
+    process.env.MOSS_TD_ENABLED = '';
+    process.env.MOSS_TD_MODEL_ID = '';
+    process.env.MOSS_TD_MODEL_REVISION = '';
+    process.env.MOSS_TD_PACKAGE_REVISION = '';
+    process.env.MOSS_TD_PYTHON_PATH = '';
+    process.env.MOSS_TD_DEVICE = '';
+    process.env.MOSS_TD_DTYPE = '';
+    process.env.MOSS_TD_MAX_NEW_TOKENS = '';
+    process.env.MOSS_TD_MAX_AUDIO_SECONDS = '';
+    process.env.MOSS_TD_TIMEOUT = '';
+    process.env.MOSS_TD_DAEMON_STARTUP_TIMEOUT = '';
+    process.env.PREWARM_MOSS_TD = '';
     process.env.MOSS_TTS_ENABLED = '';
     process.env.MOSS_TTS_MODEL_ID = '';
     process.env.MOSS_TTS_PYTHON_PATH = '';
@@ -277,6 +289,48 @@ describe('config', () => {
         pythonPath: '/opt/moss/bin/python',
         defaultVoice: 'narrator',
         voicesDir: '/srv/moss-voices',
+      });
+    });
+  });
+
+  describe('moss transcribe-diarize config', () => {
+    it('is disabled by default with pinned experimental runtime defaults', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.mossTranscribeDiarize).toMatchObject({
+        enabled: false,
+        modelId: 'OpenMOSS-Team/MOSS-Transcribe-Diarize',
+        modelRevision: 'd7231bbae2587a4af278735eb765b318c4f64edd',
+        packageRevision: 'b5ad0f8386b155ddb89f9332ba3ca71891900357',
+        pythonPath: './.venv-moss-transcribe/bin/python3',
+        device: 'mps',
+        dtype: 'fp16',
+        maxNewTokens: 5120,
+        maxAudioSeconds: 5400,
+        preWarmDaemon: false,
+      });
+    });
+
+    it('accepts MOSS Transcribe-Diarize environment overrides', async () => {
+      process.env.MOSS_TD_ENABLED = '1';
+      process.env.MOSS_TD_MODEL_ID = 'local/moss-td';
+      process.env.MOSS_TD_MODEL_REVISION = 'model-sha';
+      process.env.MOSS_TD_PACKAGE_REVISION = 'package-sha';
+      process.env.MOSS_TD_PYTHON_PATH = '/opt/moss-td/bin/python';
+      process.env.MOSS_TD_DEVICE = 'cpu';
+      process.env.MOSS_TD_DTYPE = 'fp32';
+      process.env.MOSS_TD_MAX_NEW_TOKENS = '8192';
+      process.env.MOSS_TD_MAX_AUDIO_SECONDS = '1800';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.mossTranscribeDiarize).toMatchObject({
+        enabled: true,
+        modelId: 'local/moss-td',
+        modelRevision: 'model-sha',
+        packageRevision: 'package-sha',
+        pythonPath: '/opt/moss-td/bin/python',
+        device: 'cpu',
+        dtype: 'fp32',
+        maxNewTokens: 8192,
+        maxAudioSeconds: 1800,
       });
     });
   });

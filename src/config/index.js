@@ -48,6 +48,22 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_ASR, false),
   },
+  mossTranscribeDiarize: {
+    enabled: parseEnvBool(process.env.MOSS_TD_ENABLED, false),
+    modelId: process.env.MOSS_TD_MODEL_ID || 'OpenMOSS-Team/MOSS-Transcribe-Diarize',
+    modelRevision: process.env.MOSS_TD_MODEL_REVISION
+      || 'd7231bbae2587a4af278735eb765b318c4f64edd',
+    packageRevision: process.env.MOSS_TD_PACKAGE_REVISION
+      || 'b5ad0f8386b155ddb89f9332ba3ca71891900357',
+    pythonPath: process.env.MOSS_TD_PYTHON_PATH || './.venv-moss-transcribe/bin/python3',
+    device: process.env.MOSS_TD_DEVICE || 'mps',
+    dtype: process.env.MOSS_TD_DTYPE || 'fp16',
+    maxNewTokens: parseInt(process.env.MOSS_TD_MAX_NEW_TOKENS, 10) || 5120,
+    maxAudioSeconds: parseInt(process.env.MOSS_TD_MAX_AUDIO_SECONDS, 10) || 5400,
+    timeout: parseInt(process.env.MOSS_TD_TIMEOUT, 10) || 3600000,
+    daemonStartupTimeout: parseInt(process.env.MOSS_TD_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_MOSS_TD, false),
+  },
   diarization: {
     enabled: parseEnvBool(process.env.DIARIZATION_ENABLED, false),
     modelId: process.env.DIARIZATION_MODEL_ID || 'pyannote/speaker-diarization-community-1',

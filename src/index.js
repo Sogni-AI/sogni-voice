@@ -7,6 +7,7 @@ import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
 import { mossTtsService } from './services/mossTts.js';
+import { mossTranscribeDiarizeService } from './services/mossTranscribeDiarize.js';
 import { config } from './config/index.js';
 
 const gracefulShutdown = async (signal) => {
@@ -23,6 +24,7 @@ const gracefulShutdown = async (signal) => {
     diarizationService.shutdown(),
     qwenAsrService.shutdown(),
     mossTtsService.shutdown(),
+    mossTranscribeDiarizeService.shutdown(),
   ]);
   process.exit(0);
 };
@@ -85,6 +87,16 @@ startServer()
       console.log('Pre-warming MOSS-TTS-Nano daemon...');
       preWarmPromises.push(
         preWarmDaemon('MOSS-TTS-Nano daemon', () => mossTtsService.initialize()),
+      );
+    }
+
+    if (config.mossTranscribeDiarize.enabled && config.mossTranscribeDiarize.preWarmDaemon) {
+      console.log('Pre-warming experimental MOSS Transcribe-Diarize daemon...');
+      preWarmPromises.push(
+        preWarmDaemon(
+          'MOSS Transcribe-Diarize daemon',
+          () => mossTranscribeDiarizeService.initialize(),
+        ),
       );
     }
 

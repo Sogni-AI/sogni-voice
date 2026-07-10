@@ -8,6 +8,7 @@ dotenv.config();
 const mockTranscribe = vi.hoisted(() => vi.fn());
 const mockQwenTranscribe = vi.hoisted(() => vi.fn());
 const mockQwenAlign = vi.hoisted(() => vi.fn());
+const mockMossTdTranscribe = vi.hoisted(() => vi.fn());
 const mockDiarize = vi.hoisted(() => vi.fn());
 
 // Mock config using environment variables
@@ -41,6 +42,20 @@ vi.mock('../../src/config/index.js', () => ({
       pythonPath: './.venv-qwen-asr/bin/python3',
       defaultLanguage: 'auto',
       timeout: 300000,
+      daemonStartupTimeout: 300000,
+      preWarmDaemon: false,
+    },
+    mossTranscribeDiarize: {
+      enabled: true,
+      modelId: 'OpenMOSS-Team/MOSS-Transcribe-Diarize',
+      modelRevision: 'test-model-revision',
+      packageRevision: 'test-package-revision',
+      pythonPath: './.venv-moss-transcribe/bin/python3',
+      device: 'mps',
+      dtype: 'fp16',
+      maxNewTokens: 5120,
+      maxAudioSeconds: 5400,
+      timeout: 3600000,
       daemonStartupTimeout: 300000,
       preWarmDaemon: false,
     },
@@ -91,6 +106,13 @@ vi.mock('../../src/services/qwenAsr.js', () => ({
   },
 }));
 
+vi.mock('../../src/services/mossTranscribeDiarize.js', () => ({
+  mossTranscribeDiarizeService: {
+    transcribe: mockMossTdTranscribe,
+    shutdown: vi.fn().mockResolvedValue(undefined),
+  },
+}));
+
 // Mock the diarization service
 vi.mock('../../src/services/diarization.js', () => ({
   diarizationService: {
@@ -112,6 +134,7 @@ describe('POST /transcribe', () => {
     mockTranscribe.mockReset();
     mockQwenTranscribe.mockReset();
     mockQwenAlign.mockReset();
+    mockMossTdTranscribe.mockReset();
     mockDiarize.mockReset();
     // Default mock implementation
     mockTranscribe.mockResolvedValue({
@@ -134,6 +157,19 @@ describe('POST /transcribe', () => {
         { text: 'from', start: 0.4, end: 0.6 },
         { text: 'Qwen', start: 0.6, end: 1.0 },
       ],
+    });
+    mockMossTdTranscribe.mockResolvedValue({
+      text: 'Good morning. Thanks for joining.',
+      rawTranscript: '[0.00][S01]Good morning.[1.20][1.25][S02]Thanks for joining.[2.80]',
+      timestamps: [
+        { start: 0, end: 1.2, speaker: 'S01', text: 'Good morning.' },
+        { start: 1.25, end: 2.8, speaker: 'S02', text: 'Thanks for joining.' },
+      ],
+      numSpeakers: 2,
+      model: 'OpenMOSS-Team/MOSS-Transcribe-Diarize',
+      revision: 'test-model-revision',
+      timestampLevel: 'segment',
+      metrics: { audioSeconds: 2.8, elapsedSeconds: 1.4, realTimeFactor: 0.5 },
     });
   });
 
@@ -439,7 +475,7 @@ describe('POST /transcribe', () => {
     expect(payload.speakers).toBeUndefined();
   });
 
-  it('lists Parakeet and Qwen3-ASR provider capabilities', async () => {
+  it('lists all configured recognition provider capabilities', async () => {
     const response = await server.inject({ method: 'GET', url: '/transcription/models' });
     expect(response.statusCode).toBe(200);
     const payload = JSON.parse(response.payload);
@@ -452,7 +488,81 @@ describe('POST /transcribe', () => {
         languages: expect.arrayContaining(['English', 'Japanese', 'Arabic']),
         alignmentLanguages: expect.arrayContaining(['English', 'Japanese']),
       }),
+      expect.objectContaining({
+        id: 'moss-td',
+        enabled: true,
+        experimental: true,
+        languages: ['English', 'Chinese'],
+        timestamps: ['segment'],
+        diarization: 'built-in',
+      }),
     ]));
+  });
+
+  it('uses experimental MOSS one-pass transcription and built-in diarization', async () => {
+    const audioContent = Buffer.from('RIFF\x24\x00\x00\x00WAVEfake audio content');
+    const response = await server.inject({
+      method: 'POST',
+      url: '/transcribe',
+      headers: { 'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary' },
+      payload:
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="file"; filename="meeting.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n' +
+        audioContent.toString() +
+        '\r\n------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="engine"\r\n\r\nmoss-td\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="timestamps"\r\n\r\ntrue\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="hotwords"\r\n\r\nSogni, MLX\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="maxNewTokens"\r\n\r\n4096\r\n' +
+        '------WebKitFormBoundary--\r\n',
+    });
+
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.payload);
+    expect(payload).toMatchObject({
+      success: true,
+      engine: 'moss-td',
+      experimental: true,
+      transcript: 'Good morning. Thanks for joining.',
+      timestampLevel: 'segment',
+      diarization: { available: true, builtIn: true, numSpeakers: 2 },
+    });
+    expect(payload.timestamps).toEqual(payload.segments);
+    expect(payload.speakers).toHaveLength(2);
+    expect(mockMossTdTranscribe).toHaveBeenCalledWith(expect.any(String), {
+      timestamps: true,
+      wordTimestamps: false,
+      prompt: undefined,
+      hotwords: 'Sogni, MLX',
+      maxNewTokens: 4096,
+    });
+    expect(mockDiarize).not.toHaveBeenCalled();
+  });
+
+  it('rejects word timestamps for MOSS Transcribe-Diarize', async () => {
+    const audioContent = Buffer.from('RIFF\x24\x00\x00\x00WAVEfake audio content');
+    const response = await server.inject({
+      method: 'POST',
+      url: '/transcribe',
+      headers: { 'content-type': 'multipart/form-data; boundary=----WebKitFormBoundary' },
+      payload:
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="file"; filename="meeting.wav"\r\n' +
+        'Content-Type: audio/wav\r\n\r\n' +
+        audioContent.toString() +
+        '\r\n------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="engine"\r\n\r\nmoss-td\r\n' +
+        '------WebKitFormBoundary\r\n' +
+        'Content-Disposition: form-data; name="wordTimestamps"\r\n\r\ntrue\r\n' +
+        '------WebKitFormBoundary--\r\n',
+    });
+
+    expect(response.statusCode).toBe(400);
+    expect(mockMossTdTranscribe).not.toHaveBeenCalled();
   });
 
   it('uses Qwen3-ASR and its aligner for word timestamps', async () => {

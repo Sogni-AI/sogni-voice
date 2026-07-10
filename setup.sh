@@ -420,6 +420,7 @@ select_tts_engines() {
         ENABLE_MOSS=0
         ENABLE_PARAKEET=1
         ENABLE_QWEN_ASR=0
+        ENABLE_MOSS_TD=0
         ENABLE_DIARIZATION=0
         QWEN_VARIANT="base-0.6b"
 
@@ -430,6 +431,7 @@ select_tts_engines() {
         print_info "- MOSS-TTS-Nano: disabled"
         print_info "- Parakeet STT: enabled"
         print_info "- Qwen3-ASR: disabled"
+        print_info "- MOSS Transcribe-Diarize: disabled (experimental)"
         print_info "- Speaker diarization: disabled (requires gated-model access)"
         return
     fi
@@ -476,16 +478,19 @@ select_tts_engines() {
     local stt_options=(
         "Parakeet TDT v3 (fast, 25 European languages) - Recommended"
         "Qwen3-ASR 0.6B (30 languages, auto detection, forced alignment)"
+        "MOSS Transcribe-Diarize 0.9B (English/Chinese, built-in speakers) - Experimental"
     )
 
-    show_checkbox_menu "Select Speech-to-Text Engines" "1 0" "${stt_options[@]}"
+    show_checkbox_menu "Select Speech-to-Text Engines" "1 0 0" "${stt_options[@]}"
     IFS=' ' read -ra stt_selected <<< "$MENU_RESULT"
     ENABLE_PARAKEET=${stt_selected[0]}
     ENABLE_QWEN_ASR=${stt_selected[1]}
+    ENABLE_MOSS_TD=${stt_selected[2]}
 
     [ "$ENABLE_PARAKEET" = "1" ] && print_success "Parakeet (STT) enabled"
     [ "$ENABLE_QWEN_ASR" = "1" ] && print_success "Qwen3-ASR + ForcedAligner enabled"
-    if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ]; then
+    [ "$ENABLE_MOSS_TD" = "1" ] && print_success "MOSS Transcribe-Diarize enabled (experimental)"
+    if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ] && [ "$ENABLE_MOSS_TD" != "1" ]; then
         print_warning "No speech-to-text engine selected; transcription will be unavailable."
     fi
 
@@ -542,6 +547,11 @@ select_tts_engines() {
         echo -e "  ${CHECK} Qwen3-ASR + ForcedAligner"
     else
         echo -e "  ${CROSS} Qwen3-ASR + ForcedAligner (disabled)"
+    fi
+    if [ "$ENABLE_MOSS_TD" = "1" ]; then
+        echo -e "  ${CHECK} MOSS Transcribe-Diarize (experimental)"
+    else
+        echo -e "  ${CROSS} MOSS Transcribe-Diarize (disabled)"
     fi
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         echo -e "  ${CHECK} pyannote Community-1 speaker identification"
@@ -631,6 +641,16 @@ configure_environment() {
         upsert_env_key "QWEN_ASR_ALIGNER_MODEL_ID" "mlx-community/Qwen3-ForcedAligner-0.6B-8bit"
     else
         upsert_env_key "QWEN_ASR_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_MOSS_TD" = "1" ]; then
+        upsert_env_key "MOSS_TD_ENABLED" "1"
+        upsert_env_key "MOSS_TD_MODEL_ID" "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+        upsert_env_key "MOSS_TD_MODEL_REVISION" "d7231bbae2587a4af278735eb765b318c4f64edd"
+        upsert_env_key "MOSS_TD_PACKAGE_REVISION" "b5ad0f8386b155ddb89f9332ba3ca71891900357"
+        upsert_env_key "MOSS_TD_PYTHON_PATH" "./.venv-moss-transcribe/bin/python3"
+    else
+        upsert_env_key "MOSS_TD_ENABLED" "0"
     fi
 
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
@@ -887,6 +907,30 @@ install_dependencies() {
         print_success "MOSS-TTS-Nano environment is ready"
     fi
 
+    # MOSS Transcribe-Diarize depends on Transformers 5.x and PyTorch. Keep it
+    # isolated, pin both source revisions, and use the tested Apple Silicon
+    # runtime so this experimental option cannot disturb the other engines.
+    if [ "$ENABLE_MOSS_TD" = "1" ]; then
+        if [ -d .venv-moss-transcribe ] && ! .venv-moss-transcribe/bin/python -c "import pip" >/dev/null 2>&1; then
+            local moss_td_backup=".venv-moss-transcribe.backup.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Existing MOSS Transcribe-Diarize environment is broken; moving it to $moss_td_backup"
+            mv .venv-moss-transcribe "$moss_td_backup"
+        fi
+
+        if [ ! -d .venv-moss-transcribe ]; then
+            print_info "Creating isolated MOSS Transcribe-Diarize environment at .venv-moss-transcribe/..."
+            uv venv --seed --python 3.12 .venv-moss-transcribe
+        fi
+
+        print_info "Installing pinned experimental MOSS Transcribe-Diarize runtime..."
+        uv pip install --python .venv-moss-transcribe/bin/python --torch-backend=auto \
+            "torch==2.11.0" \
+            "torchaudio==2.11.0" \
+            "moss-transcribe-diarize @ git+https://github.com/OpenMOSS/MOSS-Transcribe-Diarize.git@b5ad0f8386b155ddb89f9332ba3ca71891900357"
+        uv pip check --python .venv-moss-transcribe/bin/python
+        print_success "MOSS Transcribe-Diarize environment is ready"
+    fi
+
     print_success "All dependencies installed"
 
     if [ "$NON_INTERACTIVE" != "1" ]; then
@@ -1087,6 +1131,60 @@ PY
     fi
 }
 
+predownload_moss_td_model() {
+    if [ "$ENABLE_MOSS_TD" != "1" ]; then
+        return
+    fi
+
+    print_info "Predownloading pinned MOSS Transcribe-Diarize model (~1.8 GB)..."
+    if .venv-moss-transcribe/bin/python - <<'PY'
+import os
+from pathlib import Path
+
+import torch
+from moss_transcribe_diarize import (
+    MossTranscribeDiarizeForConditionalGeneration,
+    MossTranscribeDiarizeProcessor,
+)
+
+
+def configured_value(key, default):
+    if os.environ.get(key):
+        return os.environ[key]
+    env_file = Path(".env")
+    if env_file.is_file():
+        for line in env_file.read_text().splitlines():
+            if line.startswith(f"{key}="):
+                return line.split("=", 1)[1].strip() or default
+    return default
+
+
+model_id = configured_value(
+    "MOSS_TD_MODEL_ID", "OpenMOSS-Team/MOSS-Transcribe-Diarize"
+)
+revision = configured_value(
+    "MOSS_TD_MODEL_REVISION", "d7231bbae2587a4af278735eb765b318c4f64edd"
+)
+MossTranscribeDiarizeProcessor.from_pretrained(
+    model_id,
+    revision=revision,
+    trust_remote_code=False,
+    fix_mistral_regex=True,
+)
+MossTranscribeDiarizeForConditionalGeneration.from_pretrained(
+    model_id,
+    revision=revision,
+    dtype=torch.float16,
+    trust_remote_code=False,
+)
+PY
+    then
+        print_success "Pinned MOSS Transcribe-Diarize model downloaded and verified"
+    else
+        print_warning "MOSS Transcribe-Diarize predownload failed; the server will retry on first use"
+    fi
+}
+
 predownload_models() {
     print_header "Step 8: Predownload Models"
 
@@ -1210,6 +1308,7 @@ PY
         deactivate
         predownload_qwen_asr_models
         predownload_moss_tts_model
+        predownload_moss_td_model
         return
     fi
 
@@ -1348,6 +1447,7 @@ PY
     deactivate
     predownload_qwen_asr_models
     predownload_moss_tts_model
+    predownload_moss_td_model
 
     echo ""
     read -p "Press Enter to continue..."
@@ -1400,6 +1500,11 @@ print_summary() {
     else
         printf '%b\n' "  ${CROSS} Qwen3-ASR + ForcedAligner disabled"
     fi
+    if [ "$ENABLE_MOSS_TD" = "1" ]; then
+        printf '%b\n' "  ${CHECK} MOSS Transcribe-Diarize enabled (experimental)"
+    else
+        printf '%b\n' "  ${CROSS} MOSS Transcribe-Diarize disabled"
+    fi
     if [ "$ENABLE_DIARIZATION" = "1" ]; then
         printf '%b\n' "  ${CHECK} pyannote Community-1 speaker identification enabled"
     else
@@ -1432,6 +1537,9 @@ print_summary() {
     fi
     if [ "$ENABLE_QWEN_ASR" = "1" ]; then
         echo "  Qwen3-ASR + aligner ~2.2 GB     2-5 minutes"
+    fi
+    if [ "$ENABLE_MOSS_TD" = "1" ]; then
+        echo "  MOSS Transcribe-Diarize ~1.8 GB  2-5 minutes"
     fi
     if [ "$ENABLE_POCKET" = "1" ]; then
         echo "  Pocket TTS          ~200 MB     30-60 seconds"

@@ -16,6 +16,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Pocket TTS | Jan 13, 2026 (v1.0.3) | ~1 year after Kokoro |
 | Qwen3-TTS | Jan 21-22, 2026 | ~8 days after Pocket |
 | MOSS-TTS-Nano | Apr 10, 2026 | 100M multilingual reference-voice model |
+| MOSS Transcribe-Diarize | Jul 9, 2026 | 0.9B one-pass ASR + diarization model |
 
 ### Licensing
 
@@ -26,6 +27,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-ASR + ForcedAligner | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | MOSS-TTS-Nano | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| MOSS Transcribe-Diarize | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 
 ### Feature Comparison
 
@@ -52,6 +54,11 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
   - Sentence or word timings generated with Qwen3 ForcedAligner
   - Explicit supplied-transcript alignment for captions and dubbing
   - Isolated `.venv-qwen-asr` keeps MLX-Audio 0.4.x separate from existing TTS dependencies
+- **One-Pass Transcription + Speakers (Experimental)**: Optional [MOSS Transcribe-Diarize](https://github.com/OpenMOSS/MOSS-Transcribe-Diarize)
+  - Joint English/Chinese transcription, speaker diarization, and segment timestamps from one 0.9B model
+  - Hotword/custom-prompt support and advertised long-form input up to 90 minutes
+  - Pinned package/model revisions, local model classes, and `trust_remote_code=false`
+  - Isolated Python 3.12 environment; this project validates MPS FP16 although upstream currently documents CUDA/CPU paths
 - **Text-to-Speech (Kokoro)**: Convert text to natural-sounding speech using [Kokoro TTS](https://github.com/hexgrad/kokoro)
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
   - Word-level timestamp support
@@ -102,7 +109,7 @@ The server will be available at `http://localhost:3000`.
 
 ### System Requirements
 
-- **macOS** on Apple Silicon (M1/M2/M3/M4)
+- **macOS** on Apple Silicon (M1/M2/M3/M4/M5)
 - **uv** (Python package runner for parakeet-mlx)
 - **ffmpeg** for audio processing
 
@@ -174,6 +181,24 @@ Before enabling diarization, accept the gated [Community-1 model terms](https://
 | PREWARM_QWEN_ASR | 0 | Load Qwen3-ASR on server start; the aligner remains lazy |
 
 Select Qwen3-ASR in `./setup.sh` to create the isolated environment, install MLX-Audio 0.4.x plus Japanese/Korean tokenizers, and optionally predownload both models. Parakeet remains the default engine.
+
+#### MOSS Transcribe-Diarize (Experimental)
+| Variable | Default | Description |
+|----------|---------|-------------|
+| MOSS_TD_ENABLED | 0 | Enable `engine=moss-td` on `/transcribe` |
+| MOSS_TD_MODEL_ID | OpenMOSS-Team/MOSS-Transcribe-Diarize | Hugging Face model ID |
+| MOSS_TD_MODEL_REVISION | d7231b…64edd | Pinned model commit |
+| MOSS_TD_PACKAGE_REVISION | b5ad0f…0357 | Pinned official Git package commit; verified at daemon startup |
+| MOSS_TD_PYTHON_PATH | ./.venv-moss-transcribe/bin/python3 | Isolated Python 3.12 backend |
+| MOSS_TD_DEVICE | mps | PyTorch device (`mps` or `cpu`) |
+| MOSS_TD_DTYPE | fp16 | Runtime dtype; CPU is forced to FP32 |
+| MOSS_TD_MAX_NEW_TOKENS | 5120 | Default output-token limit (request override: 64-65536) |
+| MOSS_TD_MAX_AUDIO_SECONDS | 5400 | Maximum decoded audio duration (90 minutes) |
+| MOSS_TD_TIMEOUT | 3600000 | Per-request timeout (ms) |
+| MOSS_TD_DAEMON_STARTUP_TIMEOUT | 300000 | Initial model-load timeout (ms) |
+| PREWARM_MOSS_TD | 0 | Load the model on server start |
+
+Select this engine in `./setup.sh` to create `.venv-moss-transcribe`, install the exact tested PyTorch 2.11 runtime and pinned official source, and optionally predownload the pinned ~1.8 GB model. It is deliberately disabled by default: the model was released on July 9, 2026, and upstream does not yet document MPS as a supported serving target. Sogni Voice uses local package classes with remote model code disabled.
 
 #### Kokoro TTS (Optional)
 | Variable | Default | Description |
@@ -510,6 +535,37 @@ List configured recognition providers and their language capabilities:
 ```bash
 curl http://localhost:3000/transcription/models
 ```
+
+#### MOSS Transcribe-Diarize (Experimental)
+
+Use `engine=moss-td` for one-pass English/Chinese transcription, speaker labels, and segment timestamps. Speaker diarization and segment timing are always built in; `wordTimestamps`, `language`, and speaker-count constraints are therefore not accepted. `hotwords`, `prompt`, and `maxNewTokens` are MOSS-only options.
+
+```bash
+curl -X POST http://localhost:3000/transcribe \
+  -F "file=@meeting.wav" \
+  -F "engine=moss-td" \
+  -F "hotwords=Sogni, MLX, Krunkosaurus" \
+  -F "maxNewTokens=8192"
+```
+
+```json
+{
+  "success": true,
+  "engine": "moss-td",
+  "experimental": true,
+  "transcript": "Good morning. Thanks for joining.",
+  "timestampLevel": "segment",
+  "segments": [
+    { "start": 0.0, "end": 1.2, "speaker": "S01", "text": "Good morning." },
+    { "start": 1.25, "end": 2.8, "speaker": "S02", "text": "Thanks for joining." }
+  ],
+  "diarization": { "available": true, "builtIn": true, "numSpeakers": 2 },
+  "metrics": { "audioSeconds": 2.8, "elapsedSeconds": 1.4, "realTimeFactor": 0.5 }
+}
+```
+
+When `timestamps=true`, `timestamps` is also returned as a compatibility alias of `segments`. `rawTranscript` preserves the model's compact `[start][Sxx]text[end]` output.
+Check `metrics.truncated`; when true, retry long audio with a larger `maxNewTokens` value.
 
 #### Align a Known Transcript
 
@@ -1019,6 +1075,7 @@ On first use, ML models are downloaded automatically:
 |---------|-----------|---------------|
 | Transcription | ~2.5 GB (parakeet-mlx) | 2-5 minutes |
 | Qwen3-ASR + ForcedAligner | ~2.2 GB total | 2-5 minutes |
+| MOSS Transcribe-Diarize | ~1.8 GB | 2-5 minutes |
 | Speaker identification | ~70 MB (pyannote Community-1) | 1-3 minutes |
 | Kokoro TTS | ~300 MB | 30-60 seconds |
 | Pocket TTS | ~200 MB | 30-60 seconds |
@@ -1042,6 +1099,7 @@ All services use persistent Python daemons that keep ML models loaded in memory:
 Daemons start automatically when the server starts and shut down gracefully with the server. To disable pre-loading (lazy load on first request instead), set:
 - `PREWARM_TRANSCRIPTION=0`
 - `PREWARM_QWEN_ASR=0`
+- `PREWARM_MOSS_TD=0`
 - `PREWARM_DIARIZATION=0`
 - `PREWARM_TTS=0`
 - `PREWARM_POCKET_TTS=0`
@@ -1116,6 +1174,7 @@ sogni-voice/
 ├── scripts/
 │   ├── parakeet_daemon.py     # Transcription daemon
 │   ├── qwen_asr_daemon.py     # Qwen3-ASR + ForcedAligner daemon
+│   ├── moss_transcribe_diarize_daemon.py # Experimental one-pass ASR + speakers
 │   ├── tts_daemon.py          # Kokoro TTS daemon
 │   ├── pocket_tts_daemon.py   # Pocket TTS daemon
 │   ├── qwen_tts_daemon.py     # Qwen3-TTS daemon
@@ -1140,6 +1199,7 @@ sogni-voice/
 │   ├── services/
 │   │   ├── transcription.js   # Parakeet daemon integration
 │   │   ├── qwenAsr.js          # Qwen3-ASR daemon integration
+│   │   ├── mossTranscribeDiarize.js # Experimental MOSS ASR + diarization
 │   │   ├── tts.js             # Kokoro TTS integration
 │   │   ├── pocketTts.js       # Pocket TTS integration
 │   │   ├── qwenTts.js         # Qwen3-TTS integration
@@ -1150,6 +1210,7 @@ sogni-voice/
 ├── models/
 │   └── kokoro-tts/            # Kokoro model (auto-downloaded)
 ├── .venv-qwen-asr/            # Isolated MLX-Audio 0.4.x environment
+├── .venv-moss-transcribe/     # Isolated pinned PyTorch/Transformers environment
 ├── .venv-moss-tts/            # Isolated MOSS MLX-Audio environment
 ├── voice_clones/              # Qwen TTS voice clone storage
 ├── pocket_voice_clones/       # Pocket TTS voice clone storage

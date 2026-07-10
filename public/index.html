@@ -877,6 +877,7 @@
         <select id="transcriptionEngine" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
           <option value="parakeet">Parakeet — fast default</option>
           <option value="qwen3">Qwen3-ASR — multilingual + alignment</option>
+          <option value="moss-td">MOSS Transcribe-Diarize — experimental</option>
         </select>
       </div>
       <div class="form-group hidden" id="qwenAsrLanguageGroup" style="margin-bottom: 0; min-width: 170px;">
@@ -884,6 +885,10 @@
         <select id="qwenAsrLanguage" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
           <option value="auto">Auto detect</option>
         </select>
+      </div>
+      <div class="form-group hidden" id="mossTdHotwordsGroup" style="margin-bottom: 0; min-width: 200px;">
+        <label for="mossTdHotwords" style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Hotwords (optional):</label>
+        <input id="mossTdHotwords" type="text" maxlength="1000" placeholder="Sogni, MLX, product names" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%; box-sizing: border-box;">
       </div>
       <div class="form-group" id="subtitlesGroup" style="margin-bottom: 0;">
         <label style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Subtitle timings:</label>
@@ -895,7 +900,8 @@
       </div>
       <label id="diarizeLabel" title="Labels speakers with pyannote Community-1. Sentence timings turn on automatically." style="display: inline-flex; align-items: center; gap: 6px; margin-bottom: 7px; font-size: 14px; color: #555; cursor: pointer;">
         <input type="checkbox" id="diarizeCheckbox" style="margin: 0;">
-        <span>Identify speakers <span class="badge" style="background:#5b8def">Community-1</span></span>
+        <span id="diarizeText">Identify speakers</span>
+        <span id="diarizeBadge" class="badge" style="background:#5b8def">Community-1</span>
       </label>
     </div>
     <div id="transcriptionModelHint" style="font-size: 12px; color: #666; margin: -5px 0 12px;">Parakeet is the fast default for 25 European languages.</div>
@@ -1315,6 +1321,7 @@
       tts: { enabled: false },
       transcription: { enabled: false },
       qwenAsr: { enabled: false },
+      mossTranscribeDiarize: { enabled: false },
       pocketTts: { enabled: false },
       qwenTts: { enabled: false },
       mossTts: { enabled: false },
@@ -1373,7 +1380,7 @@
 
       // Also disable form inputs
       const inputsToDisable = [
-        'transcriptionEngine', 'qwenAsrLanguage', 'timestampMode', 'diarizeCheckbox',
+        'transcriptionEngine', 'qwenAsrLanguage', 'mossTdHotwords', 'timestampMode', 'diarizeCheckbox',
         'alignmentText', 'alignmentLanguage', 'ttsText', 'voiceSelect', 'speedRange',
         'languageSelect', 'styleInstruct', 'cloneName', 'mossCloneName',
       ];
@@ -1715,6 +1722,7 @@
     let currentTranscriptionFilename = 'recording.webm';
     let parakeetEnabled = false;
     let qwenAsrEnabled = false;
+    let mossTdEnabled = false;
     let qwenAsrLanguages = [];
     let qwenAlignmentLanguages = [];
 
@@ -1726,9 +1734,14 @@
     const transcriptionEngine = document.getElementById('transcriptionEngine');
     const qwenAsrLanguageGroup = document.getElementById('qwenAsrLanguageGroup');
     const qwenAsrLanguage = document.getElementById('qwenAsrLanguage');
+    const mossTdHotwordsGroup = document.getElementById('mossTdHotwordsGroup');
+    const mossTdHotwords = document.getElementById('mossTdHotwords');
     const transcriptionModelHint = document.getElementById('transcriptionModelHint');
     const timestampMode = document.getElementById('timestampMode');
     const diarizeCheckbox = document.getElementById('diarizeCheckbox');
+    const diarizeLabel = document.getElementById('diarizeLabel');
+    const diarizeText = document.getElementById('diarizeText');
+    const diarizeBadge = document.getElementById('diarizeBadge');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
@@ -1762,17 +1775,35 @@
         : 'auto';
     }
 
-    function syncQwenTimingAvailability() {
+    function syncTranscriptionTimingAvailability() {
       const isQwen = transcriptionEngine.value === 'qwen3';
+      const isMossTd = transcriptionEngine.value === 'moss-td';
       const language = qwenAsrLanguage.value;
       const alignmentSupported = language === 'auto' || qwenAlignmentLanguages.includes(language);
+      const sentenceOption = timestampMode.querySelector('option[value="sentence"]');
+      sentenceOption.textContent = isMossTd ? 'By segment (built in)' : 'By sentence';
       [...timestampMode.options].forEach((option) => {
-        if (option.value !== 'none') option.disabled = isQwen && !alignmentSupported;
+        if (isMossTd) {
+          option.disabled = option.value !== 'sentence';
+        } else {
+          option.disabled = option.value !== 'none' && isQwen && !alignmentSupported;
+        }
       });
-      if (isQwen && !alignmentSupported && timestampMode.value !== 'none') {
+      if (isMossTd) {
+        timestampMode.value = 'sentence';
+        diarizeCheckbox.checked = true;
+      } else if (isQwen && !alignmentSupported && timestampMode.value !== 'none') {
         timestampMode.value = 'none';
         diarizeCheckbox.checked = false;
       }
+      timestampMode.disabled = isMossTd || !canMakeAuthenticatedCalls();
+      diarizeCheckbox.disabled = isMossTd || !canMakeAuthenticatedCalls();
+      diarizeText.textContent = isMossTd ? 'Built-in speakers' : 'Identify speakers';
+      diarizeBadge.textContent = isMossTd ? 'MOSS' : 'Community-1';
+      diarizeBadge.style.background = isMossTd ? '#6f42c1' : '#5b8def';
+      diarizeLabel.title = isMossTd
+        ? 'MOSS emits speaker labels and segment timestamps in the same model pass.'
+        : 'Labels speakers with pyannote Community-1. Sentence timings turn on automatically.';
     }
 
     function updateAlignmentButtonState() {
@@ -1785,51 +1816,68 @@
     function updateTranscriptionModelUI() {
       const parakeetOption = transcriptionEngine.querySelector('option[value="parakeet"]');
       const qwenOption = transcriptionEngine.querySelector('option[value="qwen3"]');
+      const mossTdOption = transcriptionEngine.querySelector('option[value="moss-td"]');
       parakeetOption.disabled = !parakeetEnabled;
       qwenOption.disabled = !qwenAsrEnabled;
+      mossTdOption.disabled = !mossTdEnabled;
       parakeetOption.textContent = parakeetEnabled
         ? 'Parakeet — fast default'
         : 'Parakeet — not enabled';
       qwenOption.textContent = qwenAsrEnabled
         ? 'Qwen3-ASR — multilingual + alignment'
         : 'Qwen3-ASR — not enabled';
+      mossTdOption.textContent = mossTdEnabled
+        ? 'MOSS Transcribe-Diarize — speakers (experimental)'
+        : 'MOSS Transcribe-Diarize — not enabled';
 
-      if (transcriptionEngine.value === 'parakeet' && !parakeetEnabled && qwenAsrEnabled) {
-        transcriptionEngine.value = 'qwen3';
-      } else if (transcriptionEngine.value === 'qwen3' && !qwenAsrEnabled && parakeetEnabled) {
-        transcriptionEngine.value = 'parakeet';
+      const currentEngineEnabled = {
+        parakeet: parakeetEnabled,
+        qwen3: qwenAsrEnabled,
+        'moss-td': mossTdEnabled,
+      }[transcriptionEngine.value];
+      if (!currentEngineEnabled) {
+        if (parakeetEnabled) transcriptionEngine.value = 'parakeet';
+        else if (qwenAsrEnabled) transcriptionEngine.value = 'qwen3';
+        else if (mossTdEnabled) transcriptionEngine.value = 'moss-td';
       }
 
       const isQwen = transcriptionEngine.value === 'qwen3';
+      const isMossTd = transcriptionEngine.value === 'moss-td';
       qwenAsrLanguageGroup.classList.toggle('hidden', !isQwen);
+      mossTdHotwordsGroup.classList.toggle('hidden', !isMossTd);
       alignmentLab.style.display = qwenAsrEnabled ? 'block' : 'none';
       if (isQwen) {
         transcriptionModelHint.textContent = qwenAsrLanguage.value === 'auto'
           ? 'Qwen3-ASR detects among 30 languages. Sentence/word timings use the 11-language ForcedAligner after detection.'
           : `Qwen3-ASR will transcribe in ${qwenAsrLanguage.value}. Timings are available for the ForcedAligner languages.`;
+      } else if (isMossTd) {
+        transcriptionModelHint.textContent = 'Experimental: one MPS model pass returns English/Chinese text, speaker labels, and segment timestamps. Up to 90 minutes; no word timings or speaker-count hints.';
       } else {
         transcriptionModelHint.textContent = 'Parakeet is the fast default for 25 European languages.';
       }
 
-      const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled;
+      const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled || mossTdEnabled;
       recordBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
       uploadBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
       transcriptionEngine.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
-      syncQwenTimingAvailability();
+      syncTranscriptionTimingAvailability();
       updateAlignmentButtonState();
     }
 
     async function loadTranscriptionModels(showAuthError = false) {
       parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
       qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
+      mossTdEnabled = Boolean(serviceStatus.mossTranscribeDiarize?.enabled);
       try {
         const response = await authFetch(`${API_BASE}/transcription/models`, {}, showAuthError);
         if (response.ok) {
           const data = await response.json();
           const parakeet = data.models?.find((model) => model.id === 'parakeet');
           const qwen = data.models?.find((model) => model.id === 'qwen3');
+          const mossTd = data.models?.find((model) => model.id === 'moss-td');
           parakeetEnabled = Boolean(parakeet?.enabled);
           qwenAsrEnabled = Boolean(qwen?.enabled);
+          mossTdEnabled = Boolean(mossTd?.enabled);
           qwenAsrLanguages = qwen?.languages || [];
           qwenAlignmentLanguages = qwen?.alignmentLanguages || [];
           populateQwenLanguages(qwenAsrLanguages);
@@ -1860,7 +1908,7 @@
     });
     timestampMode.addEventListener('change', () => {
       if (timestampMode.value === 'none') diarizeCheckbox.checked = false;
-      syncQwenTimingAvailability();
+      syncTranscriptionTimingAvailability();
     });
 
     recordBtn.addEventListener('click', startRecording);
@@ -1992,9 +2040,21 @@
         meta.style.marginBottom = '6px';
         meta.textContent = `Qwen3-ASR · ${data.language || 'language auto-detected'}`;
         transcriptResult.appendChild(meta);
+      } else if (data.engine === 'moss-td') {
+        const meta = document.createElement('div');
+        meta.style.fontSize = '12px';
+        meta.style.color = '#6f42c1';
+        meta.style.marginBottom = '6px';
+        const rtf = data.metrics?.realTimeFactor == null
+          ? ''
+          : ` · ${data.metrics.realTimeFactor}× realtime`;
+        const truncated = data.metrics?.truncated ? ' · output limit reached' : '';
+        meta.textContent = `MOSS Transcribe-Diarize · experimental · built-in speakers${rtf}${truncated}`;
+        transcriptResult.appendChild(meta);
       }
 
-      const useTimestamps = data.timestamps && data.timestamps.length > 0;
+      const timedSegments = data.timestamps || data.segments;
+      const useTimestamps = timedSegments && timedSegments.length > 0;
       if (useTimestamps) {
         const label = document.createElement('div');
         label.style.fontWeight = '600';
@@ -2002,7 +2062,7 @@
         label.textContent = mode === 'word' ? 'Word Timings:' : 'Subtitle Timings:';
         transcriptResult.appendChild(label);
 
-        for (const seg of data.timestamps) {
+        for (const seg of timedSegments) {
           const line = document.createElement('div');
           if (seg.speaker) {
             const chip = document.createElement('span');
@@ -2067,6 +2127,8 @@
         formData.append('engine', transcriptionEngine.value);
         if (transcriptionEngine.value === 'qwen3') {
           formData.append('language', qwenAsrLanguage.value || 'auto');
+        } else if (transcriptionEngine.value === 'moss-td' && mossTdHotwords.value.trim()) {
+          formData.append('hotwords', mossTdHotwords.value.trim());
         }
         if (mode === 'sentence') {
           formData.append('timestamps', 'true');
@@ -2088,7 +2150,9 @@
           transcriptResult.className = 'result success';
           renderTranscriptResult(data, mode);
           const alignedText = data.transcript
-            || (Array.isArray(data.timestamps) ? data.timestamps.map((segment) => segment.text).join(' ') : '');
+            || (Array.isArray(data.timestamps || data.segments)
+              ? (data.timestamps || data.segments).map((segment) => segment.text).join(' ')
+              : '');
           if (alignedText.trim()) {
             alignmentText.value = alignedText.trim();
             if (data.language && qwenAlignmentLanguages.includes(data.language)) {
@@ -3735,6 +3799,7 @@
         qwenVoiceCloningEnabled = false;
         parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
         qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
+        mossTdEnabled = Boolean(serviceStatus.mossTranscribeDiarize?.enabled);
         updatePocketAvailability();
         updateQwenAvailability();
         updateMossAvailability();

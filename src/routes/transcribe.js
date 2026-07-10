@@ -6,6 +6,7 @@ import { open, stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { qwenAsrService } from '../services/qwenAsr.js';
+import { mossTranscribeDiarizeService } from '../services/mossTranscribeDiarize.js';
 import { diarizationService } from '../services/diarization.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import {
@@ -20,6 +21,15 @@ import {
   QWEN_ASR_LANGUAGE_CODES,
   QWEN_ALIGNER_LANGUAGES,
 } from '../utils/qwenAsrLanguages.js';
+
+const mossTdConfig = config.mossTranscribeDiarize || {
+  enabled: false,
+  modelId: 'OpenMOSS-Team/MOSS-Transcribe-Diarize',
+  modelRevision: null,
+  packageRevision: null,
+  maxNewTokens: 5120,
+  maxAudioSeconds: 5400,
+};
 
 export const transcribeRoutes = [
   {
@@ -50,6 +60,20 @@ export const transcribeRoutes = [
           timestamps: ['sentence', 'word'],
           description: 'Multilingual ASR with language detection and forced alignment.',
         },
+        {
+          id: 'moss-td',
+          name: 'MOSS Transcribe-Diarize 0.9B',
+          enabled: Boolean(mossTdConfig.enabled),
+          experimental: true,
+          model: mossTdConfig.modelId,
+          revision: mossTdConfig.modelRevision,
+          packageRevision: mossTdConfig.packageRevision,
+          languages: ['English', 'Chinese'],
+          timestamps: ['segment'],
+          diarization: 'built-in',
+          maxAudioSeconds: mossTdConfig.maxAudioSeconds,
+          description: 'One-pass transcription, speaker diarization, and segment timestamps.',
+        },
       ],
     }),
   },
@@ -67,7 +91,7 @@ export const transcribeRoutes = [
       validate: {
         payload: Joi.object({
           file: Joi.any().required().description('Audio file to transcribe'),
-          engine: Joi.string().valid('parakeet', 'qwen3').optional()
+          engine: Joi.string().valid('parakeet', 'qwen3', 'moss-td').optional()
             .description('Speech recognition provider (default: parakeet)'),
           language: Joi.string().valid('auto', ...QWEN_ASR_LANGUAGES, ...QWEN_ASR_LANGUAGE_CODES)
             .insensitive().optional()
@@ -84,6 +108,12 @@ export const transcribeRoutes = [
             .description('Lower bound on speaker count (1-20)'),
           maxSpeakers: Joi.string().pattern(/^\d+$/).optional()
             .description('Upper bound on speaker count (1-20)'),
+          prompt: Joi.string().trim().max(2000).optional()
+            .description('MOSS Transcribe-Diarize instruction override'),
+          hotwords: Joi.string().trim().max(1000).optional()
+            .description('Comma-separated MOSS Transcribe-Diarize hotword hints'),
+          maxNewTokens: Joi.string().pattern(/^\d+$/).optional()
+            .description('MOSS Transcribe-Diarize generation limit (64-65536)'),
         }),
       },
       description: 'Transcribe an audio file to text',
@@ -103,6 +133,9 @@ export const transcribeRoutes = [
           numSpeakers: numSpeakersParam,
           minSpeakers: minSpeakersParam,
           maxSpeakers: maxSpeakersParam,
+          prompt,
+          hotwords,
+          maxNewTokens: maxNewTokensParam,
         } = request.payload;
         const engine = engineParam || 'parakeet';
         if (engine === 'parakeet' && !config.transcription.enabled) {
@@ -111,15 +144,19 @@ export const transcribeRoutes = [
         if (engine === 'qwen3' && !config.qwenAsr.enabled) {
           throw Boom.serviceUnavailable('Qwen3-ASR is disabled');
         }
+        if (engine === 'moss-td' && !mossTdConfig.enabled) {
+          throw Boom.serviceUnavailable('MOSS Transcribe-Diarize is disabled');
+        }
         const timestamps = timestampsParam === 'true';
         const wordTimestamps = wordTimestampsParam === 'true';
         // Default diarize=true when the server can actually do it. Avoids noisy
         // `diarization: {available: false}` on responses from servers that never
         // opted into diarization, preserving backward compat for those clients.
-        const diarizeAvailable = config.diarization.enabled;
-        const diarizeRequested = diarizeParam == null
+        const usesBuiltInDiarization = engine === 'moss-td';
+        const diarizeAvailable = usesBuiltInDiarization || config.diarization.enabled;
+        const diarizeRequested = usesBuiltInDiarization || (diarizeParam == null
           ? diarizeAvailable
-          : diarizeParam === 'true';
+          : diarizeParam === 'true');
 
         const parseSpeakerCount = (raw) => {
           if (raw == null) return undefined;
@@ -130,6 +167,34 @@ export const transcribeRoutes = [
         const numSpeakers = parseSpeakerCount(numSpeakersParam);
         const minSpeakers = parseSpeakerCount(minSpeakersParam);
         const maxSpeakers = parseSpeakerCount(maxSpeakersParam);
+        const maxNewTokens = maxNewTokensParam == null
+          ? undefined
+          : parseInt(maxNewTokensParam, 10);
+
+        if (engine === 'moss-td') {
+          if (wordTimestamps) {
+            throw Boom.badRequest(
+              'MOSS Transcribe-Diarize provides segment timestamps, not word timestamps',
+            );
+          }
+          if (languageParam != null) {
+            throw Boom.badRequest(
+              'MOSS Transcribe-Diarize detects English or Chinese without a language parameter',
+            );
+          }
+          if (numSpeakersParam != null || minSpeakersParam != null || maxSpeakersParam != null) {
+            throw Boom.badRequest(
+              'MOSS Transcribe-Diarize does not accept speaker-count constraints',
+            );
+          }
+          if (maxNewTokens != null && (maxNewTokens < 64 || maxNewTokens > 65536)) {
+            throw Boom.badRequest('maxNewTokens must be between 64 and 65536');
+          }
+        } else if (prompt != null || hotwords != null || maxNewTokensParam != null) {
+          throw Boom.badRequest(
+            'prompt, hotwords, and maxNewTokens are only supported by MOSS Transcribe-Diarize',
+          );
+        }
 
         if (!file || !file.hapi) {
           throw Boom.badRequest('No audio file provided');
@@ -163,18 +228,25 @@ export const transcribeRoutes = [
           await fh.close();
         }
 
-        const wantDiarize = diarizeRequested && config.diarization.enabled;
+        const wantDiarize = !usesBuiltInDiarization
+          && diarizeRequested
+          && config.diarization.enabled;
         let diarizationDisabledReason = null;
-        if (diarizeRequested && !config.diarization.enabled) {
+        if (!usesBuiltInDiarization && diarizeRequested && !config.diarization.enabled) {
           diarizationDisabledReason = 'Diarization is disabled on this server';
         }
 
-        const selectedService = engine === 'qwen3' ? qwenAsrService : transcriptionService;
+        const selectedService = engine === 'qwen3'
+          ? qwenAsrService
+          : engine === 'moss-td'
+            ? mossTranscribeDiarizeService
+            : transcriptionService;
         const [transcribeOutcome, diarizeOutcome] = await Promise.allSettled([
           selectedService.transcribe(tempFilePath, {
             timestamps,
             wordTimestamps,
             ...(engine === 'qwen3' ? { language: languageParam || 'auto' } : {}),
+            ...(engine === 'moss-td' ? { prompt, hotwords, maxNewTokens } : {}),
           }),
           wantDiarize
             ? diarizationService.diarize(tempFilePath, { numSpeakers, minSpeakers, maxSpeakers })
@@ -185,6 +257,30 @@ export const transcribeRoutes = [
           throw transcribeOutcome.reason;
         }
         const result = transcribeOutcome.value;
+
+        if (usesBuiltInDiarization) {
+          const segments = result.timestamps || [];
+          return {
+            success: true,
+            transcript: result.text,
+            rawTranscript: result.rawTranscript,
+            filename: sanitizeEchoFilename(filename),
+            engine,
+            experimental: true,
+            model: result.model,
+            revision: result.revision,
+            timestampLevel: result.timestampLevel || 'segment',
+            segments,
+            ...(timestamps ? { timestamps: segments } : {}),
+            diarization: {
+              available: true,
+              builtIn: true,
+              numSpeakers: result.numSpeakers,
+            },
+            speakers: summarizeSpeakers(segments),
+            ...(result.metrics ? { metrics: result.metrics } : {}),
+          };
+        }
 
         let diarization = null;
         let speakerTurns = null;

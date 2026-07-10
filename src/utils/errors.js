@@ -24,6 +24,18 @@ export class QwenASRError extends Error {
   }
 }
 
+export class MossTranscribeDiarizeError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'MossTranscribeDiarizeError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}
+
 export class TTSError extends Error {
   constructor(message, cause = null) {
     super(message);

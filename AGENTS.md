@@ -51,6 +51,8 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Services**:
 - `transcription.js` → `scripts/parakeet_daemon.py`: Uses Parakeet TDT (parakeet-mlx) for transcription
   - Supports sentence-level and word-level timestamp extraction
+- `diarization.js` → `scripts/diarize_daemon.py`: Uses pyannote Community-1 for optional speaker identification
+  - Supports exact or bounded speaker counts and exclusive diarization for transcript alignment
 - `tts.js` → `scripts/tts_daemon.py`: Uses mlx-audio library with Kokoro model for TTS
   - Model stored locally at `models/kokoro-tts/`, auto-downloaded from HuggingFace on first run
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
@@ -95,6 +97,11 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Transcription**:
 - `TRANSCRIBE_TIMEOUT` (300000ms), `DAEMON_STARTUP_TIMEOUT` (120000ms)
 - `PREWARM_TRANSCRIPTION` (true)
+
+**Speaker diarization**:
+- `DIARIZATION_ENABLED` (false), `DIARIZATION_MODEL_ID` (pyannote/speaker-diarization-community-1)
+- `DIARIZATION_TIMEOUT` (600000ms), `DIARIZATION_DAEMON_STARTUP_TIMEOUT` (180000ms)
+- `PREWARM_DIARIZATION` (false), optional `HF_TOKEN` or cached Hugging Face login
 
 **Kokoro TTS**:
 - `TTS_MODEL_ID` (mlx-community/Kokoro-82M-bf16)

@@ -6,6 +6,7 @@
 # This script provides one-click setup for the Sogni Voice API, including:
 # - System requirements verification
 # - TTS engine selection (Kokoro, Pocket, Qwen)
+# - STT and speaker diarization selection
 # - Environment configuration
 # - API key setup
 # - Dependency installation
@@ -125,6 +126,13 @@ from pip._vendor.packaging.version import Version
 
 Version("1.0")
 PY
+}
+
+huggingface_credentials_available() {
+    [ -n "${HF_TOKEN:-}" ] ||
+        grep -Eq '^HF_TOKEN=.+$' .env 2>/dev/null ||
+        [ -f "$HOME/.cache/huggingface/token" ] ||
+        [ -f "$HOME/.huggingface/token" ]
 }
 
 ################################################################################
@@ -410,6 +418,7 @@ select_tts_engines() {
         ENABLE_KOKORO=0
         ENABLE_QWEN=0
         ENABLE_PARAKEET=1
+        ENABLE_DIARIZATION=0
         QWEN_VARIANT="base-0.6b"
 
         print_info "Non-interactive mode: using defaults"
@@ -417,6 +426,7 @@ select_tts_engines() {
         print_info "- Kokoro TTS: disabled"
         print_info "- Qwen3-TTS: disabled"
         print_info "- Parakeet STT: enabled"
+        print_info "- Speaker diarization: disabled (requires gated-model access)"
         return
     fi
 
@@ -474,6 +484,26 @@ select_tts_engines() {
         print_warning "Parakeet (STT) disabled; transcription endpoints will be unavailable."
     fi
 
+    if [ "$ENABLE_PARAKEET" = "1" ]; then
+        echo ""
+        local diarization_options=(
+            "Skip speaker identification (can be enabled later) - Recommended"
+            "Enable pyannote Community-1 speaker identification"
+        )
+
+        show_radio_menu "Enable speaker identification?" 0 "${diarization_options[@]}"
+        local diarization_choice=$MENU_RESULT
+        if [ "$diarization_choice" = "1" ]; then
+            ENABLE_DIARIZATION=1
+            print_success "pyannote Community-1 speaker identification enabled"
+        else
+            ENABLE_DIARIZATION=0
+            print_info "Speaker identification disabled"
+        fi
+    else
+        ENABLE_DIARIZATION=0
+    fi
+
     echo ""
     echo "Enabled TTS Engines:"
     if [ "$ENABLE_POCKET" = "1" ]; then
@@ -497,6 +527,11 @@ select_tts_engines() {
         echo -e "  ${CHECK} Parakeet (STT)"
     else
         echo -e "  ${CROSS} Parakeet (STT) (disabled)"
+    fi
+    if [ "$ENABLE_DIARIZATION" = "1" ]; then
+        echo -e "  ${CHECK} pyannote Community-1 speaker identification"
+    else
+        echo -e "  ${CROSS} Speaker identification (disabled)"
     fi
 
     echo ""
@@ -565,6 +600,13 @@ configure_environment() {
         upsert_env_key "TRANSCRIPTION_ENABLED" "1"
     else
         upsert_env_key "TRANSCRIPTION_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_DIARIZATION" = "1" ]; then
+        upsert_env_key "DIARIZATION_ENABLED" "1"
+        upsert_env_key "DIARIZATION_MODEL_ID" "pyannote/speaker-diarization-community-1"
+    else
+        upsert_env_key "DIARIZATION_ENABLED" "0"
     fi
 
     # Update Qwen variant if enabled
@@ -763,6 +805,13 @@ install_dependencies() {
         fi
     fi
 
+    # Install pyannote Community-1 dependencies if diarization is enabled.
+    if [ "$ENABLE_DIARIZATION" = "1" ]; then
+        print_info "Ensuring pyannote.audio 4.x is installed for speaker identification..."
+        pip install --quiet "pyannote.audio>=4,<5"
+        print_success "pyannote.audio 4.x is ready"
+    fi
+
     deactivate
     print_success "All dependencies installed"
 
@@ -839,11 +888,59 @@ setup_pocket_voice_cloning() {
 }
 
 ################################################################################
+# pyannote Community-1 Access
+################################################################################
+
+setup_diarization_access() {
+    if [ "$ENABLE_DIARIZATION" != "1" ]; then
+        return
+    fi
+
+    print_header "Step 7: pyannote Community-1 Access"
+
+    echo "Speaker identification uses a gated, locally downloaded model."
+    echo "Accept its terms here:"
+    echo "  https://huggingface.co/pyannote/speaker-diarization-community-1"
+    echo ""
+
+    if [ "$NON_INTERACTIVE" = "1" ]; then
+        print_warning "Non-interactive mode cannot accept gated model terms."
+        print_info "Accept the terms and run: uvx hf auth login"
+        return
+    fi
+
+    read -p "Press Enter after accepting the model terms..."
+
+    if huggingface_credentials_available; then
+        print_success "Hugging Face credentials detected."
+    else
+        local login_options=(
+            "Run 'uvx hf auth login' now"
+            "I will log in later (speaker identification will be unavailable)"
+        )
+        show_radio_menu "Log in to Hugging Face now?" 0 "${login_options[@]}"
+        if [ "$MENU_RESULT" = "0" ]; then
+            print_info "Launching Hugging Face login..."
+            if uvx hf auth login && huggingface_credentials_available; then
+                print_success "Hugging Face login complete."
+            else
+                print_warning "No Hugging Face credentials were detected."
+            fi
+        else
+            print_warning "Speaker identification will fail until Hugging Face access is configured."
+        fi
+    fi
+
+    echo ""
+    read -p "Press Enter to continue..."
+}
+
+################################################################################
 # Predownload Models
 ################################################################################
 
 predownload_models() {
-    print_header "Step 7: Predownload Models"
+    print_header "Step 8: Predownload Models"
 
     if [ "$NON_INTERACTIVE" = "1" ]; then
         PRELOAD_MODELS=true
@@ -856,6 +953,7 @@ predownload_models() {
         export ENABLE_KOKORO
         export ENABLE_POCKET
         export ENABLE_QWEN
+        export ENABLE_DIARIZATION
 
         if [ "$ENABLE_QWEN" = "1" ]; then
             export QWEN_TTS_MODEL_VARIANT="$QWEN_VARIANT"
@@ -915,10 +1013,25 @@ def download_qwen():
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     Qwen3TTSModel.from_pretrained(model_repo, device_map=device, dtype=torch.float32)
 
+def download_diarization():
+    from pyannote.audio import Pipeline
+    model_id = os.environ.get(
+        "DIARIZATION_MODEL_ID",
+        "pyannote/speaker-diarization-community-1",
+    )
+    token = os.environ.get("HF_TOKEN")
+    if not token and (ROOT / ".env").is_file():
+        for line in (ROOT / ".env").read_text().splitlines():
+            if line.startswith("HF_TOKEN="):
+                token = line.split("=", 1)[1].strip()
+                break
+    Pipeline.from_pretrained(model_id, token=token or True)
+
 enable_parakeet = os.environ.get("ENABLE_PARAKEET") == "1"
 enable_kokoro = os.environ.get("ENABLE_KOKORO") == "1"
 enable_pocket = os.environ.get("ENABLE_POCKET") == "1"
 enable_qwen = os.environ.get("ENABLE_QWEN") == "1"
+enable_diarization = os.environ.get("ENABLE_DIARIZATION") == "1"
 
 if enable_parakeet:
     run_step("Parakeet (STT)", download_parakeet)
@@ -939,6 +1052,11 @@ if enable_qwen:
     run_step("Qwen3-TTS", download_qwen)
 else:
     print("\n==> Qwen3-TTS: skipped (disabled)")
+
+if enable_diarization:
+    run_step("pyannote Community-1", download_diarization)
+else:
+    print("\n==> pyannote Community-1: skipped (disabled)")
 PY
 
         deactivate
@@ -971,6 +1089,7 @@ PY
     export ENABLE_KOKORO
     export ENABLE_POCKET
     export ENABLE_QWEN
+    export ENABLE_DIARIZATION
 
     if [ "$ENABLE_QWEN" = "1" ]; then
         export QWEN_TTS_MODEL_VARIANT="$QWEN_VARIANT"
@@ -1030,10 +1149,25 @@ def download_qwen():
     device = "mps" if torch.backends.mps.is_available() else "cpu"
     Qwen3TTSModel.from_pretrained(model_repo, device_map=device, dtype=torch.float32)
 
+def download_diarization():
+    from pyannote.audio import Pipeline
+    model_id = os.environ.get(
+        "DIARIZATION_MODEL_ID",
+        "pyannote/speaker-diarization-community-1",
+    )
+    token = os.environ.get("HF_TOKEN")
+    if not token and (ROOT / ".env").is_file():
+        for line in (ROOT / ".env").read_text().splitlines():
+            if line.startswith("HF_TOKEN="):
+                token = line.split("=", 1)[1].strip()
+                break
+    Pipeline.from_pretrained(model_id, token=token or True)
+
 enable_parakeet = os.environ.get("ENABLE_PARAKEET") == "1"
 enable_kokoro = os.environ.get("ENABLE_KOKORO") == "1"
 enable_pocket = os.environ.get("ENABLE_POCKET") == "1"
 enable_qwen = os.environ.get("ENABLE_QWEN") == "1"
+enable_diarization = os.environ.get("ENABLE_DIARIZATION") == "1"
 
 if enable_parakeet:
     run_step("Parakeet (STT)", download_parakeet)
@@ -1054,6 +1188,11 @@ if enable_qwen:
     run_step("Qwen3-TTS", download_qwen)
 else:
     print("\n==> Qwen3-TTS: skipped (disabled)")
+
+if enable_diarization:
+    run_step("pyannote Community-1", download_diarization)
+else:
+    print("\n==> pyannote Community-1: skipped (disabled)")
 PY
 
     deactivate
@@ -1099,6 +1238,11 @@ print_summary() {
     else
         printf '%b\n' "  ${CROSS} Parakeet (STT) disabled"
     fi
+    if [ "$ENABLE_DIARIZATION" = "1" ]; then
+        printf '%b\n' "  ${CHECK} pyannote Community-1 speaker identification enabled"
+    else
+        printf '%b\n' "  ${CROSS} Speaker identification disabled"
+    fi
     echo ""
 
     # API Key Status
@@ -1136,6 +1280,9 @@ print_summary() {
         else
             echo "  Qwen3-TTS           ~1.2 GB     2-4 minutes"
         fi
+    fi
+    if [ "$ENABLE_DIARIZATION" = "1" ]; then
+        echo "  pyannote Community-1 ~70 MB      1-3 minutes"
     fi
     if [ "$ENABLE_POCKET" = "1" ] && [ "${POCKET_CLONE_READY:-0}" != "1" ]; then
         echo ""
@@ -1194,6 +1341,7 @@ main() {
     setup_api_key
     install_dependencies
     setup_pocket_voice_cloning
+    setup_diarization_access
     predownload_models
     print_summary
 }

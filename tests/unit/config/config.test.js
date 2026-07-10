@@ -18,6 +18,7 @@ describe('config', () => {
     process.env.TTS_DAEMON_STARTUP_TIMEOUT = '';
     process.env.PREWARM_TTS = '';
     process.env.TRANSCRIBE_TIMEOUT = '';
+    process.env.DIARIZATION_MODEL_ID = '';
     process.env.MAX_FILE_SIZE_MB = '';
   });
 
@@ -189,6 +190,19 @@ describe('config', () => {
       process.env.TRANSCRIBE_TIMEOUT = '600000';
       const { config } = await import('../../../src/config/index.js');
       expect(config.transcription.timeout).toBe(600000);
+    });
+  });
+
+  describe('diarization config', () => {
+    it('should use pyannote Community-1 by default', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.diarization.modelId).toBe('pyannote/speaker-diarization-community-1');
+    });
+
+    it('should allow DIARIZATION_MODEL_ID override', async () => {
+      process.env.DIARIZATION_MODEL_ID = 'pyannote/custom-diarization-model';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.diarization.modelId).toBe('pyannote/custom-diarization-model');
     });
   });
 

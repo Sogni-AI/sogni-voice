@@ -69,7 +69,7 @@ export const transcribeRoutes = [
         // Default diarize=true when the server can actually do it. Avoids noisy
         // `diarization: {available: false}` on responses from servers that never
         // opted into diarization, preserving backward compat for those clients.
-        const diarizeAvailable = config.diarization.enabled && !!config.diarization.hfToken;
+        const diarizeAvailable = config.diarization.enabled;
         const diarizeRequested = diarizeParam == null
           ? diarizeAvailable
           : diarizeParam === 'true';
@@ -120,13 +120,11 @@ export const transcribeRoutes = [
         let diarizationDisabledReason = null;
         if (diarizeRequested && !config.diarization.enabled) {
           diarizationDisabledReason = 'Diarization is disabled on this server';
-        } else if (diarizeRequested && !config.diarization.hfToken) {
-          diarizationDisabledReason = 'HF_TOKEN not configured on this server';
         }
 
         const [transcribeOutcome, diarizeOutcome] = await Promise.allSettled([
           transcriptionService.transcribe(tempFilePath, { timestamps, wordTimestamps }),
-          wantDiarize && config.diarization.hfToken
+          wantDiarize
             ? diarizationService.diarize(tempFilePath, { numSpeakers, minSpeakers, maxSpeakers })
             : Promise.resolve(null),
         ]);

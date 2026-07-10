@@ -883,9 +883,9 @@
           <option value="word">By word</option>
         </select>
       </div>
-      <label id="diarizeLabel" style="display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; color: #555; cursor: pointer;">
+      <label id="diarizeLabel" title="Labels speakers with pyannote Community-1. Sentence timings turn on automatically." style="display: inline-flex; align-items: center; gap: 6px; margin-left: 12px; font-size: 14px; color: #555; cursor: pointer;">
         <input type="checkbox" id="diarizeCheckbox" style="margin: 0;">
-        <span>Identify speakers</span>
+        <span>Identify speakers <span class="badge" style="background:#5b8def">Community-1</span></span>
       </label>
     </div>
 
@@ -1582,7 +1582,6 @@
     const audioDropZone = document.getElementById('audioDropZone');
     const timestampMode = document.getElementById('timestampMode');
     const diarizeCheckbox = document.getElementById('diarizeCheckbox');
-    const diarizeLabel = document.getElementById('diarizeLabel');
     const recordStatus = document.getElementById('recordStatus');
     const recordedAudio = document.getElementById('recordedAudio');
     const transcriptResult = document.getElementById('transcriptResult');
@@ -1599,15 +1598,16 @@
       return SPEAKER_PALETTE[idx % SPEAKER_PALETTE.length];
     }
 
-    function syncDiarizeAvailability() {
-      const enabled = timestampMode.value !== 'none';
-      diarizeCheckbox.disabled = !enabled;
-      diarizeLabel.style.opacity = enabled ? '1' : '0.5';
-      diarizeLabel.style.cursor = enabled ? 'pointer' : 'not-allowed';
-      if (!enabled) diarizeCheckbox.checked = false;
-    }
-    timestampMode.addEventListener('change', syncDiarizeAvailability);
-    syncDiarizeAvailability();
+    diarizeCheckbox.addEventListener('change', () => {
+      // Speaker labels need timestamp segments. Choose the least noisy timing
+      // mode automatically instead of presenting a disabled control.
+      if (diarizeCheckbox.checked && timestampMode.value === 'none') {
+        timestampMode.value = 'sentence';
+      }
+    });
+    timestampMode.addEventListener('change', () => {
+      if (timestampMode.value === 'none') diarizeCheckbox.checked = false;
+    });
 
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
@@ -1803,9 +1803,8 @@
         } else if (mode === 'word') {
           formData.append('wordTimestamps', 'true');
         }
-        if (diarize) {
-          formData.append('diarize', 'true');
-        }
+        // Always send the choice because a server may default diarization on.
+        formData.append('diarize', diarize ? 'true' : 'false');
 
         const response = await authFetch(`${API_BASE}/transcribe`, {
           method: 'POST',

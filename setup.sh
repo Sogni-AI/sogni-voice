@@ -492,7 +492,7 @@ select_tts_engines() {
     fi
     echo ""
     local stt_options=(
-        "Parakeet TDT v3 (fast, 25 European languages) - Recommended"
+        "Parakeet TDT v3 (fast batch + live WebSocket, 25 languages) - Recommended"
         "Qwen3-ASR 0.6B (30 languages, auto detection, forced alignment)"
         "MOSS Transcribe-Diarize 0.9B (English/Chinese, built-in speakers) - Experimental"
     )
@@ -503,7 +503,7 @@ select_tts_engines() {
     ENABLE_QWEN_ASR=${stt_selected[1]}
     ENABLE_MOSS_TD=${stt_selected[2]}
 
-    [ "$ENABLE_PARAKEET" = "1" ] && print_success "Parakeet (STT) enabled"
+    [ "$ENABLE_PARAKEET" = "1" ] && print_success "Parakeet (batch + realtime STT) enabled"
     [ "$ENABLE_QWEN_ASR" = "1" ] && print_success "Qwen3-ASR + ForcedAligner enabled"
     [ "$ENABLE_MOSS_TD" = "1" ] && print_success "MOSS Transcribe-Diarize enabled (experimental)"
     if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ] && [ "$ENABLE_MOSS_TD" != "1" ]; then
@@ -555,7 +555,7 @@ select_tts_engines() {
     echo ""
     echo "Transcription:"
     if [ "$ENABLE_PARAKEET" = "1" ]; then
-        echo -e "  ${CHECK} Parakeet (STT)"
+        echo -e "  ${CHECK} Parakeet (batch + realtime STT)"
     else
         echo -e "  ${CROSS} Parakeet (STT) (disabled)"
     fi
@@ -647,8 +647,13 @@ configure_environment() {
 
     if [ "$ENABLE_PARAKEET" = "1" ]; then
         upsert_env_key "TRANSCRIPTION_ENABLED" "1"
+        upsert_env_key "PARAKEET_MODEL_ID" "mlx-community/parakeet-tdt-0.6b-v3"
+        upsert_env_key "PARAKEET_MODEL_REVISION" "ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15"
+        upsert_env_key "PARAKEET_PYTHON_PATH" "./.venv/bin/python3"
+        upsert_env_key "PARAKEET_REALTIME_ENABLED" "1"
     else
         upsert_env_key "TRANSCRIPTION_ENABLED" "0"
+        upsert_env_key "PARAKEET_REALTIME_ENABLED" "0"
     fi
 
     if [ "$ENABLE_QWEN_ASR" = "1" ]; then
@@ -831,13 +836,9 @@ install_dependencies() {
 
     # Install parakeet-mlx if transcription is enabled
     if [ "$ENABLE_PARAKEET" = "1" ]; then
-        if ! pip show parakeet-mlx >/dev/null 2>&1; then
-            print_info "Installing parakeet-mlx for transcription..."
-            pip install --quiet parakeet-mlx
-            print_success "parakeet-mlx installed"
-        else
-            print_info "parakeet-mlx already installed"
-        fi
+        print_info "Installing pinned parakeet-mlx 0.5.2 for batch and realtime transcription..."
+        uv pip install --python .venv/bin/python "parakeet-mlx==0.5.2"
+        print_success "parakeet-mlx 0.5.2 is ready"
     else
         print_info "Skipping parakeet-mlx (transcription disabled)"
     fi
@@ -1299,8 +1300,13 @@ def run_step(title, fn):
         return False
 
 def download_parakeet():
+    from huggingface_hub import snapshot_download
     from parakeet_mlx import from_pretrained
-    from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
+    model_path = snapshot_download(
+        repo_id="mlx-community/parakeet-tdt-0.6b-v3",
+        revision="ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+    )
+    from_pretrained(model_path)
 
 def download_kokoro():
     tts_path = ROOT / "scripts" / "tts_daemon.py"
@@ -1415,8 +1421,13 @@ def run_step(title, fn):
         return False
 
 def download_parakeet():
+    from huggingface_hub import snapshot_download
     from parakeet_mlx import from_pretrained
-    from_pretrained("mlx-community/parakeet-tdt-0.6b-v3")
+    model_path = snapshot_download(
+        repo_id="mlx-community/parakeet-tdt-0.6b-v3",
+        revision="ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15",
+    )
+    from_pretrained(model_path)
 
 def download_kokoro():
     tts_path = ROOT / "scripts" / "tts_daemon.py"
@@ -1517,7 +1528,7 @@ print_summary() {
     # Transcription
     echo "Transcription:"
     if [ "$ENABLE_PARAKEET" = "1" ]; then
-        printf '%b\n' "  ${CHECK} Parakeet (STT) enabled"
+        printf '%b\n' "  ${CHECK} Parakeet (batch + realtime STT) enabled"
     else
         printf '%b\n' "  ${CROSS} Parakeet (STT) disabled"
     fi

@@ -303,6 +303,70 @@
       color: #666;
       margin-top: 8px;
     }
+    .live-transcription-card {
+      margin: 18px 0;
+      padding: 16px;
+      border: 1px solid rgba(11, 107, 203, 0.28);
+      border-radius: 10px;
+      background: linear-gradient(135deg, rgba(11, 107, 203, 0.07), rgba(111, 66, 193, 0.05));
+    }
+    .live-transcription-header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      flex-wrap: wrap;
+      margin-bottom: 6px;
+    }
+    .live-transcription-header h3 {
+      margin: 0;
+      color: #334155;
+    }
+    .live-transcription-card p {
+      margin: 0 0 12px;
+      color: #64748b;
+      font-size: 13px;
+      line-height: 1.5;
+    }
+    .live-status-row {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      min-height: 22px;
+      color: #475569;
+      font-size: 13px;
+    }
+    .live-status-dot {
+      width: 9px;
+      height: 9px;
+      flex: 0 0 auto;
+      border-radius: 50%;
+      background: #94a3b8;
+    }
+    .live-status-dot.active {
+      background: #dc3545;
+      box-shadow: 0 0 0 4px rgba(220, 53, 69, 0.14);
+      animation: pulse 1s infinite;
+    }
+    .live-status-dot.complete {
+      background: #28a745;
+      box-shadow: none;
+    }
+    .live-transcript-result {
+      margin-top: 12px;
+      min-height: 72px;
+      background: rgba(255, 255, 255, 0.88);
+    }
+    .live-transcript-result.interim {
+      color: #475569;
+    }
+    .live-metrics {
+      min-height: 18px;
+      margin-top: 8px;
+      color: #64748b;
+      font-size: 12px;
+      font-variant-numeric: tabular-nums;
+    }
     .loading {
       display: inline-block;
       width: 20px;
@@ -868,12 +932,12 @@
 
   <!-- Transcription Section -->
   <div class="section">
-    <h2>1. Voice Recording to Text</h2>
-    <p>Record your voice and get a text transcript back from the server.</p>
+    <h2>1. Voice to Text</h2>
+    <p>Transcribe your microphone live with Parakeet, or record/upload audio for any recognition model.</p>
 
     <div class="controls" style="align-items: flex-end; margin-bottom: 12px;">
       <div class="form-group" style="margin-bottom: 0; min-width: 220px;">
-        <label for="transcriptionEngine" style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Recognition model:</label>
+        <label for="transcriptionEngine" style="display: block; margin-bottom: 4px; font-weight: 500; color: #555;">Recorded/uploaded model:</label>
         <select id="transcriptionEngine" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
           <option value="parakeet">Parakeet — fast default</option>
           <option value="qwen3">Qwen3-ASR — multilingual + alignment</option>
@@ -906,8 +970,28 @@
     </div>
     <div id="transcriptionModelHint" style="font-size: 12px; color: #666; margin: -5px 0 12px;">Parakeet is the fast default for 25 European languages.</div>
 
+    <div class="live-transcription-card" id="liveTranscriptionCard">
+      <div class="live-transcription-header">
+        <h3>Live microphone transcription</h3>
+        <span class="badge" id="liveParakeetBadge" style="background:#0b6bcb">Parakeet · WebSocket</span>
+      </div>
+      <p>Streams 16 kHz PCM directly to the resident Parakeet model. Interim text updates while you speak; stopping returns the final transcript and word timings. One live Parakeet session can run at a time.</p>
+      <div class="controls" style="margin-bottom: 10px;">
+        <button id="startLiveBtn" type="button">Start Live Transcription</button>
+        <button id="stopLiveBtn" type="button" class="recording" style="display: none;">Stop &amp; Finalize</button>
+      </div>
+      <div class="live-status-row" aria-live="polite">
+        <span class="live-status-dot" id="liveStatusDot" aria-hidden="true"></span>
+        <span id="liveStatus">Live transcription is ready.</span>
+      </div>
+      <div class="result live-transcript-result" id="liveTranscriptResult" aria-live="polite">Your live transcript will appear here.</div>
+      <div class="live-metrics" id="liveMetrics"></div>
+    </div>
+
+    <h3 style="margin-top: 22px;">Record or upload, then transcribe</h3>
+
     <div class="controls">
-      <button id="recordBtn">Start Recording</button>
+      <button id="recordBtn">Record, then Transcribe</button>
       <button id="stopBtn" style="display: none;">Stop Recording</button>
       <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
       <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac,video/mp4" hidden>
@@ -1381,7 +1465,7 @@
     function setUIDisabledState(disabled) {
       // Buttons to disable when no API key
       const buttonsToDisable = [
-        'recordBtn', 'uploadBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn',
+        'recordBtn', 'uploadBtn', 'startLiveBtn', 'generateBtn', 'recordCloneBtn', 'createCloneBtn', 'refreshClonesBtn',
         'mossRecordCloneBtn', 'mossCreateCloneBtn', 'mossRefreshClonesBtn'
       ];
       buttonsToDisable.forEach(id => {
@@ -1419,6 +1503,8 @@
       localStorage.removeItem('sogni_api_key');
       authStatus.textContent = 'API key cleared';
       authStatus.className = 'auth-status info';
+      setUIDisabledState(authEnabled);
+      updateTranscriptionModelUI();
       updateImportAccessUI();
       updateMossAvailability();
     });
@@ -1765,13 +1851,32 @@
     let currentTranscriptionAudio = null;
     let currentTranscriptionFilename = 'recording.webm';
     let parakeetEnabled = false;
+    let parakeetRealtimeEnabled = false;
+    let parakeetRealtimeEndpoint = '/v1/realtime/transcription';
     let qwenAsrEnabled = false;
     let mossTdEnabled = false;
     let qwenAsrLanguages = [];
     let qwenAlignmentLanguages = [];
+    let liveSocket = null;
+    let liveAudioContext = null;
+    let liveMediaStream = null;
+    let liveSourceNode = null;
+    let liveProcessorNode = null;
+    let liveSilenceNode = null;
+    let liveFlushResolve = null;
+    let liveStartResolve = null;
+    let liveStartReject = null;
+    let liveState = 'idle';
 
     const recordBtn = document.getElementById('recordBtn');
     const stopBtn = document.getElementById('stopBtn');
+    const startLiveBtn = document.getElementById('startLiveBtn');
+    const stopLiveBtn = document.getElementById('stopLiveBtn');
+    const liveParakeetBadge = document.getElementById('liveParakeetBadge');
+    const liveStatusDot = document.getElementById('liveStatusDot');
+    const liveStatus = document.getElementById('liveStatus');
+    const liveTranscriptResult = document.getElementById('liveTranscriptResult');
+    const liveMetrics = document.getElementById('liveMetrics');
     const uploadBtn = document.getElementById('uploadBtn');
     const audioFileInput = document.getElementById('audioFileInput');
     const audioDropZone = document.getElementById('audioDropZone');
@@ -1901,15 +2006,31 @@
       }
 
       const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled || mossTdEnabled;
-      recordBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
-      uploadBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
-      transcriptionEngine.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls();
+      const liveActive = liveState !== 'idle';
+      recordBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls() || liveActive;
+      uploadBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls() || liveActive;
+      startLiveBtn.disabled = !parakeetRealtimeEnabled
+        || !canMakeAuthenticatedCalls()
+        || liveActive;
+      liveParakeetBadge.textContent = parakeetRealtimeEnabled
+        ? 'Parakeet · WebSocket'
+        : 'Parakeet live · unavailable';
+      liveParakeetBadge.style.background = parakeetRealtimeEnabled ? '#0b6bcb' : '#6c757d';
+      if (!parakeetRealtimeEnabled) {
+        liveStatus.textContent = parakeetEnabled
+          ? 'Realtime streaming is disabled on this server.'
+          : 'Parakeet is not enabled on this server.';
+      }
+      transcriptionEngine.disabled = !hasTranscriptionEngine
+        || !canMakeAuthenticatedCalls()
+        || liveActive;
       syncTranscriptionTimingAvailability();
       updateAlignmentButtonState();
     }
 
     async function loadTranscriptionModels(showAuthError = false) {
       parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
+      parakeetRealtimeEnabled = Boolean(serviceStatus.transcription?.realtimeEnabled);
       qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
       mossTdEnabled = Boolean(serviceStatus.mossTranscribeDiarize?.enabled);
       try {
@@ -1920,6 +2041,9 @@
           const qwen = data.models?.find((model) => model.id === 'qwen3');
           const mossTd = data.models?.find((model) => model.id === 'moss-td');
           parakeetEnabled = Boolean(parakeet?.enabled);
+          parakeetRealtimeEnabled = Boolean(parakeet?.realtime?.enabled);
+          parakeetRealtimeEndpoint = parakeet?.realtime?.endpoint
+            || '/v1/realtime/transcription';
           qwenAsrEnabled = Boolean(qwen?.enabled);
           mossTdEnabled = Boolean(mossTd?.enabled);
           qwenAsrLanguages = qwen?.languages || [];
@@ -1930,6 +2054,318 @@
         console.error('Failed to load transcription model status:', error);
       }
       updateTranscriptionModelUI();
+    }
+
+    const LIVE_WORKLET_SOURCE = `
+      class SogniPcmCaptureProcessor extends AudioWorkletProcessor {
+        constructor() {
+          super();
+          this.targetRate = 16000;
+          this.chunkSize = 8000;
+          this.chunk = new Float32Array(this.chunkSize);
+          this.chunkOffset = 0;
+          this.sampleClock = 0;
+          this.sampleSum = 0;
+          this.sampleCount = 0;
+          this.port.onmessage = (event) => {
+            if (event.data?.type === 'flush') {
+              if (this.sampleCount > 0) {
+                this.pushSample(this.sampleSum / this.sampleCount);
+                this.sampleSum = 0;
+                this.sampleCount = 0;
+              }
+              this.emitChunk();
+              this.port.postMessage({ type: 'flushed' });
+            }
+          };
+        }
+
+        pushSample(value) {
+          this.chunk[this.chunkOffset++] = value;
+          if (this.chunkOffset === this.chunkSize) this.emitChunk();
+        }
+
+        emitChunk() {
+          if (this.chunkOffset === 0) return;
+          const samples = this.chunk.slice(0, this.chunkOffset);
+          this.port.postMessage({ type: 'pcm', samples }, [samples.buffer]);
+          this.chunk = new Float32Array(this.chunkSize);
+          this.chunkOffset = 0;
+        }
+
+        process(inputs) {
+          const channel = inputs[0]?.[0];
+          if (!channel) return true;
+          for (let index = 0; index < channel.length; index += 1) {
+            this.sampleSum += channel[index];
+            this.sampleCount += 1;
+            this.sampleClock += this.targetRate;
+            while (this.sampleClock >= sampleRate) {
+              const value = this.sampleCount > 0
+                ? this.sampleSum / this.sampleCount
+                : channel[index];
+              this.pushSample(value);
+              this.sampleClock -= sampleRate;
+              this.sampleSum = 0;
+              this.sampleCount = 0;
+            }
+          }
+          return true;
+        }
+      }
+
+      registerProcessor('sogni-pcm-capture', SogniPcmCaptureProcessor);
+    `;
+
+    function setLiveControls(active) {
+      startLiveBtn.style.display = active ? 'none' : 'inline-block';
+      stopLiveBtn.style.display = active ? 'inline-block' : 'none';
+      stopLiveBtn.disabled = liveState !== 'streaming';
+      recordBtn.disabled = active;
+      uploadBtn.disabled = active;
+      transcriptionEngine.disabled = active;
+      if (!active) updateTranscriptionModelUI();
+    }
+
+    function setLiveStatus(message, state = '') {
+      liveStatus.textContent = message;
+      liveStatusDot.className = 'live-status-dot';
+      if (state) liveStatusDot.classList.add(state);
+    }
+
+    function websocketUrl(path) {
+      const url = new URL(path, window.location.origin);
+      url.protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      return url.toString();
+    }
+
+    async function createLiveAudioCapture() {
+      if (!navigator.mediaDevices?.getUserMedia) {
+        throw new Error('Microphone access requires HTTPS or localhost.');
+      }
+      if (!window.AudioWorkletNode) {
+        throw new Error('This browser does not support AudioWorklet microphone capture.');
+      }
+
+      liveMediaStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+        },
+      });
+      const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+      try {
+        liveAudioContext = new AudioContextClass({
+          sampleRate: 16000,
+          latencyHint: 'interactive',
+        });
+      } catch {
+        // The worklet resamples from the device context when a browser does
+        // not allow requesting a 16 kHz AudioContext directly.
+        liveAudioContext = new AudioContextClass({ latencyHint: 'interactive' });
+      }
+      const workletUrl = URL.createObjectURL(new Blob(
+        [LIVE_WORKLET_SOURCE],
+        { type: 'text/javascript' },
+      ));
+      try {
+        await liveAudioContext.audioWorklet.addModule(workletUrl);
+      } finally {
+        URL.revokeObjectURL(workletUrl);
+      }
+
+      liveSourceNode = liveAudioContext.createMediaStreamSource(liveMediaStream);
+      liveProcessorNode = new AudioWorkletNode(liveAudioContext, 'sogni-pcm-capture');
+      liveSilenceNode = liveAudioContext.createGain();
+      liveSilenceNode.gain.value = 0;
+      liveProcessorNode.connect(liveSilenceNode);
+      liveSilenceNode.connect(liveAudioContext.destination);
+      liveProcessorNode.port.onmessage = (event) => {
+        if (event.data?.type === 'flushed') {
+          liveFlushResolve?.();
+          liveFlushResolve = null;
+          return;
+        }
+        if (
+          event.data?.type !== 'pcm'
+          || (liveState !== 'streaming' && liveState !== 'stopping')
+        ) return;
+        if (!liveSocket || liveSocket.readyState !== WebSocket.OPEN) return;
+        if (liveSocket.bufferedAmount > 512 * 1024) {
+          void failLiveTranscription('The browser could not send microphone audio fast enough.');
+          return;
+        }
+        liveSocket.send(event.data.samples.buffer);
+      };
+      await liveAudioContext.resume();
+      if (liveAudioContext.state !== 'running') {
+        throw new Error('The browser did not allow realtime microphone processing to start.');
+      }
+    }
+
+    async function cleanupLiveAudio() {
+      liveSourceNode?.disconnect();
+      liveProcessorNode?.disconnect();
+      liveSilenceNode?.disconnect();
+      liveMediaStream?.getTracks().forEach((track) => track.stop());
+      if (liveAudioContext && liveAudioContext.state !== 'closed') {
+        await liveAudioContext.close().catch(() => {});
+      }
+      liveAudioContext = null;
+      liveMediaStream = null;
+      liveSourceNode = null;
+      liveProcessorNode = null;
+      liveSilenceNode = null;
+      liveFlushResolve = null;
+    }
+
+    function settleLiveStart(error = null) {
+      if (error) liveStartReject?.(error);
+      else liveStartResolve?.();
+      liveStartResolve = null;
+      liveStartReject = null;
+    }
+
+    async function failLiveTranscription(message) {
+      if (liveState === 'idle') return;
+      liveState = 'idle';
+      settleLiveStart(new Error(message));
+      setLiveStatus('Live transcription stopped with an error.', '');
+      liveTranscriptResult.className = 'result live-transcript-result error';
+      liveTranscriptResult.textContent = `Error: ${message}`;
+      liveMetrics.textContent = '';
+      await cleanupLiveAudio();
+      if (liveSocket?.readyState === WebSocket.OPEN) {
+        liveSocket.send(JSON.stringify({ type: 'abort' }));
+        liveSocket.close();
+      }
+      liveSocket = null;
+      setLiveControls(false);
+    }
+
+    function renderLiveMessage(message) {
+      if (message.type === 'connected') {
+        liveSocket.send(JSON.stringify({
+          type: 'start',
+          encoding: 'pcm_f32le',
+          sampleRate: 16000,
+          ...(apiKey ? { apiKey } : {}),
+        }));
+        return;
+      }
+
+      if (message.type === 'session.started') {
+        liveState = 'streaming';
+        liveSourceNode.connect(liveProcessorNode);
+        stopLiveBtn.disabled = false;
+        setLiveStatus('Listening — speak naturally, then stop to finalize.', 'active');
+        settleLiveStart();
+        return;
+      }
+
+      if (message.type === 'transcript.partial') {
+        liveTranscriptResult.className = 'result live-transcript-result interim';
+        liveTranscriptResult.textContent = message.text || 'Listening…';
+        const audioSeconds = Number(message.audioSeconds || 0).toFixed(1);
+        const rtf = message.realTimeFactor == null
+          ? 'warming up'
+          : `${Number(message.realTimeFactor).toFixed(2)}× realtime`;
+        liveMetrics.textContent = `${audioSeconds}s audio · ${rtf} · update ${message.sequence}`;
+        return;
+      }
+
+      if (message.type === 'transcript.final') {
+        liveState = 'idle';
+        liveTranscriptResult.className = 'result live-transcript-result success';
+        liveTranscriptResult.textContent = message.text || '(No speech detected)';
+        const audioSeconds = Number(message.audioSeconds || 0).toFixed(1);
+        const rtf = message.realTimeFactor == null
+          ? ''
+          : ` · ${Number(message.realTimeFactor).toFixed(2)}× realtime`;
+        liveMetrics.textContent = `${audioSeconds}s audio${rtf} · ${message.timestamps?.length || 0} timed words`;
+        setLiveStatus('Final transcript complete.', 'complete');
+        liveSocket = null;
+        setLiveControls(false);
+        return;
+      }
+
+      if (message.type === 'error') {
+        void failLiveTranscription(message.message || 'Realtime transcription failed');
+      }
+    }
+
+    async function startLiveTranscription() {
+      if (!parakeetRealtimeEnabled || liveState !== 'idle') return;
+      if (mediaRecorder && mediaRecorder.state !== 'inactive') {
+        liveTranscriptResult.className = 'result live-transcript-result error';
+        liveTranscriptResult.textContent = 'Stop the record-then-transcribe capture before starting live mode.';
+        return;
+      }
+
+      liveState = 'connecting';
+      setLiveControls(true);
+      setLiveStatus('Requesting microphone access…', 'active');
+      liveTranscriptResult.className = 'result live-transcript-result';
+      liveTranscriptResult.textContent = 'Connecting to Parakeet…';
+      liveMetrics.textContent = '';
+
+      try {
+        await createLiveAudioCapture();
+        setLiveStatus('Connecting to the realtime transcription service…', 'active');
+        liveSocket = new WebSocket(websocketUrl(parakeetRealtimeEndpoint));
+        liveSocket.binaryType = 'arraybuffer';
+        liveSocket.onmessage = (event) => {
+          try {
+            renderLiveMessage(JSON.parse(event.data));
+          } catch {
+            void failLiveTranscription('The server sent an invalid realtime event.');
+          }
+        };
+        liveSocket.onerror = () => {
+          if (liveState !== 'idle') {
+            void failLiveTranscription('Could not connect to realtime transcription.');
+          }
+        };
+        liveSocket.onclose = () => {
+          if (['connecting', 'streaming', 'stopping'].includes(liveState)) {
+            void failLiveTranscription('The realtime transcription connection closed unexpectedly.');
+          }
+        };
+
+        await new Promise((resolve, reject) => {
+          liveStartResolve = resolve;
+          liveStartReject = reject;
+        });
+      } catch (error) {
+        await failLiveTranscription(error.message);
+      }
+    }
+
+    async function flushLiveAudio() {
+      if (!liveProcessorNode) return;
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 500);
+        liveFlushResolve = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        liveProcessorNode.port.postMessage({ type: 'flush' });
+      });
+    }
+
+    async function stopLiveTranscription() {
+      if (liveState !== 'streaming' || !liveSocket) return;
+      liveState = 'stopping';
+      stopLiveBtn.disabled = true;
+      setLiveStatus('Finalizing the transcript…', 'active');
+      await flushLiveAudio();
+      await cleanupLiveAudio();
+      if (liveSocket.readyState === WebSocket.OPEN) {
+        liveSocket.send(JSON.stringify({ type: 'stop' }));
+      } else {
+        await failLiveTranscription('The realtime connection closed before finalization.');
+      }
     }
 
     function speakerColor(speakerLabel) {
@@ -1957,6 +2393,14 @@
 
     recordBtn.addEventListener('click', startRecording);
     stopBtn.addEventListener('click', stopRecording);
+    startLiveBtn.addEventListener('click', startLiveTranscription);
+    stopLiveBtn.addEventListener('click', stopLiveTranscription);
+    window.addEventListener('beforeunload', () => {
+      liveMediaStream?.getTracks().forEach((track) => track.stop());
+      if (liveSocket?.readyState === WebSocket.OPEN) {
+        liveSocket.send(JSON.stringify({ type: 'abort' }));
+      }
+    });
     uploadBtn.addEventListener('click', () => audioFileInput.click());
     audioFileInput.addEventListener('change', () => {
       const file = audioFileInput.files && audioFileInput.files[0];
@@ -2050,6 +2494,7 @@
         };
 
         mediaRecorder.start();
+        startLiveBtn.disabled = true;
         recordBtn.style.display = 'none';
         stopBtn.style.display = 'inline-block';
         document.getElementById('subtitlesGroup').style.display = 'none';
@@ -2058,6 +2503,7 @@
         transcriptResult.textContent = 'Recording...';
         transcriptTiming.textContent = '';
       } catch (error) {
+        updateTranscriptionModelUI();
         recordStatus.textContent = 'Error: ' + error.message;
         transcriptResult.className = 'result error';
         transcriptResult.textContent = 'Failed to access microphone: ' + error.message;
@@ -2160,6 +2606,7 @@
       currentTranscriptionFilename = filename;
       updateAlignmentButtonState();
       transcriptResult.innerHTML = '<span class="loading"></span>Sending to server for transcription...';
+      startLiveBtn.disabled = true;
 
       const startTime = performance.now();
       const mode = timestampMode.value;
@@ -2213,6 +2660,8 @@
         transcriptResult.className = 'result error';
         transcriptResult.textContent = 'Error: ' + error.message;
         recordStatus.textContent = 'Transcription failed';
+      } finally {
+        updateTranscriptionModelUI();
       }
     }
 
@@ -3875,6 +4324,9 @@
         qwenVoiceDesignEnabled = false;
         qwenVoiceCloningEnabled = false;
         parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
+        parakeetRealtimeEnabled = Boolean(
+          serviceStatus.transcription?.enabled && serviceStatus.transcription?.realtimeEnabled,
+        );
         qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
         mossTdEnabled = Boolean(serviceStatus.mossTranscribeDiarize?.enabled);
         updatePocketAvailability();

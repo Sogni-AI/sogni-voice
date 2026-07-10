@@ -3,6 +3,7 @@ import Boom from '@hapi/boom';
 import { config } from './config/index.js';
 import { registerPlugins } from './plugins/index.js';
 import { routes } from './routes/index.js';
+import { attachRealtimeTranscriptionWebSocket } from './realtime/transcriptionWebSocket.js';
 import {
   buildCorsPolicy,
   getCorsAllowOrigin,
@@ -133,6 +134,7 @@ export const createServer = async () => {
 
   await registerPlugins(server);
   server.route(routes);
+  attachRealtimeTranscriptionWebSocket(server);
 
   return server;
 };

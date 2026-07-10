@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sogni Transcribe is a REST API for audio transcription and text-to-speech synthesis, built specifically for **Apple Silicon Macs** using MLX for ML acceleration.
+Sogni Transcribe is a REST and WebSocket API for audio transcription and text-to-speech synthesis, built specifically for **Apple Silicon Macs** using MLX for ML acceleration.
 
 ## Commands
 
@@ -51,6 +51,11 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Services**:
 - `transcription.js` → `scripts/parakeet_daemon.py`: Uses Parakeet TDT (parakeet-mlx) for transcription
   - Supports sentence-level and word-level timestamp extraction
+  - Pins `parakeet-mlx==0.5.2` and an immutable model revision
+  - Owns one native `transcribe_stream` context at a time for 16 kHz float32 PCM
+- `realtime/transcriptionWebSocket.js`: WebSocket bridge for browser/programmatic live audio
+  - `WS /v1/realtime/transcription` emits interim and final transcript events
+  - Applies API-key authentication, CORS origin policy, frame limits, and idle cleanup
 - `qwenAsr.js` → `scripts/qwen_asr_daemon.py`: Uses MLX Qwen3-ASR 0.6B plus lazy Qwen3 ForcedAligner
   - Uses an isolated `.venv-qwen-asr` with MLX-Audio 0.4.x
   - Supports 30-language ASR, automatic language detection, and 11-language alignment
@@ -79,6 +84,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Transcription**: `POST /transcribe`
 - Parameters: `file` (required), `engine`, `language`, `timestamps`, `wordTimestamps`, speaker controls
 - `GET /transcription/models` - List Parakeet/Qwen3-ASR availability and capabilities
+- `WS /v1/realtime/transcription` - Stream 16 kHz float32 PCM to native Parakeet realtime transcription
 - `POST /qwen-asr/align` - Align a known transcript to audio with Qwen3 ForcedAligner
 
 **Kokoro TTS**:
@@ -101,8 +107,15 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 **Server**: `PORT` (3000), `HOST` (0.0.0.0)
 
 **Transcription**:
+- `PARAKEET_MODEL_ID` (mlx-community/parakeet-tdt-0.6b-v3)
+- `PARAKEET_MODEL_REVISION` (ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15)
+- `PARAKEET_PYTHON_PATH` (./.venv/bin/python3)
 - `TRANSCRIBE_TIMEOUT` (300000ms), `DAEMON_STARTUP_TIMEOUT` (120000ms)
 - `PREWARM_TRANSCRIPTION` (true)
+- `PARAKEET_REALTIME_ENABLED` (true), `PARAKEET_REALTIME_MAX_SECONDS` (300)
+- `PARAKEET_REALTIME_IDLE_TIMEOUT_MS` (15000), `PARAKEET_REALTIME_CHUNK_TIMEOUT_MS` (30000)
+- `PARAKEET_REALTIME_MAX_CHUNK_BYTES` (262144)
+- `PARAKEET_REALTIME_CONTEXT_LEFT/RIGHT` (256/256), `PARAKEET_REALTIME_DEPTH` (1)
 
 **Qwen3-ASR**:
 - `QWEN_ASR_ENABLED` (false)
@@ -140,7 +153,7 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 ## External Dependencies
 
 - **Python 3.10+** with virtual environment at `.venv/`
-- **Parakeet TDT** (parakeet-mlx): Audio transcription (~2.5GB model, auto-downloads on first use)
+- **Parakeet TDT** (`parakeet-mlx==0.5.2`): Batch and native realtime transcription (~2.5GB pinned model)
 - **mlx-audio**: TTS via Kokoro model (~300MB, auto-downloads to `models/kokoro-tts/`)
 - **mlx-audio 0.4.5**: Qwen3-TTS in isolated `.venv-qwen-tts/`
 - **mlx-audio 0.4.x**: Qwen3-ASR and ForcedAligner in isolated `.venv-qwen-asr/`
@@ -161,6 +174,7 @@ sogni-voice/
 │   ├── server.js              # Hapi server configuration
 │   ├── config/                # Configuration management
 │   ├── plugins/               # Hapi plugin registration
+│   ├── realtime/              # Raw WebSocket upgrade handlers
 │   ├── routes/                # API route handlers
 │   │   ├── health.js, transcribe.js, tts.js, qwenTts.js, static.js
 │   ├── services/              # Daemon integration services

@@ -33,7 +33,12 @@ const getVoiceCloningStatus = () => {
 
 const getServiceStatus = () => ({
   tts: { enabled: Boolean(config.tts?.enabled) },
-  transcription: { enabled: Boolean(config.transcription?.enabled) },
+  transcription: {
+    enabled: Boolean(config.transcription?.enabled),
+    realtimeEnabled: Boolean(
+      config.transcription?.enabled && config.transcription?.realtimeEnabled,
+    ),
+  },
   qwenAsr: { enabled: Boolean(config.qwenAsr?.enabled) },
   mossTranscribeDiarize: { enabled: Boolean(config.mossTranscribeDiarize?.enabled) },
   pocketTts: { enabled: Boolean(config.pocketTts?.enabled) },

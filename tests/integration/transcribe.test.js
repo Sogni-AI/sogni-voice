@@ -31,9 +31,16 @@ vi.mock('../../src/config/index.js', () => ({
     },
     transcription: {
       enabled: process.env.TRANSCRIPTION_ENABLED === '1',
+      modelId: 'mlx-community/parakeet-tdt-0.6b-v3',
+      modelRevision: 'test-parakeet-revision',
       timeout: 300000,
       daemonStartupTimeout: 120000,
       preWarmDaemon: false,
+      realtimeEnabled: true,
+      realtimeMaxSeconds: 300,
+      realtimeIdleTimeout: 15000,
+      realtimeChunkTimeout: 30000,
+      realtimeMaxChunkBytes: 256 * 1024,
     },
     qwenAsr: {
       enabled: true,
@@ -481,7 +488,18 @@ describe('POST /transcribe', () => {
     const payload = JSON.parse(response.payload);
     expect(payload.default).toBe('parakeet');
     expect(payload.models).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: 'parakeet', enabled: true }),
+      expect.objectContaining({
+        id: 'parakeet',
+        enabled: true,
+        realtime: expect.objectContaining({
+          enabled: true,
+          transport: 'websocket',
+          endpoint: '/v1/realtime/transcription',
+          encoding: 'pcm_f32le',
+          sampleRate: 16000,
+          concurrency: 1,
+        }),
+      }),
       expect.objectContaining({
         id: 'qwen3',
         enabled: true,

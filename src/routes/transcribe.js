@@ -46,7 +46,22 @@ export const transcribeRoutes = [
           id: 'parakeet',
           name: 'Parakeet TDT v3',
           enabled: Boolean(config.transcription.enabled),
+          model: config.transcription.modelId,
+          revision: config.transcription.modelRevision,
           timestamps: ['sentence', 'word'],
+          realtime: {
+            enabled: Boolean(
+              config.transcription.enabled && config.transcription.realtimeEnabled,
+            ),
+            transport: 'websocket',
+            endpoint: '/v1/realtime/transcription',
+            protocol: 'sogni.parakeet.realtime.v1',
+            encoding: 'pcm_f32le',
+            sampleRate: 16000,
+            maxSeconds: config.transcription.realtimeMaxSeconds,
+            maxChunkBytes: config.transcription.realtimeMaxChunkBytes,
+            concurrency: 1,
+          },
           description: 'Fast Apple Silicon transcription for 25 European languages.',
         },
         {

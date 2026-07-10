@@ -60,7 +60,11 @@ describe('TranscriptionService', () => {
   afterEach(async () => {
     // Cleanup daemon if running
     try {
-      await service.shutdown();
+      const shutdownPromise = service.shutdown();
+      if (mockProcess.listenerCount('close') > 0) {
+        setTimeout(() => mockProcess.emit('close', 0), 0);
+      }
+      await shutdownPromise;
     } catch (e) {
       // Ignore shutdown errors in tests
     }
@@ -116,6 +120,29 @@ describe('TranscriptionService', () => {
 
       // Spawn should only be called once despite two initialize() calls
       expect(freshSpawn).toHaveBeenCalledTimes(1);
+    });
+
+    it('should pass pinned model and realtime settings to the daemon', async () => {
+      const { spawn: freshSpawn } = await import('node:child_process');
+      const { config } = await import('../../../src/config/index.js');
+      const initPromise = service.initialize();
+      setTimeout(() => mockStdout.push('{"status":"ready","realtime":true}\n'), 10);
+      await initPromise;
+
+      expect(freshSpawn).toHaveBeenCalledWith(
+        expect.any(String),
+        [expect.stringContaining('scripts/parakeet_daemon.py')],
+        expect.objectContaining({
+          env: expect.objectContaining({
+            PARAKEET_MODEL_ID: config.transcription.modelId,
+            PARAKEET_MODEL_REVISION: config.transcription.modelRevision,
+            PARAKEET_REALTIME_ENABLED: config.transcription.realtimeEnabled ? '1' : '0',
+            PARAKEET_REALTIME_MAX_SECONDS: String(
+              config.transcription.realtimeMaxSeconds,
+            ),
+          }),
+        }),
+      );
     });
   });
 
@@ -223,6 +250,175 @@ describe('TranscriptionService', () => {
       const result = await transcribePromise;
       expect(result.text).toBe('This is a test');
       expect(result.timestamps).toBeUndefined();
+    });
+  });
+
+  describe('realtime transcription', () => {
+    beforeEach(async () => {
+      const initPromise = service.initialize();
+      setTimeout(() => {
+        mockStdout.push(JSON.stringify({
+          status: 'ready',
+          model: 'mlx-community/parakeet-tdt-0.6b-v3',
+          revision: 'test-revision',
+          parakeet_mlx_version: '0.5.2',
+          sample_rate: 16000,
+          realtime: true,
+        }) + '\n');
+      }, 10);
+      await initPromise;
+    });
+
+    it('starts, streams PCM, and finalizes a native realtime session', async () => {
+      const startPromise = service.startRealtimeSession();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const startRequest = JSON.parse(mockStdin.lastWrite);
+      expect(startRequest).toMatchObject({ type: 'stream_start' });
+      expect(startRequest.session_id).toMatch(/^[a-f0-9]{32}$/);
+
+      mockStdout.push(`${JSON.stringify({
+        id: startRequest.id,
+        success: true,
+        session_id: startRequest.session_id,
+        sample_rate: 16000,
+        encoding: 'pcm_f32le',
+        max_seconds: 300,
+        context_size: [256, 256],
+        depth: 1,
+      })}\n`);
+      const started = await startPromise;
+      expect(started.session_id).toBe(startRequest.session_id);
+      expect(service.isRealtimeActive()).toBe(true);
+
+      const pcm = Buffer.alloc(8);
+      const audioPromise = service.sendRealtimeAudio(started.session_id, pcm);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const audioRequest = JSON.parse(mockStdin.lastWrite);
+      expect(audioRequest).toMatchObject({
+        type: 'stream_audio',
+        session_id: started.session_id,
+        audio: pcm.toString('base64'),
+      });
+      mockStdout.push(`${JSON.stringify({
+        id: audioRequest.id,
+        success: true,
+        session_id: started.session_id,
+        sequence: 1,
+        text: 'Hello',
+        finalized_text: '',
+        draft_text: 'Hello',
+        finalized_delta: [],
+        audio_seconds: 0.5,
+        processing_seconds: 0.1,
+        real_time_factor: 0.2,
+        final: false,
+      })}\n`);
+      await expect(audioPromise).resolves.toMatchObject({ text: 'Hello', sequence: 1 });
+
+      const finishPromise = service.finishRealtimeSession(started.session_id);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const finishRequest = JSON.parse(mockStdin.lastWrite);
+      expect(finishRequest.type).toBe('stream_finish');
+      mockStdout.push(`${JSON.stringify({
+        id: finishRequest.id,
+        success: true,
+        session_id: started.session_id,
+        sequence: 1,
+        text: 'Hello.',
+        finalized_text: 'Hello.',
+        draft_text: '',
+        timestamps: [{ start: 0, end: 0.5, text: 'Hello.' }],
+        audio_seconds: 0.5,
+        real_time_factor: 0.2,
+        final: true,
+      })}\n`);
+      await expect(finishPromise).resolves.toMatchObject({ text: 'Hello.', final: true });
+      expect(service.isRealtimeActive()).toBe(false);
+    });
+
+    it('blocks batch work while the Parakeet streaming context is active', async () => {
+      const startPromise = service.startRealtimeSession();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const startRequest = JSON.parse(mockStdin.lastWrite);
+      mockStdout.push(`${JSON.stringify({
+        id: startRequest.id,
+        success: true,
+        session_id: startRequest.session_id,
+      })}\n`);
+      const started = await startPromise;
+
+      await expect(service.transcribe('/tmp/batch.wav')).rejects.toThrow(
+        'busy with a realtime session',
+      );
+
+      const abortPromise = service.abortRealtimeSession(started.session_id);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const abortRequest = JSON.parse(mockStdin.lastWrite);
+      mockStdout.push(`${JSON.stringify({
+        id: abortRequest.id,
+        success: true,
+        session_id: started.session_id,
+        aborted: true,
+      })}\n`);
+      await abortPromise;
+      expect(service.isRealtimeActive()).toBe(false);
+    });
+
+    it('attempts stream cleanup when realtime startup fails', async () => {
+      const startPromise = service.startRealtimeSession();
+      const rejection = expect(startPromise).rejects.toThrow('stream setup failed');
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const startRequest = JSON.parse(mockStdin.lastWrite);
+      mockStdout.push(`${JSON.stringify({
+        id: startRequest.id,
+        success: false,
+        error: 'stream setup failed',
+      })}\n`);
+
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const abortRequest = JSON.parse(mockStdin.lastWrite);
+      expect(abortRequest).toMatchObject({
+        type: 'stream_abort',
+        session_id: startRequest.session_id,
+      });
+      mockStdout.push(`${JSON.stringify({ id: abortRequest.id, success: true })}\n`);
+
+      await rejection;
+      expect(service.isRealtimeActive()).toBe(false);
+    });
+
+    it('rejects oversized PCM chunks before sending them to the daemon', async () => {
+      const startPromise = service.startRealtimeSession();
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const startRequest = JSON.parse(mockStdin.lastWrite);
+      mockStdout.push(`${JSON.stringify({
+        id: startRequest.id,
+        success: true,
+        session_id: startRequest.session_id,
+      })}\n`);
+      const started = await startPromise;
+      const previousWrite = mockStdin.lastWrite;
+
+      await expect(
+        service.sendRealtimeAudio(started.session_id, Buffer.alloc(256 * 1024 + 4)),
+      ).rejects.toThrow('size limit');
+      expect(mockStdin.lastWrite).toBe(previousWrite);
+
+      const abortPromise = service.abortRealtimeSession(started.session_id);
+      await new Promise(resolve => setTimeout(resolve, 10));
+      const abortRequest = JSON.parse(mockStdin.lastWrite);
+      mockStdout.push(`${JSON.stringify({ id: abortRequest.id, success: true })}\n`);
+      await abortPromise;
+    });
+
+    it('reports the pinned runtime metadata from the daemon ready signal', () => {
+      expect(service.getModelInfo()).toEqual({
+        model: 'mlx-community/parakeet-tdt-0.6b-v3',
+        revision: 'test-revision',
+        parakeetMlxVersion: '0.5.2',
+        sampleRate: 16000,
+        realtime: true,
+      });
     });
   });
 

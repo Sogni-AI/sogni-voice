@@ -2,9 +2,9 @@
 
 ![Sogni Voice Banner](https://voice.sogni.ai/sogni-voice-banner.jpg)
 
-A REST API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw setup steps in [llm.txt](llm.txt)!
+A REST + WebSocket API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw setup steps in [llm.txt](llm.txt)!
 
-> **Apple Silicon Only**: This project uses [MLX](https://github.com/ml-explore/mlx) for ML acceleration and is designed specifically for **Apple Silicon Macs** (M1/M2/M3/M4). It will not work on Intel Macs or other platforms.
+> **Apple Silicon Only**: This project uses [MLX](https://github.com/ml-explore/mlx) for ML acceleration and is designed specifically for **Apple Silicon Macs** (M1/M2/M3/M4/M5). It will not work on Intel Macs or other platforms.
 
 ## Model Comparison
 
@@ -26,6 +26,7 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 | Kokoro TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-ASR + ForcedAligner | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| Parakeet TDT v3 | Apache 2.0 (`parakeet-mlx`) | CC-BY-4.0 | ✅ Permitted with attribution |
 | MOSS-TTS-Nano | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | MOSS Transcribe-Diarize | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 
@@ -48,6 +49,8 @@ A REST API and configuration for running cutting-edge, open-source text-to-speec
 - **Audio Transcription**: Upload audio files and get text transcripts using [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
   - Sentence-level timestamps for subtitle generation
   - Word-level timestamps for precise timing
+  - Native microphone streaming over `WS /v1/realtime/transcription`, with interim/final events
+  - Pinned `parakeet-mlx==0.5.2` and immutable model revision for reproducible installs
   - Optional speaker identification with [pyannote Community-1](https://huggingface.co/pyannote/speaker-diarization-community-1)
 - **Multilingual Transcription + Alignment**: Optional [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) MLX backend
   - 0.6B 8-bit model with auto detection across 30 languages
@@ -112,7 +115,7 @@ The server will be available at `http://localhost:3000`.
 ### System Requirements
 
 - **macOS** on Apple Silicon (M1/M2/M3/M4/M5)
-- **uv** (Python package runner for parakeet-mlx)
+- **uv** (Python environment and package installer)
 - **ffmpeg** for audio processing
 
 ### Install System Dependencies
@@ -122,7 +125,7 @@ The server will be available at `http://localhost:3000`.
 brew install ffmpeg uv
 ```
 
-> **Note**: `uv` provides the `uvx` command used to run parakeet-mlx for transcription.
+> **Note**: `./setup.sh` installs pinned `parakeet-mlx==0.5.2` into `.venv`; the Node service keeps that Python model resident.
 
 ## Installation
 
@@ -154,9 +157,22 @@ Examples for local-only, allowlist, and public `CORS_ORIGINS=*` setups are in `e
 | Variable | Default | Description |
 |----------|---------|-------------|
 | TRANSCRIPTION_ENABLED | 1 | Enable the Parakeet transcription endpoint |
+| PARAKEET_MODEL_ID | mlx-community/parakeet-tdt-0.6b-v3 | Hugging Face MLX model repository |
+| PARAKEET_MODEL_REVISION | ed2b7e8…ef7e15 | Immutable tested model commit |
+| PARAKEET_PYTHON_PATH | ./.venv/bin/python3 | Parakeet daemon interpreter |
 | TRANSCRIBE_TIMEOUT | 300000 | Transcription timeout (ms) |
 | DAEMON_STARTUP_TIMEOUT | 120000 | Daemon startup timeout (ms) |
 | PREWARM_TRANSCRIPTION | 1 | Pre-load model on server start |
+| PARAKEET_REALTIME_ENABLED | 1 | Enable `WS /v1/realtime/transcription` |
+| PARAKEET_REALTIME_MAX_SECONDS | 300 | Maximum audio duration per live session |
+| PARAKEET_REALTIME_IDLE_TIMEOUT_MS | 15000 | Close a live connection after this long without client messages |
+| PARAKEET_REALTIME_CHUNK_TIMEOUT_MS | 30000 | Per-frame daemon timeout |
+| PARAKEET_REALTIME_MAX_CHUNK_BYTES | 262144 | Maximum binary WebSocket frame size |
+| PARAKEET_REALTIME_CONTEXT_LEFT | 256 | Native streaming left context in encoder frames |
+| PARAKEET_REALTIME_CONTEXT_RIGHT | 256 | Native streaming right context in encoder frames |
+| PARAKEET_REALTIME_DEPTH | 1 | Native streaming encoder depth |
+
+The upstream `(256, 256)` context is intentional. Smaller context can finalize tokens sooner, but local testing showed a measurable recognition-quality regression. Parakeet changes the resident encoder's attention mode while a stream is open, so this service allows one Parakeet live session at a time and temporarily rejects Parakeet batch requests. Qwen3-ASR and MOSS Transcribe-Diarize remain independent.
 
 #### Speaker Diarization (Optional)
 | Variable | Default | Description |
@@ -476,6 +492,61 @@ Response:
   "filename": "audio.mp3"
 }
 ```
+
+#### Live Parakeet Transcription (WebSocket)
+
+Connect to `ws://localhost:3000/v1/realtime/transcription` (use `wss://` behind HTTPS). The browser demo's **Start Live Transcription** button implements this protocol directly.
+
+1. The server sends `connected`.
+2. Send a JSON start message. When global auth is enabled, browsers put the key in this message because the WebSocket browser API cannot set `X-API-Key`; non-browser clients may use `X-API-Key` or `Authorization: Bearer` during the upgrade instead.
+3. After `session.started`, send mono 16 kHz little-endian float32 PCM as binary frames. A 0.5-second frame is 8,000 samples / 32,000 bytes and is the recommended cadence.
+4. Read `transcript.partial` events while speaking.
+5. Send `{"type":"stop"}` for a `transcript.final` event, or `{"type":"abort"}` to discard the session.
+
+Start message:
+
+```json
+{
+  "type": "start",
+  "encoding": "pcm_f32le",
+  "sampleRate": 16000,
+  "apiKey": "optional-browser-api-key"
+}
+```
+
+Interim event:
+
+```json
+{
+  "type": "transcript.partial",
+  "sessionId": "...",
+  "sequence": 3,
+  "text": "Realtime transcription is working",
+  "finalizedText": "Realtime",
+  "draftText": "transcription is working",
+  "finalizedDelta": [],
+  "audioSeconds": 1.5,
+  "processingSeconds": 0.09,
+  "realTimeFactor": 0.21
+}
+```
+
+Final event:
+
+```json
+{
+  "type": "transcript.final",
+  "sessionId": "...",
+  "text": "Realtime transcription is working.",
+  "timestamps": [
+    { "text": "Realtime", "start": 0.0, "end": 0.4 }
+  ],
+  "audioSeconds": 1.7,
+  "realTimeFactor": 0.18
+}
+```
+
+The server also emits structured `error` events with `code`, `message`, and `retryable`. `busy` means another Parakeet stream currently owns the model and is closed with WebSocket code 1013. Cross-origin upgrades follow `CORS_ORIGINS`, idle clients close after `PARAKEET_REALTIME_IDLE_TIMEOUT_MS`, and individual binary frames cannot exceed `PARAKEET_REALTIME_MAX_CHUNK_BYTES`.
 
 #### With Speaker Identification
 
@@ -1120,6 +1191,10 @@ Daemons start automatically when the server starts and shut down gracefully with
 - `PREWARM_QWEN_TTS_VOICE_DESIGN=0`
 - `PREWARM_MOSS_TTS=0`
 
+### Parakeet realtime benchmark
+
+On an M5 Max with the cached pinned model, a 5.99-second synthetic English sample loaded in 1.39 seconds. The first 0.5-second stream frame took 1.42 seconds because MLX compiled the streaming path; subsequent frames took 0.087-0.144 seconds each and the final transcript correctly covered the full sample. This is a local single-sample measurement, not a universal latency guarantee. The demo reports measured audio duration and cumulative real-time factor for each session.
+
 ### Qwen3-TTS MLX migration benchmark
 
 On an M5 Max, a cached 0.6B Base clone-generation sample produced about six seconds of speech with these wall-clock real-time factors (lower is better):
@@ -1212,6 +1287,8 @@ sogni-voice/
 │   │   └── index.js           # Configuration loader
 │   ├── plugins/
 │   │   └── index.js           # Hapi plugins
+│   ├── realtime/
+│   │   └── transcriptionWebSocket.js # WS /v1/realtime/transcription
 │   ├── routes/
 │   │   ├── index.js           # Route aggregator
 │   │   ├── health.js          # GET /health

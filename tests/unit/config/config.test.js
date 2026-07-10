@@ -17,7 +17,18 @@ describe('config', () => {
     process.env.TTS_TIMEOUT = '';
     process.env.TTS_DAEMON_STARTUP_TIMEOUT = '';
     process.env.PREWARM_TTS = '';
+    process.env.PARAKEET_MODEL_ID = '';
+    process.env.PARAKEET_MODEL_REVISION = '';
+    process.env.PARAKEET_PYTHON_PATH = '';
     process.env.TRANSCRIBE_TIMEOUT = '';
+    process.env.PARAKEET_REALTIME_ENABLED = '';
+    process.env.PARAKEET_REALTIME_MAX_SECONDS = '';
+    process.env.PARAKEET_REALTIME_IDLE_TIMEOUT_MS = '';
+    process.env.PARAKEET_REALTIME_CHUNK_TIMEOUT_MS = '';
+    process.env.PARAKEET_REALTIME_MAX_CHUNK_BYTES = '';
+    process.env.PARAKEET_REALTIME_CONTEXT_LEFT = '';
+    process.env.PARAKEET_REALTIME_CONTEXT_RIGHT = '';
+    process.env.PARAKEET_REALTIME_DEPTH = '';
     process.env.DIARIZATION_MODEL_ID = '';
     process.env.QWEN_TTS_ENABLED = '';
     process.env.QWEN_TTS_MODEL_VARIANT = '';
@@ -236,6 +247,33 @@ describe('config', () => {
       process.env.TRANSCRIBE_TIMEOUT = '600000';
       const { config } = await import('../../../src/config/index.js');
       expect(config.transcription.timeout).toBe(600000);
+    });
+
+    it('should use pinned Parakeet realtime defaults', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.transcription).toMatchObject({
+        modelId: 'mlx-community/parakeet-tdt-0.6b-v3',
+        modelRevision: 'ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15',
+        pythonPath: './.venv/bin/python3',
+        realtimeEnabled: true,
+        realtimeMaxSeconds: 300,
+        realtimeIdleTimeout: 15000,
+        realtimeChunkTimeout: 30000,
+        realtimeMaxChunkBytes: 262144,
+        realtimeContextLeft: 256,
+        realtimeContextRight: 256,
+        realtimeDepth: 1,
+      });
+    });
+
+    it('should allow realtime Parakeet limits to be overridden', async () => {
+      process.env.PARAKEET_REALTIME_ENABLED = '0';
+      process.env.PARAKEET_REALTIME_MAX_SECONDS = '120';
+      process.env.PARAKEET_REALTIME_MAX_CHUNK_BYTES = '65536';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.transcription.realtimeEnabled).toBe(false);
+      expect(config.transcription.realtimeMaxSeconds).toBe(120);
+      expect(config.transcription.realtimeMaxChunkBytes).toBe(65536);
     });
   });
 

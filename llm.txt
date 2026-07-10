@@ -75,6 +75,7 @@ Endpoints:
 - POST /tts (Kokoro, if enabled)
 - POST /pocket-tts (Pocket TTS)
 - POST /transcribe
+- WS /v1/realtime/transcription (Parakeet 16 kHz float32 PCM streaming)
 - GET /tts/voices (Kokoro, if enabled)
 - GET /pocket-tts/voices
 

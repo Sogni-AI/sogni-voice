@@ -30,6 +30,7 @@ describe('Authentication Integration Tests', () => {
           },
           transcription: {
             enabled: true,
+            realtimeEnabled: true,
             timeout: 300000,
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
@@ -79,7 +80,7 @@ describe('Authentication Integration Tests', () => {
       });
       expect(payload.services).toEqual({
         tts: { enabled: true },
-        transcription: { enabled: true },
+        transcription: { enabled: true, realtimeEnabled: true },
         qwenAsr: { enabled: false },
         mossTranscribeDiarize: { enabled: false },
         pocketTts: { enabled: false },
@@ -128,6 +129,7 @@ describe('Authentication Integration Tests', () => {
           },
           transcription: {
             enabled: true,
+            realtimeEnabled: true,
             timeout: 300000,
             daemonStartupTimeout: 120000,
             preWarmDaemon: false,
@@ -185,7 +187,7 @@ describe('Authentication Integration Tests', () => {
       });
       expect(payload.services).toEqual({
         tts: { enabled: true },
-        transcription: { enabled: true },
+        transcription: { enabled: true, realtimeEnabled: true },
         qwenAsr: { enabled: true },
         mossTranscribeDiarize: { enabled: true },
         pocketTts: { enabled: true },

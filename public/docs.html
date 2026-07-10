@@ -285,12 +285,50 @@ with open('output.wav', 'wb') as f:
   <details class="section">
     <summary><h2>1. STT - Parakeet, Qwen3-ASR, MOSS Transcribe-Diarize</h2></summary>
     <div class="section-content">
-    <p>Upload an audio file and receive a text transcript. Parakeet is the fast default; Qwen3-ASR adds multilingual recognition and alignment; experimental MOSS Transcribe-Diarize jointly emits English/Chinese text, speakers, and segment timestamps.</p>
+    <p>Upload an audio file and receive a text transcript, or stream a microphone to Parakeet for interim and final events. Parakeet is the fast default; Qwen3-ASR adds multilingual recognition and alignment; experimental MOSS Transcribe-Diarize jointly emits English/Chinese text, speakers, and segment timestamps.</p>
 
     <div class="endpoint">
       <span class="method get">GET</span> /transcription/models
     </div>
     <p>Lists configured recognition providers, enabled state, language/timestamp capabilities, and whether diarization is built in.</p>
+
+    <h3>Live Parakeet transcription</h3>
+    <div class="endpoint">
+      <span class="method get">WS</span> /v1/realtime/transcription
+    </div>
+    <p>Streams mono 16 kHz little-endian float32 PCM to Parakeet's native <code>transcribe_stream</code> path. Use <code>wss://</code> when the page is served over HTTPS. The playground's <strong>Start Live Transcription</strong> control is a complete browser client.</p>
+
+    <ol>
+      <li>Wait for the server's <code>connected</code> event.</li>
+      <li>Send <code>{"type":"start","encoding":"pcm_f32le","sampleRate":16000}</code>. When global auth is enabled, browser clients also include <code>apiKey</code> in this message; non-browser clients may authenticate in the upgrade headers.</li>
+      <li>After <code>session.started</code>, send binary PCM frames. The recommended cadence is 8,000 samples / 32,000 bytes (0.5 seconds).</li>
+      <li>Read <code>transcript.partial</code> updates. Send <code>{"type":"stop"}</code> for <code>transcript.final</code>, or <code>{"type":"abort"}</code> to discard the stream.</li>
+    </ol>
+
+    <pre><code>{
+  "type": "transcript.partial",
+  "sessionId": "...",
+  "sequence": 3,
+  "text": "Realtime transcription is working",
+  "finalizedText": "Realtime",
+  "draftText": "transcription is working",
+  "audioSeconds": 1.5,
+  "processingSeconds": 0.09,
+  "realTimeFactor": 0.21
+}</code></pre>
+
+    <pre><code>{
+  "type": "transcript.final",
+  "sessionId": "...",
+  "text": "Realtime transcription is working.",
+  "timestamps": [
+    { "text": "Realtime", "start": 0.0, "end": 0.4 }
+  ],
+  "audioSeconds": 1.7,
+  "realTimeFactor": 0.18
+}</code></pre>
+
+    <p>Only one Parakeet live stream can own the resident model at a time; a second client receives retryable error code <code>busy</code> and WebSocket close code 1013. Parakeet batch requests pause for the same interval, while Qwen3-ASR and MOSS remain available. Cross-origin upgrades follow <code>CORS_ORIGINS</code>, and the default live limit is five minutes.</p>
 
     <div class="endpoint">
       <span class="method">POST</span> /transcribe

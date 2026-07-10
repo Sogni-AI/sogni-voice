@@ -9,6 +9,8 @@ CORS_ORIGINS=local
 
 This keeps the API bound to loopback and only allows browser origins from local development hosts such as `localhost`.
 
+The same origin policy applies to `WS /v1/realtime/transcription`. When authentication is enabled, the bundled browser demo sends the stored API key in its first WebSocket `start` message; non-browser clients can use the normal API-key headers during the upgrade.
+
 ## Public Browser Access From Anywhere
 
 ```dotenv

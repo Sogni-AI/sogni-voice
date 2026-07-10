@@ -34,9 +34,22 @@ export const config = {
   },
   transcription: {
     enabled: parseEnvBool(process.env.TRANSCRIPTION_ENABLED, true),
+    modelId: process.env.PARAKEET_MODEL_ID || 'mlx-community/parakeet-tdt-0.6b-v3',
+    modelRevision: process.env.PARAKEET_MODEL_REVISION
+      || 'ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15',
+    pythonPath: process.env.PARAKEET_PYTHON_PATH || './.venv/bin/python3',
     timeout: parseInt(process.env.TRANSCRIBE_TIMEOUT, 10) || 300000,
     daemonStartupTimeout: parseInt(process.env.DAEMON_STARTUP_TIMEOUT, 10) || 120000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_TRANSCRIPTION, true),
+    realtimeEnabled: parseEnvBool(process.env.PARAKEET_REALTIME_ENABLED, true),
+    realtimeMaxSeconds: parseInt(process.env.PARAKEET_REALTIME_MAX_SECONDS, 10) || 300,
+    realtimeIdleTimeout: parseInt(process.env.PARAKEET_REALTIME_IDLE_TIMEOUT_MS, 10) || 15000,
+    realtimeChunkTimeout: parseInt(process.env.PARAKEET_REALTIME_CHUNK_TIMEOUT_MS, 10) || 30000,
+    realtimeMaxChunkBytes: parseInt(process.env.PARAKEET_REALTIME_MAX_CHUNK_BYTES, 10)
+      || 256 * 1024,
+    realtimeContextLeft: parseInt(process.env.PARAKEET_REALTIME_CONTEXT_LEFT, 10) || 256,
+    realtimeContextRight: parseInt(process.env.PARAKEET_REALTIME_CONTEXT_RIGHT, 10) || 256,
+    realtimeDepth: parseInt(process.env.PARAKEET_REALTIME_DEPTH, 10) || 1,
   },
   qwenAsr: {
     enabled: parseEnvBool(process.env.QWEN_ASR_ENABLED, false),

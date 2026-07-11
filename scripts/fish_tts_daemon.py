@@ -33,12 +33,16 @@ Protocol:
   Ready:   {"status":"ready","voices":[...],"features":[...],"sample_rate":44100}
 """
 
+import io
 import json
 import os
+import re
 import shutil
 import signal
 import sys
+import time
 import traceback
+import wave
 
 sys.stdout.reconfigure(line_buffering=True)
 sys.stderr.reconfigure(line_buffering=True)
@@ -53,11 +57,116 @@ VOICE_CLONES_DIR = os.environ.get(
 )
 MODEL_ID = os.environ.get("FISH_TTS_MODEL_ID", "fish-audio-s2-pro-8bit-mlx")
 DEFAULT_MAX_TOKENS = int(os.environ.get("FISH_TTS_MAX_TOKENS", "1024"))
+DEFAULT_MAX_BYTES_PER_CHUNK = max(
+    20, int(os.environ.get("FISH_TTS_MAX_BYTES_PER_CHUNK", "200"))
+)
+CHUNK_PAUSE_SECONDS = 0.12
 DEFAULT_VOICE = "default"
+
+_SPEAKER_TAG_RE = re.compile(r"<\|speaker:\d+\|>")
+_STANDALONE_HANDLE_RE = re.compile(r"(?<![\w.+/-])@([A-Za-z0-9_]+)\b")
+_SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？])\s*")
 
 
 def _log(msg: str) -> None:
     print(f"[fish-tts-daemon] {msg}", file=sys.stderr)
+
+
+def _utf8_len(text: str) -> int:
+    return len(text.encode("utf-8"))
+
+
+def _utf8_prefix_end(text: str, max_bytes: int) -> int:
+    """Return the largest character boundary whose UTF-8 prefix fits."""
+    used = 0
+    for index, character in enumerate(text):
+        width = len(character.encode("utf-8"))
+        if used + width > max_bytes:
+            return index
+        used += width
+    return len(text)
+
+
+def _split_overlong_text(text: str, max_bytes: int) -> list[str]:
+    """Split one overlong sentence at word boundaries, with a hard fallback."""
+    pieces = []
+    remaining = text.strip()
+    while _utf8_len(remaining) > max_bytes:
+        prefix_end = _utf8_prefix_end(remaining, max_bytes)
+        # max_bytes is clamped above the largest UTF-8 code point, but retain a
+        # defensive one-character fallback if this helper is called directly.
+        if prefix_end <= 0:
+            prefix_end = 1
+        cut = remaining.rfind(" ", 0, prefix_end + 1)
+        if cut <= 0:
+            cut = prefix_end
+        piece = remaining[:cut].strip()
+        if piece:
+            pieces.append(piece)
+        remaining = remaining[cut:].strip()
+    if remaining:
+        pieces.append(remaining)
+    return pieces
+
+
+def _chunk_paragraph(paragraph: str, max_bytes: int) -> list[str]:
+    """Group sentences greedily, then split any single overlong sentence."""
+    sentences = [
+        sentence.strip()
+        for sentence in _SENTENCE_BOUNDARY_RE.split(paragraph)
+        if sentence.strip()
+    ]
+    chunks = []
+    current = ""
+    for sentence in sentences:
+        if _utf8_len(sentence) > max_bytes:
+            if current:
+                chunks.append(current)
+                current = ""
+            chunks.extend(_split_overlong_text(sentence, max_bytes))
+            continue
+
+        separator = "" if current.endswith(("。", "！", "？")) else " "
+        candidate = f"{current}{separator}{sentence}" if current else sentence
+        if _utf8_len(candidate) <= max_bytes:
+            current = candidate
+        else:
+            chunks.append(current)
+            current = sentence
+
+    if current:
+        chunks.append(current)
+    return chunks
+
+
+def prepare_text_chunks(
+    text: str, max_bytes: int = DEFAULT_MAX_BYTES_PER_CHUNK
+) -> list[str]:
+    """Prepare pasted prose for reliable Fish generation without changing tags.
+
+    Blank lines remain hard paragraph boundaries. Newlines inside a paragraph are
+    treated as pasted line wrapping, while standalone social handles are made
+    speakable. Explicit Fish multi-speaker input bypasses all preparation because
+    its newlines and tags are part of the model's control syntax.
+    """
+    cleaned = (text or "").strip()
+    if not cleaned:
+        return []
+    if _SPEAKER_TAG_RE.search(cleaned):
+        return [cleaned]
+
+    max_bytes = max(4, int(max_bytes))
+    normalized = cleaned.replace("\r\n", "\n").replace("\r", "\n")
+    paragraphs = re.split(r"\n(?:[ \t]*\n)+", normalized)
+    chunks = []
+    for paragraph in paragraphs:
+        paragraph = re.sub(r"[ \t]*\n[ \t]*", " ", paragraph.strip())
+        paragraph = re.sub(r"[ \t]+", " ", paragraph).strip()
+        if not paragraph:
+            continue
+        paragraph = _STANDALONE_HANDLE_RE.sub(r"at \1", paragraph)
+        chunks.extend(_chunk_paragraph(paragraph, max_bytes))
+    return chunks
 
 
 class FishTTSDaemon:
@@ -119,23 +228,59 @@ class FishTTSDaemon:
         if self.server is None:
             return {"success": False, "error": "Model not loaded"}
         try:
-            payload = {
-                "input": text,
-                "model": MODEL_ID,
-                "voice": DEFAULT_VOICE,
-                "response_format": "wav",
-                "max_tokens": int(max_tokens or DEFAULT_MAX_TOKENS),
-            }
-            if temperature is not None:
-                payload["temperature"] = float(temperature)
-            audio_bytes, _media_type, timing = self.server.synthesize(payload)
-            with open(output_path, "wb") as f:
-                f.write(audio_bytes)
+            text_chunks = prepare_text_chunks(text)
+            if not text_chunks:
+                raise ValueError("Text is empty after normalization")
+            if len(text_chunks) > 1:
+                _log(f"Generating {len(text_chunks)} text chunks")
+
+            rendered_chunks = []
+            single_audio_bytes = None
+            single_timing = None
+            started = time.perf_counter()
+            for chunk in text_chunks:
+                payload = {
+                    "input": chunk,
+                    "model": MODEL_ID,
+                    "voice": DEFAULT_VOICE,
+                    "response_format": "wav",
+                    "max_tokens": int(max_tokens or DEFAULT_MAX_TOKENS),
+                }
+                if temperature is not None:
+                    payload["temperature"] = float(temperature)
+                audio_bytes, _media_type, timing = self.server.synthesize(payload)
+                if len(text_chunks) == 1:
+                    single_audio_bytes = audio_bytes
+                    single_timing = timing
+                    break
+                rendered_chunks.append(self._decode_pcm16_wav(audio_bytes))
+
+            # Keep the established byte-for-byte path for ordinary one-chunk
+            # requests. Multi-paragraph/long prose is joined into one valid WAV.
+            if single_audio_bytes is not None:
+                with open(output_path, "wb") as f:
+                    f.write(single_audio_bytes)
+                return {
+                    "success": True,
+                    "output_path": output_path,
+                    "duration": (
+                        float(single_timing.get("audio_seconds", 0.0))
+                        if single_timing else None
+                    ),
+                    "rtf": (
+                        float(single_timing.get("rtf"))
+                        if single_timing and single_timing.get("rtf") is not None else None
+                    ),
+                }
+
+            audio_np = self._join_audio_chunks(rendered_chunks)
+            duration = self._write_wav(audio_np, output_path)
+            elapsed = time.perf_counter() - started
             return {
                 "success": True,
                 "output_path": output_path,
-                "duration": float(timing.get("audio_seconds", 0.0)) if timing else None,
-                "rtf": float(timing.get("rtf")) if timing and timing.get("rtf") is not None else None,
+                "duration": duration,
+                "rtf": elapsed / duration if duration > 0 else None,
             }
         except Exception as e:  # noqa: BLE001
             _log(f"generate error: {e}")
@@ -161,6 +306,48 @@ class FishTTSDaemon:
         with open(output_path, "wb") as f:
             f.write(wav_bytes)
         return float(audio_np.shape[0]) / float(self.sample_rate)
+
+    def _decode_pcm16_wav(self, audio_bytes):
+        """Decode the vendored server's mono PCM16 WAV into float32 samples."""
+        with wave.open(io.BytesIO(audio_bytes), "rb") as wav_file:
+            channels = wav_file.getnchannels()
+            sample_width = wav_file.getsampwidth()
+            sample_rate = wav_file.getframerate()
+            frames = wav_file.readframes(wav_file.getnframes())
+        if channels != 1 or sample_width != 2:
+            raise RuntimeError(
+                f"Expected mono PCM16 Fish audio, received channels={channels}, "
+                f"sample_width={sample_width}"
+            )
+        if sample_rate != self.sample_rate:
+            raise RuntimeError(
+                f"Fish chunk sample rate changed from {self.sample_rate} to {sample_rate}"
+            )
+        return self._np.frombuffer(frames, dtype="<i2").astype(self._np.float32) / 32767.0
+
+    def _join_audio_chunks(self, chunks):
+        """Join rendered chunks with a short pause and return one float32 waveform."""
+        normalized = []
+        for chunk in chunks:
+            if chunk is None:
+                continue
+            chunk_array = self._np.asarray(chunk, dtype=self._np.float32).reshape(-1)
+            if chunk_array.size:
+                normalized.append(chunk_array)
+        if not normalized:
+            raise RuntimeError("Fish model produced no audio chunks")
+        if len(normalized) == 1:
+            return normalized[0]
+
+        pause = self._np.zeros(
+            int(self.sample_rate * CHUNK_PAUSE_SECONDS), dtype=self._np.float32
+        )
+        pieces = []
+        for index, chunk in enumerate(normalized):
+            if index:
+                pieces.append(pause)
+            pieces.append(chunk)
+        return self._np.concatenate(pieces)
 
     def _synthesize_with_reference(self, text, ref_audio, ref_text, max_tokens, temperature):
         """Run the model with a reference prompt and return a concatenated waveform.
@@ -224,11 +411,27 @@ class FishTTSDaemon:
         try:
             ref_audio = self._load_audio(ref_path, self.sample_rate)
             ref_text = self._read_transcript(clone_id)
-            audio_np = self._synthesize_with_reference(
-                text, ref_audio, ref_text, max_tokens, temperature
-            )
+            text_chunks = prepare_text_chunks(text)
+            if not text_chunks:
+                raise ValueError("Text is empty after normalization")
+            if len(text_chunks) > 1:
+                _log(f"Generating {len(text_chunks)} cloned-voice text chunks")
+            started = time.perf_counter()
+            rendered_chunks = [
+                self._synthesize_with_reference(
+                    chunk, ref_audio, ref_text, max_tokens, temperature
+                )
+                for chunk in text_chunks
+            ]
+            audio_np = self._join_audio_chunks(rendered_chunks)
             duration = self._write_wav(audio_np, output_path)
-            return {"success": True, "output_path": output_path, "duration": duration}
+            elapsed = time.perf_counter() - started
+            return {
+                "success": True,
+                "output_path": output_path,
+                "duration": duration,
+                "rtf": elapsed / duration if duration > 0 else None,
+            }
         except Exception as e:  # noqa: BLE001
             _log(f"generate_voice_clone error: {e}")
             traceback.print_exc(file=sys.stderr)

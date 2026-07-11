@@ -1,5 +1,8 @@
 node_modules/
 .env
+# Never commit env backups — they contain API keys/tokens
+.env.backup*
+.env.*.backup
 coverage/
 *.log
 .DS_Store
@@ -9,9 +12,13 @@ out/
 .claude/
 .venv/
 .venv-*/
+.venv.backup*
 models/
 __pycache__/
+.gstack/
 voice_clones/*.pkl
+# Biometric voice clones (MLX-Audio safetensors format) — do not commit
+voice_clones/*.safetensors
 !voice_clones/Marvin.pkl
 # Ignore all Pocket TTS voice clones except specific ones
 pocket_voice_clones/*

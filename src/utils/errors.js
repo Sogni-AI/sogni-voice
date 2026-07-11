@@ -95,6 +95,18 @@ export class QwenTTSError extends Error {
   }
 }
 
+export class FishTTSError extends Error {
+  constructor(message, cause = null) {
+    super(message);
+    this.name = 'FishTTSError';
+    this.cause = cause;
+  }
+
+  toBoom() {
+    return Boom.badImplementation(this.message);
+  }
+}
+
 export class DiarizationError extends Error {
   constructor(message, cause = null) {
     super(message);

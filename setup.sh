@@ -418,6 +418,7 @@ select_tts_engines() {
         ENABLE_KOKORO=0
         ENABLE_QWEN=0
         ENABLE_MOSS=0
+        ENABLE_FISH=0
         ENABLE_PARAKEET=1
         ENABLE_QWEN_ASR=0
         ENABLE_MOSS_TD=0
@@ -444,16 +445,18 @@ select_tts_engines() {
         "Kokoro TTS (Mid, MLX-based, 32 voices, 4 languages)"
         "Qwen3-TTS (MLX, 10 languages, cloning, style control, voice design)"
         "MOSS-TTS-Nano (100M, multilingual reference voices, MLX, 48 kHz)"
+        "Fish S2 Pro (8-bit MLX, expressive inline emotion + voice cloning) - Non-commercial, ~6.7GB"
     )
 
     # Get selections via global MENU_RESULT (Pocket=yes; others disabled by default)
-    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0 0" "${tts_options[@]}"
+    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0 0 0" "${tts_options[@]}"
     IFS=' ' read -ra tts_selected <<< "$MENU_RESULT"
 
     ENABLE_POCKET=${tts_selected[0]}
     ENABLE_KOKORO=${tts_selected[1]}
     ENABLE_QWEN=${tts_selected[2]}
     ENABLE_MOSS=${tts_selected[3]}
+    ENABLE_FISH=${tts_selected[4]}
 
     # Qwen uses separate daemons for cloning, styled voices, and voice design.
     # Select a paired Base/CustomVoice profile; VoiceDesign remains a lazy model.
@@ -552,6 +555,11 @@ select_tts_engines() {
     else
         echo -e "  ${CROSS} MOSS-TTS-Nano (disabled)"
     fi
+    if [ "$ENABLE_FISH" = "1" ]; then
+        echo -e "  ${CHECK} Fish S2 Pro (8-bit MLX, expressive + cloning — non-commercial)"
+    else
+        echo -e "  ${CROSS} Fish S2 Pro (disabled)"
+    fi
     echo ""
     echo "Transcription:"
     if [ "$ENABLE_PARAKEET" = "1" ]; then
@@ -643,6 +651,14 @@ configure_environment() {
         upsert_env_key "MOSS_TTS_PYTHON_PATH" "./.venv-moss-tts/bin/python3"
     else
         upsert_env_key "MOSS_TTS_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_FISH" = "1" ]; then
+        upsert_env_key "FISH_TTS_ENABLED" "1"
+        upsert_env_key "FISH_TTS_PYTHON_PATH" "./.venv-fish-tts/bin/python3"
+        upsert_env_key "FISH_TTS_MAX_TOKENS" "1024"
+    else
+        upsert_env_key "FISH_TTS_ENABLED" "0"
     fi
 
     if [ "$ENABLE_PARAKEET" = "1" ]; then
@@ -934,6 +950,53 @@ install_dependencies() {
         print_info "Installing MLX-Audio 0.4.x for MOSS-TTS-Nano..."
         uv pip install --python .venv-moss-tts/bin/python "mlx-audio>=0.4.5,<0.5"
         print_success "MOSS-TTS-Nano environment is ready"
+    fi
+
+    # Fish S2 Pro (8-bit MLX) — expressive TTS + zero-shot voice cloning.
+    # NON-COMMERCIAL (Fish Audio Research License): local evaluation only. Uses a
+    # vendored community MLX inference repo + a pre-quantized 8-bit checkpoint,
+    # both git-ignored. Pins transformers==4.56.1 (the mlx-audio fish branch
+    # declares transformers>=5 but ships mlx-lm 0.31.1, which needs <5).
+    if [ "$ENABLE_FISH" = "1" ]; then
+        if [ -d .venv-fish-tts ] && ! .venv-fish-tts/bin/python -c "import pip" >/dev/null 2>&1; then
+            local fish_backup=".venv-fish-tts.backup.$(date +%Y%m%d_%H%M%S)"
+            print_warning "Existing Fish S2 environment is broken; moving it to $fish_backup"
+            mv .venv-fish-tts "$fish_backup"
+        fi
+
+        if [ ! -d .venv-fish-tts ]; then
+            print_info "Creating isolated Fish S2 environment at .venv-fish-tts/..."
+            uv venv --seed --python 3.11 .venv-fish-tts
+        fi
+
+        print_info "Installing mlx-audio (fish-audio-s2 branch) + deps for Fish S2..."
+        uv pip install --python .venv-fish-tts/bin/python \
+            "git+https://github.com/lucasnewman/mlx-audio.git@fish-audio-s2" \
+            soundfile numpy scipy huggingface_hub
+        # The fish branch declares transformers>=5 but mlx-lm 0.31.1 needs <5.
+        uv pip install --python .venv-fish-tts/bin/python "transformers==4.56.1" "tokenizers==0.22.0"
+
+        if [ ! -d vendor/fish-s2-mlx/local_mlx ]; then
+            print_info "Vendoring the Fish S2 MLX inference repo (git-ignored, non-commercial)..."
+            mkdir -p vendor
+            git clone --depth 1 https://github.com/groxaxo/fish-s2-pro-mlx-local-deploy vendor/fish-s2-mlx
+            rm -rf vendor/fish-s2-mlx/.git
+        fi
+
+        if [ ! -d checkpoints/fish-audio-s2-pro-8bit-mlx-normalized ]; then
+            print_warning "Downloading the Fish S2 8-bit checkpoint (~6.7 GB) — this can take a while."
+            mkdir -p checkpoints
+            if [ ! -f checkpoints/fish-audio-s2-pro-8bit-mlx/model.safetensors ]; then
+                .venv-fish-tts/bin/huggingface-cli download cs2764/fish-audio-s2-pro-8bit-mlx \
+                    --local-dir checkpoints/fish-audio-s2-pro-8bit-mlx
+            fi
+            print_info "Normalizing the checkpoint for the mlx-audio fish branch..."
+            PYTHONPATH="$PWD/vendor/fish-s2-mlx" .venv-fish-tts/bin/python \
+                vendor/fish-s2-mlx/local_mlx/normalize_cs2764_checkpoint.py \
+                checkpoints/fish-audio-s2-pro-8bit-mlx \
+                checkpoints/fish-audio-s2-pro-8bit-mlx-normalized
+        fi
+        print_success "Fish S2 Pro environment is ready (non-commercial — evaluation only)"
     fi
 
     # MOSS Transcribe-Diarize depends on Transformers 5.x and PyTorch. Keep it
@@ -1522,6 +1585,11 @@ print_summary() {
         printf '%b\n' "  ${CHECK} MOSS-TTS-Nano"
     else
         printf '%b\n' "  ${CROSS} MOSS-TTS-Nano (disabled)"
+    fi
+    if [ "$ENABLE_FISH" = "1" ]; then
+        printf '%b\n' "  ${CHECK} Fish S2 Pro (8-bit MLX, expressive + cloning)"
+    else
+        printf '%b\n' "  ${CROSS} Fish S2 Pro (disabled)"
     fi
     echo ""
 

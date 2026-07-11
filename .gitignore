@@ -22,3 +22,8 @@ moss_voice_clones/*
 !pocket_voice_clones/Motivator/
 !pocket_voice_clones/Motivator/reference.wav
 !pocket_voice_clones/Motivator/metadata.json
+
+# Fish S2 eval (non-commercial license — do not commit)
+vendor/fish-s2-mlx/
+checkpoints/
+fish_voice_clones/*

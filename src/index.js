@@ -11,6 +11,7 @@ import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
 import { mossTtsService } from './services/mossTts.js';
+import { fishTtsService } from './services/fishTts.js';
 import { mossTranscribeDiarizeService } from './services/mossTranscribeDiarize.js';
 import { config } from './config/index.js';
 
@@ -29,6 +30,7 @@ const gracefulShutdown = async (signal) => {
     diarizationService.shutdown(),
     qwenAsrService.shutdown(),
     mossTtsService.shutdown(),
+    fishTtsService.shutdown(),
     mossTranscribeDiarizeService.shutdown(),
   ]);
   process.exit(0);
@@ -103,6 +105,11 @@ startServer()
       preWarmPromises.push(
         preWarmDaemon('MOSS-TTS-Nano daemon', () => mossTtsService.initialize()),
       );
+    }
+
+    if (config.fishTts.enabled && config.fishTts.preWarmDaemon) {
+      console.log('Pre-warming Fish S2 Pro TTS daemon...');
+      preWarmPromises.push(preWarmDaemon('Fish S2 TTS daemon', () => fishTtsService.initialize()));
     }
 
     if (config.mossTranscribeDiarize.enabled && config.mossTranscribeDiarize.preWarmDaemon) {

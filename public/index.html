@@ -970,7 +970,7 @@
     </div>
     <div id="transcriptionModelHint" style="font-size: 12px; color: #666; margin: -5px 0 12px;">Parakeet is the fast default for 25 European languages.</div>
 
-    <div class="live-transcription-card" id="liveTranscriptionCard">
+    <div class="live-transcription-card" id="liveTranscriptionCard" style="display: none;">
       <div class="live-transcription-header">
         <h3>Live microphone transcription</h3>
         <span class="badge" id="liveParakeetBadge" style="background:#0b6bcb">Parakeet · WebSocket</span>
@@ -979,6 +979,7 @@
       <div class="controls" style="margin-bottom: 10px;">
         <button id="startLiveBtn" type="button">Start Live Transcription</button>
         <button id="stopLiveBtn" type="button" class="recording" style="display: none;">Stop &amp; Finalize</button>
+        <button id="disableLiveBtn" type="button" class="secondary">← Back to record / upload</button>
       </div>
       <div class="live-status-row" aria-live="polite">
         <span class="live-status-dot" id="liveStatusDot" aria-hidden="true"></span>
@@ -988,12 +989,14 @@
       <div class="live-metrics" id="liveMetrics"></div>
     </div>
 
+    <div id="recordUploadBox">
     <h3 style="margin-top: 22px;">Record or upload, then transcribe</h3>
 
     <div class="controls">
       <button id="recordBtn">Record, then Transcribe</button>
       <button id="stopBtn" style="display: none;">Stop Recording</button>
       <button id="uploadBtn" type="button" class="secondary">Upload Audio File</button>
+      <button id="enableLiveBtn" type="button" class="secondary">🎤 Enable Live Transcribe</button>
       <input type="file" id="audioFileInput" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/mpeg,audio/wav,audio/x-wav,audio/mp4,audio/webm,audio/ogg,audio/flac,video/mp4" hidden>
     </div>
 
@@ -1038,6 +1041,7 @@
       <div class="result" id="alignmentResult" style="margin-top: 12px;">Choose audio above and enter its transcript.</div>
       <div class="status" id="alignmentTiming"></div>
     </details>
+    </div><!-- #recordUploadBox -->
   </div>
 
   <!-- TTS Section -->
@@ -1072,6 +1076,13 @@
         <span class="model-label-content">
           <span class="model-name">MOSS-TTS-Nano <span class="badge" style="background:#6f42c1">100M + Multilingual</span></span>
           <span class="model-desc">20 languages, 48 kHz stereo, saved reference voices. MLX, non-streaming.</span>
+        </span>
+      </label>
+      <label>
+        <input type="radio" name="ttsModel" value="fish" id="fishRadio">
+        <span class="model-label-content">
+          <span class="model-name">Fish S2 Pro <span class="badge" style="background:#e83e8c">Expressive · Eval</span></span>
+          <span class="model-desc">Word-level emotion via inline [tags]. 8-bit MLX, HQ offline (~1.5-4x realtime). Non-commercial license.</span>
         </span>
       </label>
     </div>
@@ -1120,6 +1131,26 @@
           <option value="Spanish">Spanish</option>
         </select>
       </div>
+    </div>
+
+    <style>
+      .fish-chip { cursor: pointer; border: 1px solid #e0a5c5; background: #fff; color: #a0246b;
+        border-radius: 14px; padding: 4px 10px; font-size: 13px; line-height: 1.2; }
+      .fish-chip:hover { background: #f7e3ee; }
+    </style>
+    <!-- Fish S2-specific options: inline emotion / paralanguage tag inserter -->
+    <div id="fishOptions" class="hidden" style="margin-bottom: 16px; padding: 12px; border: 1px solid #f0d0e0; border-radius: 6px; background: #fdf4f9;">
+      <label style="display:block; margin-bottom: 6px;">Insert expression tags <span style="font-weight:normal;color:#666;font-size:12px;">— click to add at the cursor; edit freely. Emotions use <code>[brackets]</code>, sounds use <code>(parens)</code>.</span></label>
+      <div id="fishTagChips" style="display:flex; flex-wrap:wrap; gap:6px;">
+        <button type="button" class="fish-chip" data-tag="[happy] ">😀 happy</button>
+        <button type="button" class="fish-chip" data-tag="[sad] ">😢 sad</button>
+        <button type="button" class="fish-chip" data-tag="[angry] ">😠 angry</button>
+        <button type="button" class="fish-chip" data-tag="[excited] ">🤩 excited</button>
+        <button type="button" class="fish-chip" data-tag="[whispers] ">🤫 whisper</button>
+        <button type="button" class="fish-chip" data-tag="[shouting] ">📣 shout</button>
+        <button type="button" class="fish-chip" data-tag="[laughing] ">😂 laughing</button>
+      </div>
+      <div style="font-size:12px;color:#a05; margin-top:8px;">Free-form directions work too, e.g. <code>[laughing nervously]</code>. Tip: <code>(paren)</code> sound cues like <code>(laugh)</code> exist but can produce long non-speech — use sparingly. First run loads the model (~20s); generation is slower than realtime.</div>
     </div>
 
     <!-- Style Instructions - always visible but faded when not available -->
@@ -1174,6 +1205,10 @@
       <label>
         <input type="radio" name="cloneModel" value="moss">
         MOSS-TTS-Nano <span class="badge" style="background:#6f42c1">Multilingual</span>
+      </label>
+      <label>
+        <input type="radio" name="cloneModel" value="fish">
+        Fish S2 Pro <span class="badge" style="background:#e83e8c">Expressive</span>
       </label>
     </div>
 
@@ -1372,6 +1407,60 @@
             <p style="color: #666;">No reference voices yet. Create one above!</p>
           </div>
           <button id="mossRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Fish S2 Pro Cloning Tab -->
+    <div class="clone-tab-content" id="fishCloneTabContent">
+      <div id="fishDisabledMessage" class="result error hidden">
+        Fish S2 Pro is not enabled on this server. Set <code>FISH_TTS_ENABLED=1</code> to enable it.
+      </div>
+
+      <div id="fishVoiceCloningContent">
+        <div class="subsection">
+          <h3>Create Fish S2 Voice Clone</h3>
+          <p style="font-size: 14px; color: #666; margin-top: 0;">Zero-shot cloning from 1-30 seconds of clean speech (5-15s recommended) plus its transcript.</p>
+
+          <div class="form-group">
+            <label for="fishCloneName">Clone Name:</label>
+            <input type="text" id="fishCloneName" placeholder="Enter a name (letters, numbers, underscores, hyphens)">
+          </div>
+
+          <div class="controls">
+            <button id="fishRecordCloneBtn">Record Voice Sample</button>
+            <button id="fishStopCloneBtn" style="display: none;">Stop Recording</button>
+            <span style="color: #666; margin: 0 8px;">or</span>
+            <label for="fishUploadCloneFile" class="upload-btn" id="fishUploadCloneLabel">
+              Upload Audio File
+              <input type="file" id="fishUploadCloneFile" accept=".mp3,.wav,.m4a,.mp4,.webm,.ogg,.flac,audio/*" style="display: none;">
+            </label>
+          </div>
+
+          <div class="status" id="fishCloneRecordStatus">Ready to record or upload a voice sample</div>
+          <label>Reference Audio:</label>
+          <audio id="fishCloneRecordedAudio" controls style="display: none;"></audio>
+
+          <div class="form-group" style="margin-top: 12px;">
+            <label for="fishCloneTranscript">Transcript of the reference audio: <span id="fishTranscribeStatus" style="font-weight:normal;color:#666;">(auto-detected on record/upload — edit if needed)</span></label>
+            <textarea id="fishCloneTranscript" rows="2" placeholder="Record or upload audio and it will be transcribed automatically…"></textarea>
+            <button id="fishTranscribeCloneBtn" class="secondary small" style="margin-top: 8px; display: none;">Retry Transcription</button>
+          </div>
+
+          <div class="controls" style="margin-top: 12px;">
+            <button id="fishCreateCloneBtn" disabled>Create Voice Clone</button>
+          </div>
+          <div class="result" id="fishCloneResult">Record or upload a voice sample and enter its transcript to create a clone.</div>
+        </div>
+
+        <div class="divider"></div>
+
+        <div class="subsection">
+          <h3>Your Fish S2 Voice Clones</h3>
+          <div id="fishVoiceCloneList" class="voice-clone-list">
+            <p style="color: #666;">No voice clones yet. Create one above!</p>
+          </div>
+          <button id="fishRefreshClonesBtn" class="secondary small" style="margin-top: 12px;">Refresh List</button>
         </div>
       </div>
     </div>
@@ -1690,6 +1779,7 @@
     // ==================== Model Selection ====================
     const modelRadios = document.querySelectorAll('input[name="ttsModel"]');
     const qwenOptions = document.getElementById('qwenOptions');
+    const fishOptions = document.getElementById('fishOptions');
     const speedControl = document.getElementById('speedControl');
     const voiceCloningSection = document.getElementById('voiceCloningSection');
     const voiceCloningContent = document.getElementById('voiceCloningContent');
@@ -1720,6 +1810,7 @@
 
     function updateModelUI() {
       if (canMakeAuthenticatedCalls()) generateBtn.disabled = false;
+      fishOptions.classList.add('hidden');
       if (currentModel === 'qwen') {
         qwenOptions.classList.remove('hidden');
         speedControl.classList.add('hidden');
@@ -1734,6 +1825,13 @@
         generateBtn.disabled = true;
         voiceSelect.innerHTML = '<option value="">Loading MOSS reference voices…</option>';
         loadMossVoices();
+      } else if (currentModel === 'fish') {
+        qwenOptions.classList.add('hidden');
+        speedControl.classList.add('hidden');
+        fishOptions.classList.remove('hidden');
+        // Fish S2: default voice + any saved clones; expression via inline tags.
+        voiceSelect.innerHTML = '<option value="default">S2 default voice</option>';
+        loadFishVoices(false);
       } else {
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
@@ -1741,6 +1839,19 @@
       }
       updateStyleInstructUI();
     }
+
+    // Insert an expression tag at the cursor in the TTS text box.
+    document.getElementById('fishTagChips')?.addEventListener('click', (e) => {
+      const btn = e.target.closest('.fish-chip');
+      if (!btn) return;
+      const tag = btn.dataset.tag;
+      const start = ttsText.selectionStart ?? ttsText.value.length;
+      const end = ttsText.selectionEnd ?? ttsText.value.length;
+      ttsText.value = ttsText.value.slice(0, start) + tag + ttsText.value.slice(end);
+      const caret = start + tag.length;
+      ttsText.focus();
+      ttsText.setSelectionRange(caret, caret);
+    });
 
     // ==================== Try Another Example ====================
     const sampleTexts = [
@@ -1772,6 +1883,8 @@
         document.getElementById('pocketCloneTabContent').classList.toggle('active', model === 'pocket');
         document.getElementById('qwenCloneTabContent').classList.toggle('active', model === 'qwen');
         document.getElementById('mossCloneTabContent').classList.toggle('active', model === 'moss');
+        document.getElementById('fishCloneTabContent').classList.toggle('active', model === 'fish');
+        if (model === 'fish') loadFishVoices(false);
       });
     });
 
@@ -1873,6 +1986,19 @@
     const startLiveBtn = document.getElementById('startLiveBtn');
     const stopLiveBtn = document.getElementById('stopLiveBtn');
     const liveParakeetBadge = document.getElementById('liveParakeetBadge');
+    const enableLiveBtn = document.getElementById('enableLiveBtn');
+    const disableLiveBtn = document.getElementById('disableLiveBtn');
+    const recordUploadBox = document.getElementById('recordUploadBox');
+    const liveTranscriptionCard = document.getElementById('liveTranscriptionCard');
+
+    // Live transcription is tucked away by default; the "Enable Live Transcribe"
+    // button swaps the record/upload box for the live streaming card.
+    function showLiveTranscribe(show) {
+      liveTranscriptionCard.style.display = show ? '' : 'none';
+      recordUploadBox.style.display = show ? 'none' : '';
+    }
+    enableLiveBtn?.addEventListener('click', () => showLiveTranscribe(true));
+    disableLiveBtn?.addEventListener('click', () => showLiveTranscribe(false));
     const liveStatusDot = document.getElementById('liveStatusDot');
     const liveStatus = document.getElementById('liveStatus');
     const liveTranscriptResult = document.getElementById('liveTranscriptResult');
@@ -2012,6 +2138,10 @@
       startLiveBtn.disabled = !parakeetRealtimeEnabled
         || !canMakeAuthenticatedCalls()
         || liveActive;
+      // Only offer the live toggle when realtime streaming is actually available,
+      // and don't let the user switch away mid-session (finalize first).
+      if (enableLiveBtn) enableLiveBtn.style.display = parakeetRealtimeEnabled ? 'inline-block' : 'none';
+      if (disableLiveBtn) disableLiveBtn.disabled = liveActive;
       liveParakeetBadge.textContent = parakeetRealtimeEnabled
         ? 'Parakeet · WebSocket'
         : 'Parakeet live · unavailable';
@@ -2966,6 +3096,20 @@
       }
     }
 
+    // Grey out + disable an engine's radio in the TTS selector when it's off on
+    // the server (unselectable, with a tooltip explaining why) — keeps disabled
+    // engines from showing confusing "unavailable" states when picked.
+    function setEngineAvailability(radioId, enabled, reason) {
+      const radio = document.getElementById(radioId);
+      if (!radio) return;
+      radio.disabled = !enabled;
+      const label = radio.closest('label');
+      if (label) {
+        label.classList.toggle('model-unavailable', !enabled);
+        label.setAttribute('title', enabled ? '' : reason);
+      }
+    }
+
     function updateMossAvailability() {
       const disabledMessage = document.getElementById('mossDisabledMessage');
       const content = document.getElementById('mossVoiceCloningContent');
@@ -2986,7 +3130,9 @@
           disabledMessage.classList.remove('hidden');
         }
         if (currentModel === 'moss') {
-          voiceSelect.innerHTML = '<option value="">MOSS reference voices unavailable</option>';
+          voiceSelect.innerHTML = !mossEnabled
+            ? '<option value="">MOSS-TTS-Nano is not enabled on this server</option>'
+            : '<option value="">Enter your API key to use MOSS voices</option>';
         }
       } else {
         disabledMessage?.classList.add('hidden');
@@ -2996,8 +3142,8 @@
       if (currentModel === 'moss') {
         generateBtn.disabled = unavailable || mossVoices.length === 0;
       }
-      const label = document.getElementById('mossRadio')?.closest('label');
-      if (label) label.classList.toggle('model-unavailable', !mossEnabled);
+      setEngineAvailability('mossRadio', mossEnabled,
+        'MOSS-TTS-Nano is not enabled on this server (set MOSS_TTS_ENABLED=1).');
     }
 
     function updateMossVoiceList() {
@@ -3044,8 +3190,8 @@
         if (pocketDisabledMessage) pocketDisabledMessage.classList.add('hidden');
         if (pocketContent) pocketContent.classList.remove('hidden');
       }
-      const pocketLabel = document.getElementById('pocketRadio')?.closest('label');
-      if (pocketLabel) pocketLabel.classList.toggle('model-unavailable', !pocketEnabled);
+      setEngineAvailability('pocketRadio', pocketEnabled,
+        'Pocket TTS is not enabled on this server (set POCKET_TTS_ENABLED=1).');
     }
 
     function updatePocketVoiceCloneList() {
@@ -3172,8 +3318,8 @@
         voiceCloningContent.classList.remove('hidden');
         updateVoiceCloningUI();
       }
-      const qwenLabel = document.getElementById('qwenRadio')?.closest('label');
-      if (qwenLabel) qwenLabel.classList.toggle('model-unavailable', !qwenEnabled);
+      setEngineAvailability('qwenRadio', qwenEnabled,
+        'Qwen3-TTS is not enabled on this server (set QWEN_TTS_ENABLED=1).');
     }
 
     function updateVoiceCloningUI() {
@@ -3237,6 +3383,22 @@
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ text: text, voice: voiceId }),
           });
+        } else if (currentModel === 'fish') {
+          ttsStatus.textContent = 'Generating with Fish S2 (first run loads the model; slower than realtime)...';
+          if (selectedVoice.startsWith('fish-clone:')) {
+            const cloneId = selectedVoice.replace('fish-clone:', '');
+            response = await authFetch(`${API_BASE}/fish-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: text }),
+            });
+          } else {
+            response = await authFetch(`${API_BASE}/fish-tts`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ text: text }),
+            });
+          }
         } else if (selectedVoice.startsWith('pocket-clone:')) {
           const cloneId = selectedVoice.replace('pocket-clone:', '');
           response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
@@ -3336,16 +3498,23 @@
         const isQwenClone = selectedVoice.startsWith('clone:');
         const isPocketClone = selectedVoice.startsWith('pocket-clone:');
         const isMossVoice = selectedVoice.startsWith('moss:');
+        const isFish = currentModel === 'fish';
         const usedVoiceDesign = currentModel === 'qwen' && qwenModeSelect.value === 'design';
         const isClone = isQwenClone || isPocketClone;
-        const voiceInfo = usedVoiceDesign
+        const voiceInfo = isFish
+          ? (selectedVoice.startsWith('fish-clone:')
+            ? `Clone: ${selectedVoice.replace('fish-clone:', '')}`
+            : 'Voice: S2 default (expression via inline tags)')
+          : usedVoiceDesign
           ? 'Voice: generated from description'
           : isMossVoice
           ? `Reference voice: ${selectedVoice.replace(/^moss:/, '')}`
           : isClone
           ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
-        const modelUsed = isMossVoice
+        const modelUsed = isFish
+          ? 'Fish Audio S2 Pro (8-bit MLX)'
+          : isMossVoice
           ? 'MOSS-TTS-Nano (Reference)'
           : usedVoiceDesign
             ? 'Qwen3 (VoiceDesign)'
@@ -3678,6 +3847,7 @@
     let pendingDeleteCloneId = null;
     let pendingDeletePocketCloneId = null;
     let pendingDeleteMossVoiceId = null;
+    let pendingDeleteFishCloneId = null;
 
     function confirmDeleteClone(cloneId) {
       pendingDeleteCloneId = cloneId;
@@ -3691,10 +3861,19 @@
       confirmDialog.classList.remove('hidden');
     }
 
+    function confirmDeleteFishClone(cloneId) {
+      pendingDeleteFishCloneId = cloneId;
+      confirmMessage.textContent = `Are you sure you want to delete the Fish S2 voice clone "${cloneId}"? This cannot be undone.`;
+      confirmDialog.classList.remove('hidden');
+    }
+
     confirmYes.addEventListener('click', async () => {
       if (pendingDeleteMossVoiceId) {
         await deleteMossVoice(pendingDeleteMossVoiceId);
         pendingDeleteMossVoiceId = null;
+      } else if (pendingDeleteFishCloneId) {
+        await deleteFishClone(pendingDeleteFishCloneId);
+        pendingDeleteFishCloneId = null;
       } else if (pendingDeletePocketCloneId) {
         await deletePocketVoiceClone(pendingDeletePocketCloneId);
         pendingDeletePocketCloneId = null;
@@ -3710,6 +3889,7 @@
       pendingDeleteCloneId = null;
       pendingDeletePocketCloneId = null;
       pendingDeleteMossVoiceId = null;
+      pendingDeleteFishCloneId = null;
     });
 
     async function deleteVoiceClone(cloneId) {
@@ -3765,6 +3945,22 @@
       }
     }
 
+    async function deleteFishClone(cloneId) {
+      try {
+        const response = await authFetch(`${API_BASE}/fish-tts/voices/clone/${encodeURIComponent(cloneId)}`, {
+          method: 'DELETE',
+        });
+        const data = await response.json();
+        if (response.ok && data.success) {
+          await loadFishVoices();
+        } else {
+          throw new Error(data.message || 'Failed to delete Fish S2 voice clone');
+        }
+      } catch (error) {
+        alert('Error deleting Fish S2 voice clone: ' + error.message);
+      }
+    }
+
     // ==================== Rename Dialog ====================
     const renameDialog = document.getElementById('renameDialog');
     const renameOldName = document.getElementById('renameOldName');
@@ -3814,7 +4010,9 @@
           ? 'pocket-tts'
           : pendingRenameService === 'moss'
             ? 'moss-tts'
-            : 'qwen-tts';
+            : pendingRenameService === 'fish'
+              ? 'fish-tts'
+              : 'qwen-tts';
         const response = await authFetch(`${API_BASE}/${apiBase}/voices/clone/${encodeURIComponent(pendingRenameCloneId)}`, {
           method: 'PATCH',
           headers: {
@@ -3838,6 +4036,8 @@
             await loadPocketVoices();
           } else if (apiBase === 'moss-tts') {
             await loadMossVoices();
+          } else if (apiBase === 'fish-tts') {
+            await loadFishVoices();
           } else {
             await loadQwenVoices();
           }
@@ -4164,6 +4364,259 @@
       pendingDeletePocketCloneId = cloneId;
       confirmMessage.textContent = `Are you sure you want to delete the voice clone "${cloneId}"? This cannot be undone.`;
       confirmDialog.classList.remove('hidden');
+    }
+
+    // ==================== Fish S2 Pro Voice Cloning ====================
+    let fishCloneMediaRecorder = null;
+    let fishCloneAudioChunks = [];
+    let fishCloneAudioBlob = null;
+    let fishCloneAudioFilename = 'reference.webm';
+    let fishClones = [];
+
+    const fishRecordCloneBtn = document.getElementById('fishRecordCloneBtn');
+    const fishStopCloneBtn = document.getElementById('fishStopCloneBtn');
+    const fishUploadCloneFile = document.getElementById('fishUploadCloneFile');
+    const fishCloneRecordStatus = document.getElementById('fishCloneRecordStatus');
+    const fishCloneRecordedAudio = document.getElementById('fishCloneRecordedAudio');
+    const fishCloneName = document.getElementById('fishCloneName');
+    const fishCloneTranscript = document.getElementById('fishCloneTranscript');
+    const fishTranscribeStatus = document.getElementById('fishTranscribeStatus');
+    const fishTranscribeCloneBtn = document.getElementById('fishTranscribeCloneBtn');
+    const fishCreateCloneBtn = document.getElementById('fishCreateCloneBtn');
+    const fishCloneResult = document.getElementById('fishCloneResult');
+    const fishRefreshClonesBtn = document.getElementById('fishRefreshClonesBtn');
+
+    fishRecordCloneBtn?.addEventListener('click', startFishCloneRecording);
+    fishStopCloneBtn?.addEventListener('click', stopFishCloneRecording);
+    fishUploadCloneFile?.addEventListener('change', handleFishFileUpload);
+    fishCreateCloneBtn?.addEventListener('click', createFishVoice);
+    fishTranscribeCloneBtn?.addEventListener('click', transcribeFishAudio);
+    fishRefreshClonesBtn?.addEventListener('click', () => loadFishVoices());
+
+    // Auto-transcribe the reference clip with Parakeet and fill the transcript
+    // field (Fish cloning needs the reference transcript). Mirrors the Qwen flow.
+    async function transcribeFishAudio() {
+      if (!fishCloneAudioBlob) return;
+      fishTranscribeCloneBtn.style.display = 'none';
+      fishTranscribeStatus.innerHTML = '<span class="loading"></span> Transcribing…';
+      fishTranscribeStatus.style.color = '#666';
+      try {
+        const ext = fishCloneAudioFilename.split('.').pop() || 'webm';
+        const formData = new FormData();
+        formData.append('file', fishCloneAudioBlob, `reference.${ext}`);
+        const response = await authFetch(`${API_BASE}/transcribe`, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (response.ok && data.success && data.transcript) {
+          fishCloneTranscript.value = data.transcript;
+          fishTranscribeStatus.textContent = '(auto-detected — edit if needed)';
+          fishTranscribeStatus.style.color = '#666';
+          fishTranscribeCloneBtn.style.display = 'none';
+        } else {
+          throw new Error(data.message || 'Transcription returned no text');
+        }
+      } catch (error) {
+        fishTranscribeStatus.textContent = '(auto-detect failed — type it manually)';
+        fishTranscribeStatus.style.color = '#dc3545';
+        fishTranscribeCloneBtn.style.display = 'inline-block';
+      }
+    }
+
+    function handleFishFileUpload(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const extension = file.name.split('.').pop()?.toLowerCase();
+      if (!['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'flac'].includes(extension)) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Choose an MP3, WAV, M4A, MP4, WebM, OGG, or FLAC file.';
+        return;
+      }
+      if (file.size > 25 * 1024 * 1024) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Reference audio must be 25 MB or smaller.';
+        return;
+      }
+      fishCloneAudioBlob = file;
+      fishCloneAudioFilename = file.name;
+      fishCloneRecordedAudio.src = URL.createObjectURL(file);
+      fishCloneRecordedAudio.style.display = 'block';
+      fishCloneRecordStatus.textContent = `Audio loaded: ${file.name}. The server accepts 1-30 seconds.`;
+      fishCloneResult.className = 'result success';
+      fishCloneResult.textContent = 'Transcribing the reference, then you can create the clone.';
+      fishCreateCloneBtn.disabled = false;
+      transcribeFishAudio();
+    }
+
+    async function startFishCloneRecording() {
+      try {
+        if (!navigator.mediaDevices?.getUserMedia) {
+          throw new Error('Microphone access requires HTTPS or localhost.');
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        const preferredMimeType = ['audio/webm', 'audio/mp4', 'audio/ogg']
+          .find(type => MediaRecorder.isTypeSupported(type));
+        fishCloneMediaRecorder = new MediaRecorder(stream, preferredMimeType ? { mimeType: preferredMimeType } : undefined);
+        fishCloneAudioChunks = [];
+        fishCloneMediaRecorder.ondataavailable = event => {
+          if (event.data.size > 0) fishCloneAudioChunks.push(event.data);
+        };
+        fishCloneMediaRecorder.onstop = () => {
+          const mimeType = fishCloneMediaRecorder.mimeType || fishCloneAudioChunks[0]?.type || 'audio/webm';
+          const extension = mimeType.includes('mp4') ? 'm4a' : mimeType.includes('ogg') ? 'ogg' : 'webm';
+          fishCloneAudioBlob = new Blob(fishCloneAudioChunks, { type: mimeType });
+          fishCloneAudioFilename = `reference.${extension}`;
+          fishCloneRecordedAudio.src = URL.createObjectURL(fishCloneAudioBlob);
+          fishCloneRecordedAudio.style.display = 'block';
+          fishCloneRecordStatus.textContent = 'Voice sample recorded. Transcribing, then enter a name and create the clone.';
+          fishCloneResult.className = 'result success';
+          fishCloneResult.textContent = 'Transcribing the reference…';
+          fishCreateCloneBtn.disabled = false;
+          stream.getTracks().forEach(track => track.stop());
+          transcribeFishAudio();
+        };
+        fishCloneMediaRecorder.start();
+        fishCloneTranscript.value = '';
+        fishTranscribeCloneBtn.style.display = 'none';
+        fishRecordCloneBtn.style.display = 'none';
+        fishStopCloneBtn.style.display = 'inline-block';
+        fishCloneRecordStatus.textContent = 'Recording… 5-15 seconds of clean speech works best.';
+        fishCloneResult.textContent = 'Recording reference audio…';
+        fishCreateCloneBtn.disabled = true;
+      } catch (error) {
+        fishCloneRecordStatus.textContent = 'Error: ' + error.message;
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Failed to access microphone: ' + error.message;
+      }
+    }
+
+    function stopFishCloneRecording() {
+      if (fishCloneMediaRecorder && fishCloneMediaRecorder.state !== 'inactive') {
+        fishCloneMediaRecorder.stop();
+        fishRecordCloneBtn.style.display = 'inline-block';
+        fishStopCloneBtn.style.display = 'none';
+      }
+    }
+
+    async function createFishVoice() {
+      const cloneId = fishCloneName.value.trim().replace(/\s+/g, '_').replace(/[^A-Za-z0-9_-]/g, '');
+      if (!cloneId) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Enter a valid clone name.';
+        return;
+      }
+      if (!fishCloneAudioBlob) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Record or upload a voice sample first.';
+        return;
+      }
+      const transcript = fishCloneTranscript.value.trim();
+      if (!transcript) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Enter the transcript of the reference audio (the exact words spoken).';
+        return;
+      }
+
+      fishCreateCloneBtn.disabled = true;
+      fishCloneRecordStatus.textContent = 'Creating voice clone…';
+      fishCloneResult.innerHTML = '<span class="loading"></span>Loading Fish S2 and encoding the reference…';
+      fishCloneResult.className = 'result';
+
+      try {
+        const formData = new FormData();
+        formData.append('audio', fishCloneAudioBlob, fishCloneAudioFilename);
+        formData.append('transcript', transcript);
+        formData.append('cloneId', cloneId);
+        const response = await authFetch(`${API_BASE}/fish-tts/voices/clone`, { method: 'POST', body: formData });
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.message || 'Failed to create Fish S2 voice clone');
+        }
+        fishCloneResult.className = 'result success';
+        fishCloneResult.textContent = `Voice clone "${data.cloneId}" created. Select Fish S2 Pro above and pick it from the Voice dropdown.`;
+        fishCloneRecordStatus.textContent = 'Voice clone created!';
+        fishCloneName.value = '';
+        fishCloneTranscript.value = '';
+        fishCloneAudioBlob = null;
+        fishCloneRecordedAudio.style.display = 'none';
+        fishUploadCloneFile.value = '';
+        await loadFishVoices();
+      } catch (error) {
+        fishCloneResult.className = 'result error';
+        fishCloneResult.textContent = 'Error: ' + error.message;
+        fishCloneRecordStatus.textContent = 'Voice clone creation failed';
+        fishCreateCloneBtn.disabled = false;
+      }
+    }
+
+    async function loadFishVoices(showAuthError = true) {
+      try {
+        const response = await authFetch(`${API_BASE}/fish-tts/voices`, {}, showAuthError);
+        if (!response.ok) {
+          fishClones = [];
+          updateFishAvailability(response.status !== 404);
+          return;
+        }
+        const data = await response.json();
+        fishClones = (data.clones || []).sort((a, b) => a.localeCompare(b));
+
+        if (currentModel === 'fish') {
+          const previous = voiceSelect.value;
+          voiceSelect.innerHTML = '<option value="default">S2 default voice</option>';
+          fishClones.forEach(clone => {
+            const option = document.createElement('option');
+            option.value = `fish-clone:${clone}`;
+            option.textContent = `Clone: ${clone}`;
+            voiceSelect.appendChild(option);
+          });
+          if (previous && [...voiceSelect.options].some(o => o.value === previous)) {
+            voiceSelect.value = previous;
+          }
+        }
+        updateFishAvailability(true);
+        updateFishVoiceList();
+      } catch (error) {
+        console.error('Failed to load Fish S2 voices:', error);
+        fishClones = [];
+        updateFishAvailability(false);
+      }
+    }
+
+    function updateFishAvailability(enabled) {
+      const disabledMessage = document.getElementById('fishDisabledMessage');
+      const content = document.getElementById('fishVoiceCloningContent');
+      const hasVoiceAccess = canUseProtectedVoiceFeatures();
+      const unavailable = !enabled || !hasVoiceAccess;
+      if (unavailable) {
+        content?.classList.add('hidden');
+        if (disabledMessage) {
+          disabledMessage.innerHTML = !enabled
+            ? 'Fish S2 Pro is not enabled on this server. Set <code>FISH_TTS_ENABLED=1</code> to enable it.'
+            : 'Enter your API key above to create and use Fish S2 voice clones.';
+          disabledMessage.classList.remove('hidden');
+        }
+      } else {
+        disabledMessage?.classList.add('hidden');
+        content?.classList.remove('hidden');
+      }
+      setEngineAvailability('fishRadio', enabled,
+        'Fish S2 Pro is not enabled on this server (set FISH_TTS_ENABLED=1).');
+    }
+
+    function updateFishVoiceList() {
+      const listContainer = document.getElementById('fishVoiceCloneList');
+      if (!listContainer) return;
+      if (fishClones.length === 0) {
+        listContainer.innerHTML = '<p style="color: #666;">No voice clones yet. Create one above!</p>';
+        return;
+      }
+      listContainer.innerHTML = fishClones.map(clone => `
+        <div class="voice-clone-item">
+          <span class="clone-name">${escapeHtml(clone)}</span>
+          <div class="clone-actions">
+            <button class="secondary small" onclick="openRenameDialog('${escapeHtml(clone)}', 'fish')">Rename</button>
+            <button class="danger small" onclick="confirmDeleteFishClone('${escapeHtml(clone)}')">Delete</button>
+          </div>
+        </div>
+      `).join('');
     }
 
     // ==================== Pocket TTS Import ====================

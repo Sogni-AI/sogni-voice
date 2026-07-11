@@ -92,6 +92,7 @@ In `.env`:
 ```
 FISH_TTS_ENABLED=1
 FISH_TTS_MAX_TOKENS=1024
+# FISH_TTS_MAX_BYTES_PER_CHUNK=200
 # PREWARM_FISH_TTS=0   # load the ~7 GB model into the daemon at server startup
 ```
 
@@ -112,6 +113,9 @@ first use (~a few seconds when cached); generation is slower than realtime.
   length, so short prompts aren't affected. Raise/lower it to taste. (The daemon
   propagates this to the vendored server's `FISH_MLX_MAX_TOKENS`, whose own default
   of 256 would otherwise cap all output at ~11s.)
+- Ordinary prose is split at paragraph and sentence boundaries, up to
+  `FISH_TTS_MAX_BYTES_PER_CHUNK` UTF-8 bytes per chunk (default `200`), then joined
+  into one WAV. This avoids an early end-of-speech token dropping later paragraphs.
 - Zero-shot cloning can intermittently "run away" (repeat words / emit non-speech
   filler until it hits the ceiling). The clone path detects a ceiling-hit without a
   natural stop and **retries with tighter sampling**; clean output returns on the

@@ -129,4 +129,31 @@ export const config = {
     preWarmVoiceDesign: parseEnvBool(process.env.PREWARM_QWEN_TTS_VOICE_DESIGN, false),
     voiceClonesDir: process.env.QWEN_TTS_VOICE_CLONES_DIR || './voice_clones',
   },
+  // Experimental: Fish Audio S2 Pro (8-bit MLX) expressive TTS.
+  // Runs scripts/fish_tts_daemon.py (stdin/stdout, like the other engines),
+  // which drives the vendored MLX model in vendor/fish-s2-mlx. Emotion/style is
+  // inline in the text via [bracket] tags; supports zero-shot voice cloning.
+  // NOTE: the S2 weights are non-commercial (Fish Audio Research License) —
+  // local evaluation only. Off by default.
+  fishTts: {
+    enabled: parseEnvBool(process.env.FISH_TTS_ENABLED, false),
+    pythonPath: process.env.FISH_TTS_PYTHON_PATH || './.venv-fish-tts/bin/python3',
+    // Vendored MLX inference repo; added to PYTHONPATH so `local_mlx` imports.
+    serverDir: process.env.FISH_TTS_SERVER_DIR || './vendor/fish-s2-mlx',
+    modelPath: process.env.FISH_TTS_MODEL_PATH
+      || './checkpoints/fish-audio-s2-pro-8bit-mlx-normalized',
+    modelId: process.env.FISH_TTS_MODEL_ID || 'fish-audio-s2-pro-8bit-mlx',
+    defaultVoice: process.env.FISH_TTS_DEFAULT_VOICE || 'default',
+    voiceClonesDir: process.env.FISH_TTS_VOICE_CLONES_DIR || './fish_voice_clones',
+    // Token ceiling ~= max audio length (~21.5 semantic tokens/sec of audio).
+    // The real per-request cap still scales down to the text length. 2600 ~= 2 min.
+    maxTokens: parseInt(process.env.FISH_TTS_MAX_TOKENS, 10) || 2600,
+    // Generation is slower than realtime on Apple Silicon; be generous.
+    timeout: parseInt(process.env.FISH_TTS_TIMEOUT, 10) || 300000,
+    timeoutPerChar: parseInt(process.env.FISH_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
+    timeoutMax: parseInt(process.env.FISH_TTS_TIMEOUT_MAX, 10) || 900000,
+    // Startup eagerly loads ~7 GB of weights; allow time for the daemon to boot.
+    daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10) || 240000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_FISH_TTS, false),
+  },
 };

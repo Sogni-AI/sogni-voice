@@ -5,6 +5,7 @@ import { qwenTtsRoutes } from './qwenTts.js';
 import { pocketTtsRoutes } from './pocketTts.js';
 import { qwenAsrRoutes } from './qwenAsr.js';
 import { mossTtsRoutes } from './mossTts.js';
+import { fishTtsRoutes } from './fishTts.js';
 import { staticRoutes } from './static.js';
 import { authRoutes } from './auth.js';
 
@@ -16,6 +17,7 @@ export const routes = [
   ...pocketTtsRoutes,
   ...qwenAsrRoutes,
   ...mossTtsRoutes,
+  ...fishTtsRoutes,
   ...authRoutes,
   ...staticRoutes,
 ];

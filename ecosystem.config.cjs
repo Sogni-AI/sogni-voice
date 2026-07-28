@@ -38,5 +38,24 @@ module.exports = {
         ORT_INTER_OP_NUM_THREADS: '1', // Keep sequential between operations
       },
     },
+    {
+      name: 'sogni-speech-worker',
+      script: 'src/network/index.js',
+      exec_mode: 'fork',
+      instances: 1,
+      autorestart: true,
+      watch: false,
+      // No cron_restart: a scheduled bounce would abort paid in-flight jobs.
+      // Must exceed SPEECH_WORKER_DRAIN_TIMEOUT_MS so PM2 lets the drain finish.
+      kill_timeout: 130000,
+      env: {
+        NODE_ENV: 'development',
+        SOGNI_NETWORK_WORKER: 'true',
+      },
+      env_production: {
+        NODE_ENV: 'production',
+        SOGNI_NETWORK_WORKER: 'true',
+      },
+    },
   ],
 };

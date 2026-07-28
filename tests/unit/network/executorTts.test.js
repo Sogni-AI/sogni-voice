@@ -101,6 +101,33 @@ describe('SpeechExecutor TTS', () => {
     expect(options.speed).toBe(config.tts.defaultSpeed);
   });
 
+  // The HTTP route rejects an out-of-range speed at the edge
+  // (Joi .min(0.5).max(2.0), src/routes/tts.js:35); a broker job reaches the daemon
+  // with no such gate, so the executor has to apply the same range itself.
+  it('rejects a speed outside the 0.5-2.0 range before synthesizing', async () => {
+    const { executor, ttsService } = setup();
+    const request = job({ params: { text: 'Too fast.', speed: 3 } });
+    executor.accept(request);
+
+    await expect(executor.execute(request)).rejects.toMatchObject({
+      code: 'invalid_request',
+      message: 'speed must be between 0.5 and 2.0',
+    });
+    expect(ttsService.generate).not.toHaveBeenCalled();
+    expect(executor.activeRequests).toBe(0);
+  });
+
+  it('passes an in-range speed through to the engine', async () => {
+    const { executor, ttsService } = setup();
+    const request = job({ params: { text: 'Just right.', speed: 1.5 } });
+    executor.accept(request);
+
+    await executor.execute(request);
+
+    const [, options] = ttsService.generate.mock.calls[0];
+    expect(options.speed).toBe(1.5);
+  });
+
   it('routes qwen3-tts-preset to the Qwen base service', async () => {
     const { executor, qwenTtsService, ttsService } = setup();
     const request = job({
@@ -175,6 +202,24 @@ describe('SpeechExecutor TTS', () => {
     );
 
     await expect(executor.execute(request)).rejects.toMatchObject({ code: 'upload_failed' });
+  });
+
+  // An adapter can resolve successfully having written a header-only file. Settling
+  // that as a result would hand the broker a billable uploadedKey pointing at silence.
+  it('fails the job when synthesis produced an empty file', async () => {
+    const { executor, artifacts } = setup();
+    const request = job();
+    executor.accept(request);
+    artifacts.uploadFile.mockResolvedValueOnce({
+      uploadedKey: 'speech/out/job-tts-1.wav',
+      bytes: 0,
+    });
+
+    await expect(executor.execute(request)).rejects.toMatchObject({
+      code: 'tts_failed',
+      message: 'Synthesis produced empty audio',
+    });
+    expect(executor.activeRequests).toBe(0);
   });
 
   it('skips the upload when the job was aborted during synthesis', async () => {

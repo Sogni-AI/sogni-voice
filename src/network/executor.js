@@ -204,12 +204,27 @@ export class SpeechExecutor {
       throw new JobError('invalid_request', 'TTS jobRequest requires output.uploadUrl');
     }
 
+    // Only Kokoro has a rate control, and the broker applies no bounds of its own.
+    // The HTTP route gates the same range at the edge (Joi .min(0.5).max(2.0),
+    // src/routes/tts.js:35), so an out-of-range job has to fail here — before
+    // synthesis, since a rejected request must not be billed.
+    const hasSpeed = job.params.speed !== undefined
+      && job.params.speed !== null
+      && job.params.speed !== '';
+    let speed = config.tts.defaultSpeed;
+    if (entry.model.engine === 'kokoro' && hasSpeed) {
+      speed = Number(job.params.speed);
+      if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
+        throw new JobError('invalid_request', 'speed must be between 0.5 and 2.0');
+      }
+    }
+
     const outputPath = `${tempDir}/output.wav`;
     try {
       if (entry.model.engine === 'kokoro') {
         await this.ttsService.generate(text, {
           voice: job.params.voice || config.tts.defaultVoice,
-          speed: Number(job.params.speed) || config.tts.defaultSpeed,
+          speed,
           outputPath,
         });
       } else {
@@ -233,6 +248,13 @@ export class SpeechExecutor {
       uploaded = await this.artifacts.uploadFile(job.output.uploadUrl, outputPath);
     } catch (error) {
       throw new JobError('upload_failed', error.message);
+    }
+
+    // An adapter can resolve having written a header-only file. Checked outside the
+    // catch above so it reports as a synthesis fault rather than an upload one, and
+    // so no result — and no charge — settles for silence.
+    if (uploaded.bytes === 0) {
+      throw new JobError('tts_failed', 'Synthesis produced empty audio');
     }
 
     return {

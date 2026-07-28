@@ -175,6 +175,41 @@ describe('SpeechExecutor governor', () => {
     expect(makeExecutor().abort('never-seen')).toBe(false);
   });
 
+  // Aborting frees the slot while the uncancellable adapter call keeps running, so
+  // the broker can re-issue the same jobID before that first run settles. When it
+  // finally does, its release must not evict the replacement job's slot.
+  it('ignores a stale release from a run whose jobID was aborted and re-accepted', () => {
+    const executor = makeExecutor({ maxConcurrentJobs: 4 });
+    executor.accept(sttJob('j1'));
+    const originalEntry = executor.activeJobs.get('j1');
+
+    executor.abort('j1');
+    executor.accept(sttJob('j1'));
+    const replacementEntry = executor.activeJobs.get('j1');
+    expect(replacementEntry).not.toBe(originalEntry);
+
+    executor._release('j1', originalEntry);
+
+    expect(executor.activeRequests).toBe(1);
+    expect(executor.modelCounts.get('parakeet-tdt')).toBe(1);
+    expectJobError(
+      () => executor.accept(sttJob('j2')),
+      'capacity_exceeded',
+      'Model parakeet-tdt is at capacity (1 concurrent jobs)',
+    );
+  });
+
+  it('still releases when the caller passes the entry that is actually current', () => {
+    const executor = makeExecutor();
+    executor.accept(sttJob('j1'));
+    const entry = executor.activeJobs.get('j1');
+
+    executor._release('j1', entry);
+
+    expect(executor.activeRequests).toBe(0);
+    expect(executor.modelCounts.has('parakeet-tdt')).toBe(false);
+  });
+
   it('refuses new jobs while draining', () => {
     const executor = makeExecutor();
     executor.startDrain();

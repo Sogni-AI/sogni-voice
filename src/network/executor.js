@@ -130,9 +130,14 @@ export class SpeechExecutor {
     return model;
   }
 
-  _release(jobID) {
+  // `expectedEntry` guards against a stale release: abort() frees the slot while the
+  // uncancellable adapter call is still running, so the broker can re-issue the same
+  // jobID before that first run settles. Releasing by ID alone would then evict the
+  // replacement job and let the worker over-admit past the model's maxConcurrent.
+  _release(jobID, expectedEntry = null) {
     const entry = this.activeJobs.get(jobID);
     if (!entry) return;
+    if (expectedEntry && entry !== expectedEntry) return;
 
     this.activeJobs.delete(jobID);
     const remaining = (this.modelCounts.get(entry.model.id) || 1) - 1;
@@ -145,7 +150,7 @@ export class SpeechExecutor {
     if (!entry) return false;
 
     entry.aborted = true;
-    this._release(jobID);
+    this._release(jobID, entry);
     return true;
   }
 

@@ -195,6 +195,52 @@ export class SpeechExecutor {
     };
   }
 
+  async _runTts(job, entry, tempDir) {
+    const text = typeof job.params?.text === 'string' ? job.params.text.trim() : '';
+    if (!text) {
+      throw new JobError('invalid_request', 'TTS jobRequest requires params.text');
+    }
+    if (!job.output || typeof job.output.uploadUrl !== 'string') {
+      throw new JobError('invalid_request', 'TTS jobRequest requires output.uploadUrl');
+    }
+
+    const outputPath = `${tempDir}/output.wav`;
+    try {
+      if (entry.model.engine === 'kokoro') {
+        await this.ttsService.generate(text, {
+          voice: job.params.voice || config.tts.defaultVoice,
+          speed: Number(job.params.speed) || config.tts.defaultSpeed,
+          outputPath,
+        });
+      } else {
+        if (!this.qwenTtsService) {
+          throw new Error('Qwen preset TTS engine is not configured');
+        }
+        await this.qwenTtsService.generate(text, {
+          voice: job.params.voice || config.qwenTts.defaultVoice,
+          language: job.params.language || config.qwenTts.defaultLanguage,
+          outputPath,
+        });
+      }
+    } catch (error) {
+      throw new JobError('tts_failed', error.message);
+    }
+
+    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
+
+    let uploaded;
+    try {
+      uploaded = await this.artifacts.uploadFile(job.output.uploadUrl, outputPath);
+    } catch (error) {
+      throw new JobError('upload_failed', error.message);
+    }
+
+    return {
+      payload: { uploadedKey: uploaded.uploadedKey },
+      meta: { charCount: text.length },
+    };
+  }
+
   // `expectedEntry` guards against a stale release: abort() frees the slot while the
   // uncancellable adapter call is still running, so the broker can re-issue the same
   // jobID before that first run settles. Releasing by ID alone would then evict the

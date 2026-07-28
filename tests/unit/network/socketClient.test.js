@@ -136,6 +136,51 @@ describe('SogniSocketClient', () => {
     expect(server.upgradeHeaders.length).toBe(1);
   });
 
+  it('survives a second connect() while the first handshake is in flight', async () => {
+    client = makeClient();
+    client.connect();
+    // Tears down a still-CONNECTING socket: ws aborts the handshake and emits a
+    // deferred 'error', which is an unhandled 'error' unless we keep a listener.
+    client.connect();
+
+    await waitFor(() => client.connected);
+    expect(client.send('workerInfo', {})).toBe(true);
+    await waitFor(() => server.received.length === 1);
+    expect(server.received[0].type).toBe('workerInfo');
+  });
+
+  it('keeps the socket alive when a frame listener throws', async () => {
+    client = makeClient();
+    const seen = [];
+    client.on('frame', (type) => {
+      seen.push(type);
+      if (type === 'boom') throw new Error('listener exploded');
+    });
+    client.connect();
+    await waitFor(() => client.connected);
+
+    server.send('boom', {});
+    await waitFor(() => seen.length === 1);
+    server.send('authenticated', {});
+
+    await waitFor(() => seen.length === 2);
+    expect(seen).toEqual(['boom', 'authenticated']);
+    expect(client.connected).toBe(true);
+  });
+
+  it('still reconnects when a close listener throws', async () => {
+    client = makeClient();
+    client.on('close', () => {
+      throw new Error('close listener exploded');
+    });
+    client.connect();
+    await waitFor(() => client.connected);
+
+    server.closeClients(1012, 'server restart');
+    await waitFor(() => server.upgradeHeaders.length === 2);
+    await waitFor(() => client.connected);
+  });
+
   it('drops malformed frames without throwing', async () => {
     client = makeClient();
     const frames = [];

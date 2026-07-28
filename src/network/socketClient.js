@@ -44,10 +44,26 @@ export class SogniSocketClient extends EventEmitter {
     };
   }
 
+  // Listeners live outside our control once a frame is handed off, so a throwing
+  // listener must never escape into ws's internals: it would either kill the
+  // process or, on the close path, skip the reconnect and strand the worker.
+  safeEmit(event, ...args) {
+    try {
+      this.emit(event, ...args);
+    } catch (error) {
+      this.logger.error(`[speech-worker] ${event} listener threw: ${error.message}`);
+    }
+  }
+
   connect() {
     if (this.ws) {
-      this.ws.removeAllListeners();
-      this.ws.terminate();
+      const stale = this.ws;
+      stale.removeAllListeners();
+      // terminate() on a CONNECTING socket aborts the handshake and emits 'error'
+      // on the next tick; with no listener left that is an unhandled 'error' and
+      // the worker dies. Keep a no-op listener on the socket we are discarding.
+      stale.on('error', () => {});
+      stale.terminate();
       this.ws = null;
     }
 
@@ -61,7 +77,7 @@ export class SogniSocketClient extends EventEmitter {
       this.connected = true;
       this.reconnectDelay = this.reconnectInitialDelayMs;
       this.logger.log('[speech-worker] Socket open');
-      this.emit('open');
+      this.safeEmit('open');
     });
 
     ws.on('message', (raw) => {
@@ -72,14 +88,14 @@ export class SogniSocketClient extends EventEmitter {
         this.logger.error(`[speech-worker] Dropping malformed frame: ${error.message}`);
         return;
       }
-      this.emit('frame', frame.type, frame.data);
+      this.safeEmit('frame', frame.type, frame.data);
     });
 
     ws.on('close', (code, reason) => {
       this.connected = false;
       const reasonText = reason ? reason.toString() : '';
       this.logger.log(`[speech-worker] Socket closed: code=${code} reason=${reasonText}`);
-      this.emit('close', code, reasonText);
+      this.safeEmit('close', code, reasonText);
 
       if (code === AUTH_FAILURE_CLOSE_CODE) {
         this.logger.error('[speech-worker] Broker rejected our API key (4021); not retrying');
@@ -94,7 +110,7 @@ export class SogniSocketClient extends EventEmitter {
     // 'error' with no listener would crash the process.
     ws.on('error', (error) => {
       this.logger.error(`[speech-worker] Socket error: ${error.message}`);
-      this.emit('socketError', error);
+      this.safeEmit('socketError', error);
     });
   }
 

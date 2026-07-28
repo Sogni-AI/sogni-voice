@@ -5,11 +5,24 @@ import { pipeline } from 'node:stream/promises';
 
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// An error response still carries a body, and an undrained body pins its socket
+// until GC. Every non-2xx path has to release the stream before throwing.
+async function drainBody(response) {
+  try {
+    await response.body?.cancel();
+  } catch {
+    // Already closed or errored; there is nothing left to release.
+  }
+}
+
+const isAbort = (error, signal) => Boolean(signal?.aborted) || error?.name === 'AbortError';
+
 export async function downloadToFile(url, destPath, options = {}) {
   const { fetchImpl = fetch, signal } = options;
 
   const response = await fetchImpl(url, { method: 'GET', signal });
   if (!response.ok) {
+    await drainBody(response);
     throw new Error(`Input download failed with HTTP ${response.status}`);
   }
 
@@ -51,14 +64,21 @@ export async function uploadFile(uploadUrl, filePath, options = {}) {
         signal,
       });
       if (!response.ok) {
+        await drainBody(response);
         throw new Error(`Upload failed with HTTP ${response.status}`);
       }
       return { uploadedKey: uploadKeyFromUrl(uploadUrl), bytes: body.length };
     } catch (error) {
       lastError = error;
+      // An abort is a decision, not a transient fault. Unwind at once and let the
+      // original error through, so a caller that cancelled the job can tell its
+      // own timeout apart from a flaky network.
+      if (isAbort(error, signal)) throw error;
       if (attempt < retries) await sleep(retryDelayMs * attempt);
     }
   }
 
-  throw new Error(`Upload failed after ${retries} attempts: ${lastError.message}`);
+  throw new Error(`Upload failed after ${retries} attempts: ${lastError.message}`, {
+    cause: lastError,
+  });
 }

@@ -50,6 +50,16 @@ describe('artifacts', () => {
         downloadToFile('https://s3.test/in/clip.wav', join(tempDir, 'empty.wav'), { fetchImpl }),
       ).rejects.toThrow('Input download produced an empty file');
     });
+
+    it('drains the response body before throwing on a non-2xx', async () => {
+      const cancel = vi.fn(async () => {});
+      const fetchImpl = vi.fn(async () => ({ ok: false, status: 500, body: { cancel } }));
+
+      await expect(
+        downloadToFile('https://s3.test/in/clip.wav', join(tempDir, 'x.wav'), { fetchImpl }),
+      ).rejects.toThrow('Input download failed with HTTP 500');
+      expect(cancel).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('uploadKeyFromUrl', () => {
@@ -105,6 +115,74 @@ describe('artifacts', () => {
         uploadFile('https://bucket.s3.test/out/a.wav', filePath, { fetchImpl, retryDelayMs: 1 }),
       ).rejects.toThrow('Upload failed after 3 attempts: Upload failed with HTTP 503');
       expect(fetchImpl).toHaveBeenCalledTimes(3);
+    });
+
+    it('preserves the underlying failure as the cause when it gives up', async () => {
+      const filePath = join(tempDir, 'out.wav');
+      await writeFile(filePath, 'abc');
+      const boom = new Error('ECONNRESET');
+      const fetchImpl = vi.fn(async () => {
+        throw boom;
+      });
+
+      const error = await uploadFile('https://bucket.s3.test/out/a.wav', filePath, {
+        fetchImpl,
+        retryDelayMs: 1,
+      }).catch((caught) => caught);
+
+      expect(error.message).toBe('Upload failed after 3 attempts: ECONNRESET');
+      expect(error.cause).toBe(boom);
+    });
+
+    it('unwinds immediately when the signal is aborted, keeping the abort identity', async () => {
+      const filePath = join(tempDir, 'out.wav');
+      await writeFile(filePath, 'abc');
+      const controller = new AbortController();
+      controller.abort();
+      const fetchImpl = vi.fn(async () => {
+        throw controller.signal.reason;
+      });
+
+      const error = await uploadFile('https://bucket.s3.test/out/a.wav', filePath, {
+        fetchImpl,
+        signal: controller.signal,
+        // Large enough that a retry would be obvious in the runtime.
+        retryDelayMs: 5000,
+      }).catch((caught) => caught);
+
+      expect(error.name).toBe('AbortError');
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('does not retry an AbortError even without a signal', async () => {
+      const filePath = join(tempDir, 'out.wav');
+      await writeFile(filePath, 'abc');
+      const abortError = Object.assign(new Error('The operation was aborted'), {
+        name: 'AbortError',
+      });
+      const fetchImpl = vi.fn(async () => {
+        throw abortError;
+      });
+
+      const error = await uploadFile('https://bucket.s3.test/out/a.wav', filePath, {
+        fetchImpl,
+        retryDelayMs: 5000,
+      }).catch((caught) => caught);
+
+      expect(error).toBe(abortError);
+      expect(fetchImpl).toHaveBeenCalledTimes(1);
+    });
+
+    it('drains each failed response body before retrying', async () => {
+      const filePath = join(tempDir, 'out.wav');
+      await writeFile(filePath, 'abc');
+      const cancel = vi.fn(async () => {});
+      const fetchImpl = vi.fn(async () => ({ ok: false, status: 503, body: { cancel } }));
+
+      await expect(
+        uploadFile('https://bucket.s3.test/out/a.wav', filePath, { fetchImpl, retryDelayMs: 1 }),
+      ).rejects.toThrow('Upload failed after 3 attempts');
+      expect(cancel).toHaveBeenCalledTimes(3);
     });
   });
 });

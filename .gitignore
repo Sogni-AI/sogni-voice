@@ -34,3 +34,6 @@ moss_voice_clones/*
 vendor/fish-s2-mlx/
 checkpoints/
 fish_voice_clones/*
+
+# Sogni network worker identity (per-machine, not shared)
+.sogni-worker-id

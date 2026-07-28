@@ -156,4 +156,19 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10) || 240000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_FISH_TTS, false),
   },
+  // Outbound Sogni network worker (src/network/). Runs as its own process; the
+  // local REST API is unaffected when this is disabled.
+  networkWorker: {
+    enabled: parseEnvBool(process.env.SOGNI_NETWORK_WORKER, false),
+    sogniEnv: process.env.SOGNI_ENV || 'staging',
+    apiKey: process.env.SOGNI_WORKER_API_KEY || null,
+    maxConcurrentJobs: parseInt(process.env.SPEECH_WORKER_MAX_CONCURRENT, 10) || 2,
+    capacityIntervalMs: parseInt(process.env.SPEECH_WORKER_CAPACITY_INTERVAL_MS, 10) || 30000,
+    reconnectInitialDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_DELAY_MS, 10) || 5000,
+    reconnectMaxDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_MAX_DELAY_MS, 10) || 60000,
+    defaultJobTimeoutMs: parseInt(process.env.SPEECH_WORKER_JOB_TIMEOUT_MS, 10) || 300000,
+    drainTimeoutMs: parseInt(process.env.SPEECH_WORKER_DRAIN_TIMEOUT_MS, 10) || 120000,
+    preWarm: parseEnvBool(process.env.SPEECH_WORKER_PREWARM, true),
+    workerIdFile: process.env.SOGNI_WORKER_ID_FILE || '.sogni-worker-id',
+  },
 };

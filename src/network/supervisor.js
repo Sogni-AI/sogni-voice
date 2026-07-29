@@ -132,9 +132,10 @@ export class SpeechWorkerSupervisor {
     this.client.send('jobState', { jobID: job.jobID, type: 'accepted' });
     this.client.send('jobState', { jobID: job.jobID, type: 'started' });
 
-    // Liveness keepalive: the broker refreshes the job's lastActivityTime on
-    // every jobProgress frame and reaps (and refunds) jobs that go silent, so
-    // a long synthesis MUST pulse even though the daemons report no progress.
+    // Progress keepalive: the broker records lastActivityTime from these frames
+    // for diagnostics only — its reaper is strictly deadline-based (startTime +
+    // timeoutMs), so pulsing cannot extend a job's life. Kept because a silent
+    // multi-minute synthesis is undebuggable in an incident without it.
     const startedAt = Date.now();
     const progressTimer = setInterval(() => {
       const elapsed = Date.now() - startedAt;

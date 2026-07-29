@@ -47,19 +47,46 @@ const preWarm = async () => {
 };
 
 let shuttingDown = false;
+let preWarmInFlight = null;
+
 const gracefulShutdown = async (signal) => {
   if (shuttingDown) return;
   shuttingDown = true;
 
   console.log(`\n[speech-worker] Shutting down gracefully... (received ${signal})`);
-  await supervisor.shutdown();
+
+  // Every step runs even when an earlier one throws: a supervisor drain that
+  // rejects must not strand the Python daemons or leave temp dirs on disk, since
+  // nothing after this process gets another chance to clean them up.
+  let failed = false;
+  const settle = async (label, step) => {
+    try {
+      await step();
+    } catch (error) {
+      failed = true;
+      console.error(`[speech-worker] ${label} failed during shutdown:`, error);
+    }
+  };
+
+  // A signal landing mid-pre-warm would otherwise race daemon startup: initialize()
+  // is still spawning while shutdown() looks for a handle that does not exist yet,
+  // and the Python child outlives us. Wait it out first.
+  if (preWarmInFlight) {
+    const pending = preWarmInFlight;
+    console.log('[speech-worker] Waiting for pre-warm to finish before shutdown...');
+    await settle('Pre-warm', () => pending);
+  }
+
+  await settle('Supervisor drain', () => supervisor.shutdown());
+
   await Promise.all([
-    tempFileManager.cleanupAll(),
-    transcriptionService.shutdown(),
-    ttsService.shutdown(),
-    qwenTtsBaseService.shutdown(),
+    settle('Temp file cleanup', () => tempFileManager.cleanupAll()),
+    settle('Transcription daemon shutdown', () => transcriptionService.shutdown()),
+    settle('Kokoro TTS daemon shutdown', () => ttsService.shutdown()),
+    settle('Qwen TTS Base daemon shutdown', () => qwenTtsBaseService.shutdown()),
   ]);
-  process.exit(0);
+
+  process.exit(failed ? 1 : 0);
 };
 
 process.on('SIGINT', () => gracefulShutdown('SIGINT'));
@@ -70,5 +97,13 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
-supervisor.start();
-await preWarm();
+// Pre-warm before connecting, never after: start() opens the socket and sends
+// workerInfo, and the broker can dispatch a job the moment it lands. Advertising
+// capacity against cold weights buys a paid job a multi-minute model load inside
+// its own deadline.
+preWarmInFlight = preWarm();
+await preWarmInFlight;
+preWarmInFlight = null;
+
+// A signal during pre-warm already ran the shutdown path; don't connect behind it.
+if (!shuttingDown) supervisor.start();

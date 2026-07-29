@@ -126,6 +126,70 @@ describe('SogniSocketClient', () => {
     expect(server.upgradeHeaders.length).toBe(1);
   });
 
+  it('flags exit code 102 and stops retrying on 4021 without a hard exit', async () => {
+    const previousExitCode = process.exitCode;
+    const hardExit = vi.fn();
+    try {
+      // Default onAuthFailure (no injected override): the graceful path.
+      client = makeClient({ hardExit, authFailureExitGraceMs: 30 });
+      client.connect();
+      await waitFor(() => client.connected);
+
+      server.closeClients(4021, 'bad api key');
+      await waitFor(() => process.exitCode === 102);
+
+      expect(hardExit).not.toHaveBeenCalled();
+      expect(client.intentionalClose).toBe(true);
+
+      // Vitest's own loop keeps the process alive, so the backstop always fires
+      // here; in the worker it only fires when a daemon handle outlives the grace.
+      await waitFor(() => hardExit.mock.calls.length === 1);
+      expect(hardExit).toHaveBeenCalledWith(102);
+      expect(server.upgradeHeaders.length).toBe(1);
+    } finally {
+      process.exitCode = previousExitCode;
+    }
+  });
+
+  it('terminates and reconnects when the broker goes silent', async () => {
+    // The mock server never pings, so every check after the first is idle.
+    client = makeClient({ inboundIdleCheckIntervalMs: 10, inboundIdleThresholdMs: 25 });
+    client.connect();
+    await waitFor(() => client.connected);
+    expect(server.upgradeHeaders.length).toBe(1);
+
+    await waitFor(() => server.upgradeHeaders.length === 2);
+    await waitFor(() => client.connected);
+  });
+
+  it('leaves the socket alone while frames keep arriving', async () => {
+    client = makeClient({ inboundIdleCheckIntervalMs: 25, inboundIdleThresholdMs: 120 });
+    client.connect();
+    await waitFor(() => client.connected);
+
+    const chatter = setInterval(() => server.send('speechCapacityRequest', {}), 20);
+    try {
+      await new Promise((resolve) => setTimeout(resolve, 200));
+    } finally {
+      clearInterval(chatter);
+    }
+
+    expect(server.upgradeHeaders.length).toBe(1);
+    expect(client.connected).toBe(true);
+  });
+
+  it('stops the watchdog on an intentional close', async () => {
+    client = makeClient({ inboundIdleCheckIntervalMs: 10, inboundIdleThresholdMs: 25 });
+    client.connect();
+    await waitFor(() => client.connected);
+
+    client.close();
+    expect(client.inboundTimer).toBeNull();
+
+    await new Promise((resolve) => setTimeout(resolve, 80));
+    expect(server.upgradeHeaders.length).toBe(1);
+  });
+
   it('does not reconnect after an intentional close', async () => {
     client = makeClient();
     client.connect();

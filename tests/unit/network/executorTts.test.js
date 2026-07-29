@@ -87,6 +87,34 @@ describe('SpeechExecutor TTS', () => {
     });
   });
 
+  // The broker meters params.text as it arrived, so trimming here would synthesize
+  // one string and charge for another.
+  it('synthesizes the untrimmed text the broker bills for', async () => {
+    const { executor, ttsService } = setup();
+    const request = job({ params: { text: '  Hello from Sogni.  ' } });
+    executor.accept(request);
+
+    const result = await executor.execute(request);
+
+    expect(ttsService.generate.mock.calls[0][0]).toBe('  Hello from Sogni.  ');
+    expect(result.meta.charCount).toBe(21);
+  });
+
+  // The broker meters NFC code points; text.length counts UTF-16 units, which
+  // over-reports astral characters and decomposed accents and would make every
+  // such job look like billing drift.
+  // Decomposed "e" + combining acute followed by an astral emoji: four UTF-16
+  // units, two code points once composed.
+  it('counts charCount in NFC code points', async () => {
+    const { executor } = setup();
+    const request = job({ params: { text: 'é\u{1F44B}' } });
+    executor.accept(request);
+
+    const result = await executor.execute(request);
+
+    expect(result.meta.charCount).toBe(2);
+  });
+
   it('falls back to configured defaults for voice and speed', async () => {
     const { executor, ttsService } = setup();
     const request = job({ params: { text: 'Plain text.' } });

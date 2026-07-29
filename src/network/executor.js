@@ -213,8 +213,11 @@ export class SpeechExecutor {
   }
 
   async _runTts(job, entry, tempDir) {
-    const text = typeof job.params?.text === 'string' ? job.params.text.trim() : '';
-    if (!text) {
+    // Synthesized verbatim, not trimmed: the broker meters params.text exactly as it
+    // arrived, so trimming would bill for characters that were never spoken. Only the
+    // emptiness check looks at the trimmed form — whitespace alone is still no text.
+    const text = typeof job.params?.text === 'string' ? job.params.text : '';
+    if (!text.trim()) {
       throw new JobError('invalid_request', 'TTS jobRequest requires params.text');
     }
     if (!job.output || typeof job.output.uploadUrl !== 'string') {
@@ -275,9 +278,12 @@ export class SpeechExecutor {
       throw new JobError('tts_failed', 'Synthesis produced empty audio');
     }
 
+    // The broker meters NFC code points. text.length counts UTF-16 units, which
+    // over-reports astral characters and decomposed accents — every such job would
+    // trip the billing drift warning on a count the worker itself got wrong.
     return {
       payload: { uploadedKey: uploaded.uploadedKey },
-      meta: { charCount: text.length },
+      meta: { charCount: Array.from(text.normalize('NFC')).length },
     };
   }
 

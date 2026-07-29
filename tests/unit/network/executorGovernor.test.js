@@ -73,6 +73,13 @@ describe('helpers', () => {
     expect(computeJobTimeout({ timeoutMs: 0, params: {} }, 10000)).toBe(10000);
   });
 
+  // Unclamped, setTimeout would rerun this delay as 1ms and fail the job instantly.
+  it('clamps an oversized broker timeout to the setTimeout ceiling', () => {
+    expect(computeJobTimeout({ timeoutMs: 10_000_000_000 })).toBe(2147483647);
+    expect(computeJobTimeout({ timeoutMs: 2147483648 })).toBe(2147483647);
+    expect(computeJobTimeout({ timeoutMs: 2147483647 })).toBe(2147483647);
+  });
+
   it('rejects with a timeout JobError once the deadline passes', async () => {
     const never = new Promise(() => {});
     await expect(withTimeout(never, 10, 'Job job-1')).rejects.toMatchObject({

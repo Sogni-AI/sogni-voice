@@ -128,6 +128,25 @@ describe('SpeechExecutor STT', () => {
     });
   });
 
+  // The wire message is only the adapter's message string; without the cause, a
+  // daemon crash arrives with this file's stack instead of the one that matters.
+  it('keeps the original error as the cause of a mapped JobError', async () => {
+    const { executor, transcriptionService, artifacts } = setup();
+    const daemonCrash = new Error('Transcription daemon exited with code 1');
+
+    const sttRequest = job();
+    executor.accept(sttRequest);
+    transcriptionService.transcribe.mockRejectedValueOnce(daemonCrash);
+    await expect(executor.execute(sttRequest)).rejects.toHaveProperty('cause', daemonCrash);
+
+    const downloadFailure = new Error('Input download failed with HTTP 403');
+    const downloadRequest = job({ jobID: 'job-stt-2' });
+    executor.accept(downloadRequest);
+    artifacts.downloadToFile.mockRejectedValueOnce(downloadFailure);
+    await expect(executor.execute(downloadRequest))
+      .rejects.toHaveProperty('cause', downloadFailure);
+  });
+
   it('rejects an STT job with no input url', async () => {
     const { executor } = setup();
     const request = job({ input: null });

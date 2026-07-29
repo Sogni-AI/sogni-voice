@@ -3,20 +3,30 @@ import { tempFileManager } from '../utils/tempFile.js';
 import { downloadToFile, uploadFile } from './artifacts.js';
 import { findSpeechModel } from './capabilities.js';
 
+// `options` is the standard Error options bag, so `{ cause }` on a mapped error
+// keeps the underlying adapter/daemon stack reachable. The (code, message) call
+// shape is unchanged for every other throw site.
 export class JobError extends Error {
-  constructor(code, message) {
-    super(message);
+  constructor(code, message, options = undefined) {
+    super(message, options);
     this.name = 'JobError';
     this.code = code;
   }
 }
+
+// setTimeout stores its delay in a signed 32-bit int and silently reruns anything
+// larger as 1ms, so an oversized broker deadline would fire the timeout race
+// instantly and fail every job it touched.
+export const MAX_TIMER_DELAY_MS = 2147483647;
 
 // Mirrors computeGenerationTimeout() in src/services/qwenTts.js:17 — long TTS
 // input costs wall time roughly linearly in characters. Used only when the
 // broker omits timeoutMs.
 export function computeJobTimeout(job, fallbackMs = config.networkWorker.defaultJobTimeoutMs) {
   const requested = Number(job?.timeoutMs);
-  if (Number.isFinite(requested) && requested > 0) return requested;
+  if (Number.isFinite(requested) && requested > 0) {
+    return Math.min(requested, MAX_TIMER_DELAY_MS);
+  }
 
   const text = typeof job?.params?.text === 'string' ? job.params.text : '';
   const scaled = fallbackMs + text.length * 40;
@@ -177,7 +187,7 @@ export class SpeechExecutor {
     try {
       await this.artifacts.downloadToFile(job.input.url, inputPath);
     } catch (error) {
-      throw new JobError('input_download_failed', error.message);
+      throw new JobError('input_download_failed', error.message, { cause: error });
     }
 
     if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
@@ -186,7 +196,7 @@ export class SpeechExecutor {
     try {
       result = await this.transcriptionService.transcribe(inputPath, { timestamps: true });
     } catch (error) {
-      throw new JobError('stt_failed', error.message);
+      throw new JobError('stt_failed', error.message, { cause: error });
     }
 
     return {
@@ -238,7 +248,7 @@ export class SpeechExecutor {
         });
       }
     } catch (error) {
-      throw new JobError('tts_failed', error.message);
+      throw new JobError('tts_failed', error.message, { cause: error });
     }
 
     if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
@@ -247,12 +257,13 @@ export class SpeechExecutor {
     try {
       uploaded = await this.artifacts.uploadFile(job.output.uploadUrl, outputPath);
     } catch (error) {
-      throw new JobError('upload_failed', error.message);
+      throw new JobError('upload_failed', error.message, { cause: error });
     }
 
-    // An adapter can resolve having written a header-only file. Checked outside the
-    // catch above so it reports as a synthesis fault rather than an upload one, and
-    // so no result — and no charge — settles for silence.
+    // Catches an adapter that resolved having written nothing at all — an empty
+    // file, not silence: a 44-byte header-only WAV has bytes > 0 and passes.
+    // Checked outside the catch above so it reports as a synthesis fault rather
+    // than an upload one, and so no result — and no charge — settles for nothing.
     if (uploaded.bytes === 0) {
       throw new JobError('tts_failed', 'Synthesis produced empty audio');
     }

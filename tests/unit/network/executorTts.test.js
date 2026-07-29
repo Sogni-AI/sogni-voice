@@ -204,6 +204,22 @@ describe('SpeechExecutor TTS', () => {
     await expect(executor.execute(request)).rejects.toMatchObject({ code: 'upload_failed' });
   });
 
+  it('keeps the original error as the cause of a mapped JobError', async () => {
+    const { executor, ttsService, artifacts } = setup();
+    const daemonCrash = new Error('Kokoro daemon exited with code 1');
+
+    const synthesisRequest = job();
+    executor.accept(synthesisRequest);
+    ttsService.generate.mockRejectedValueOnce(daemonCrash);
+    await expect(executor.execute(synthesisRequest)).rejects.toHaveProperty('cause', daemonCrash);
+
+    const uploadFailure = new Error('Upload failed after 3 attempts');
+    const uploadRequest = job({ jobID: 'job-tts-2' });
+    executor.accept(uploadRequest);
+    artifacts.uploadFile.mockRejectedValueOnce(uploadFailure);
+    await expect(executor.execute(uploadRequest)).rejects.toHaveProperty('cause', uploadFailure);
+  });
+
   // An adapter can resolve successfully having written a header-only file. Settling
   // that as a result would hand the broker a billable uploadedKey pointing at silence.
   it('fails the job when synthesis produced an empty file', async () => {

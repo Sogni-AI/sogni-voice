@@ -51,7 +51,8 @@ module.exports = {
       // 102 is "the broker rejected our API key" (AUTH_FAILURE_EXIT_CODE in
       // src/network/socketClient.js). Every restart would be rejected the same
       // way, so PM2 must stop the app and leave the reason in the log instead of
-      // burning a restart loop against the broker. Requires PM2 >= 5.1.0.
+      // burning a restart loop against the broker. Requires PM2 >= 5.2.0
+      // (silently ignored on older PM2 — verify with `pm2 --version` on the host).
       stop_exit_codes: [102],
       env: {
         NODE_ENV: 'development',

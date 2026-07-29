@@ -5,7 +5,7 @@ import { SpeechWorkerSupervisor } from '../../../src/network/supervisor.js';
 import { startMockSogniSocket, waitFor } from '../../utils/mockSogniSocket.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
+  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
   { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
 ];
 
@@ -85,7 +85,7 @@ describe('speech worker end to end', () => {
 
     expect(framesOfType('workerInfo')[0].data).toEqual({
       speechModels: [
-        { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1 },
+        { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
         { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
       ],
       loadedModelIDs: [],
@@ -97,7 +97,7 @@ describe('speech worker end to end', () => {
       projectID: 'proj-e2e',
       jobType: 'speech',
       task: 'stt',
-      modelID: 'parakeet-tdt',
+      modelID: 'parakeet-tdt-0.6b-v3',
       params: {},
       input: { url: 'https://s3.test/in/e2e.wav' },
       output: null,
@@ -107,11 +107,14 @@ describe('speech worker end to end', () => {
     await waitFor(() => framesOfType('jobResult').length === 1);
     const result = framesOfType('jobResult')[0].data;
     expect(result.jobID).toBe('e2e-stt');
-    expect(result.transcript.text).toBe('network transcript');
+    expect(result.transcript).toBe('network transcript');
+    expect(result.transcriptDetails.timestamps).toEqual([
+      { start: 0, end: 3.5, text: 'network transcript' },
+    ]);
     expect(result.meta.audioSeconds).toBe(3.5);
     expect(typeof result.meta.durationMs).toBe('number');
 
-    expect(framesOfType('jobState').map((frame) => frame.data.state))
+    expect(framesOfType('jobState').map((frame) => frame.data.type))
       .toEqual(['accepted', 'started']);
 
     await waitFor(
@@ -158,7 +161,7 @@ describe('speech worker end to end', () => {
       projectID: 'proj-e2e',
       jobType: 'speech',
       task: 'stt',
-      modelID: 'parakeet-tdt',
+      modelID: 'parakeet-tdt-0.6b-v3',
       params: {},
       input: { url: 'https://s3.test/in/e2e.wav' },
       output: null,
@@ -196,7 +199,7 @@ describe('speech worker end to end', () => {
       projectID: 'proj-e2e',
       jobType: 'speech',
       task: 'stt',
-      modelID: 'parakeet-tdt',
+      modelID: 'parakeet-tdt-0.6b-v3',
       params: {},
       input: { url: 'https://s3.test/in/e2e.wav' },
       output: null,
@@ -211,6 +214,6 @@ describe('speech worker end to end', () => {
     await draining;
 
     await waitFor(() => framesOfType('jobResult').length === 1);
-    expect(framesOfType('jobResult')[0].data.transcript.text).toBe('drained');
+    expect(framesOfType('jobResult')[0].data.transcript).toBe('drained');
   });
 });

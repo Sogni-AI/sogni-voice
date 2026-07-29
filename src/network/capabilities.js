@@ -3,7 +3,7 @@ import { config } from '../config/index.js';
 // `engine` is internal routing metadata for the executor and is stripped before
 // the catalog goes on the wire.
 export const SPEECH_MODEL_CATALOG = [
-  { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
+  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
   { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
   { id: 'qwen3-tts-preset', task: 'tts', maxConcurrent: 1, engine: 'qwen-preset' },
 ];

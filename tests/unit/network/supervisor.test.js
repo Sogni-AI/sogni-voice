@@ -5,7 +5,7 @@ import { JobError } from '../../../src/network/executor.js';
 import { waitFor } from '../../utils/mockSogniSocket.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
+  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
   { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
 ];
 
@@ -34,7 +34,7 @@ const sttJob = (jobID = 'job-1') => ({
   projectID: 'proj-1',
   jobType: 'speech',
   task: 'stt',
-  modelID: 'parakeet-tdt',
+  modelID: 'parakeet-tdt-0.6b-v3',
   params: {},
   input: { url: 'https://s3.test/in/clip.wav' },
   output: null,
@@ -53,7 +53,8 @@ describe('SpeechWorkerSupervisor', () => {
       accept: vi.fn(),
       execute: vi.fn(async (job) => ({
         jobID: job.jobID,
-        transcript: { text: 'hi', rawOutput: '' },
+        transcript: 'hi',
+        transcriptDetails: { text: 'hi', rawOutput: '' },
         meta: { audioSeconds: 1.2, durationMs: 900 },
       })),
       abort: vi.fn(() => true),
@@ -79,7 +80,7 @@ describe('SpeechWorkerSupervisor', () => {
       type: 'workerInfo',
       data: {
         speechModels: [
-          { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1 },
+          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
           { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
         ],
         loadedModelIDs: [],
@@ -140,11 +141,12 @@ describe('SpeechWorkerSupervisor', () => {
     await supervisor.handleJobRequest(sttJob());
 
     expect(client.sentTypes()).toEqual(['jobState', 'jobState', 'jobResult']);
-    expect(client.sent[0].data).toEqual({ jobID: 'job-1', state: 'accepted' });
-    expect(client.sent[1].data).toEqual({ jobID: 'job-1', state: 'started' });
+    expect(client.sent[0].data).toEqual({ jobID: 'job-1', type: 'accepted' });
+    expect(client.sent[1].data).toEqual({ jobID: 'job-1', type: 'started' });
     expect(client.sent[2].data).toEqual({
       jobID: 'job-1',
-      transcript: { text: 'hi', rawOutput: '' },
+      transcript: 'hi',
+      transcriptDetails: { text: 'hi', rawOutput: '' },
       meta: { audioSeconds: 1.2, durationMs: 900 },
     });
   });
@@ -228,7 +230,8 @@ describe('SpeechWorkerSupervisor', () => {
     executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
       releaseJob = () => resolve({
         jobID: 'job-8',
-        transcript: { text: 'late', rawOutput: '' },
+        transcript: 'late',
+        transcriptDetails: { text: 'late', rawOutput: '' },
         meta: { audioSeconds: 1, durationMs: 5 },
       });
     }));
@@ -257,7 +260,8 @@ describe('SpeechWorkerSupervisor', () => {
     executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
       releaseJob = () => resolve({
         jobID: 'job-9',
-        transcript: { text: 'slow', rawOutput: '' },
+        transcript: 'slow',
+        transcriptDetails: { text: 'slow', rawOutput: '' },
         meta: { audioSeconds: 1, durationMs: 5 },
       });
     }));

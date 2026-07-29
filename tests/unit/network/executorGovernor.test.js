@@ -9,7 +9,7 @@ import {
 } from '../../../src/network/executor.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
+  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
   { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
 ];
 
@@ -18,7 +18,7 @@ const sttJob = (jobID = 'job-1') => ({
   projectID: 'proj-1',
   jobType: 'speech',
   task: 'stt',
-  modelID: 'parakeet-tdt',
+  modelID: 'parakeet-tdt-0.6b-v3',
   params: {},
   input: { url: 'https://s3.test/in/clip.wav' },
   output: null,
@@ -166,7 +166,7 @@ describe('SpeechExecutor governor', () => {
     expectJobError(
       () => executor.accept(sttJob('s2')),
       'capacity_exceeded',
-      'Model parakeet-tdt is at capacity (1 concurrent jobs)',
+      'Model parakeet-tdt-0.6b-v3 is at capacity (1 concurrent jobs)',
     );
   });
 
@@ -198,11 +198,11 @@ describe('SpeechExecutor governor', () => {
     executor._release('j1', originalEntry);
 
     expect(executor.activeRequests).toBe(1);
-    expect(executor.modelCounts.get('parakeet-tdt')).toBe(1);
+    expect(executor.modelCounts.get('parakeet-tdt-0.6b-v3')).toBe(1);
     expectJobError(
       () => executor.accept(sttJob('j2')),
       'capacity_exceeded',
-      'Model parakeet-tdt is at capacity (1 concurrent jobs)',
+      'Model parakeet-tdt-0.6b-v3 is at capacity (1 concurrent jobs)',
     );
   });
 
@@ -214,7 +214,7 @@ describe('SpeechExecutor governor', () => {
     executor._release('j1', entry);
 
     expect(executor.activeRequests).toBe(0);
-    expect(executor.modelCounts.has('parakeet-tdt')).toBe(false);
+    expect(executor.modelCounts.has('parakeet-tdt-0.6b-v3')).toBe(false);
   });
 
   it('refuses new jobs while draining', () => {

@@ -15,7 +15,7 @@ const cfg = (overrides = {}) => ({
 describe('capabilities', () => {
   it('advertises Parakeet and Kokoro when both are enabled', () => {
     expect(buildSpeechModels(cfg())).toEqual([
-      { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
+      { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
       { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
     ]);
   });
@@ -23,7 +23,7 @@ describe('capabilities', () => {
   it('adds the Qwen preset model only when its env flag is on', () => {
     const models = buildSpeechModels(cfg({ qwenTts: { enabled: true } }));
     expect(models.map((model) => model.id))
-      .toEqual(['parakeet-tdt', 'kokoro-82m', 'qwen3-tts-preset']);
+      .toEqual(['parakeet-tdt-0.6b-v3', 'kokoro-82m', 'qwen3-tts-preset']);
   });
 
   it('omits disabled engines', () => {
@@ -44,7 +44,7 @@ describe('capabilities', () => {
     expect(buildWorkerInfo({ speechModels: buildSpeechModels(cfg()), maxConcurrentJobs: 2 }))
       .toEqual({
         speechModels: [
-          { id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1 },
+          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
           { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
         ],
         loadedModelIDs: [],

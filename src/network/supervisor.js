@@ -127,8 +127,10 @@ export class SpeechWorkerSupervisor {
       return;
     }
 
-    this.client.send('jobState', { jobID: job.jobID, state: 'accepted' });
-    this.client.send('jobState', { jobID: job.jobID, state: 'started' });
+    // The broker reads the state off `type`, not `state`; a jobState it cannot parse
+    // leaves the dispatch unacknowledged and the job is reaped after 30s.
+    this.client.send('jobState', { jobID: job.jobID, type: 'accepted' });
+    this.client.send('jobState', { jobID: job.jobID, type: 'started' });
 
     // Liveness keepalive: the broker refreshes the job's lastActivityTime on
     // every jobProgress frame and reaps (and refunds) jobs that go silent, so

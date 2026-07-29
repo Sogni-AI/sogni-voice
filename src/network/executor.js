@@ -199,8 +199,15 @@ export class SpeechExecutor {
       throw new JobError('stt_failed', error.message, { cause: error });
     }
 
+    // The broker persists `transcript` as a string, so the wire field is the text
+    // alone. Segments and raw daemon output ride along under `transcriptDetails`,
+    // which the broker ignores today — it keeps the structured data one schema
+    // change away from being usable rather than dropping it here.
     return {
-      payload: { transcript: result },
+      payload: {
+        transcript: typeof result?.text === 'string' ? result.text : '',
+        transcriptDetails: result,
+      },
       meta: { audioSeconds: deriveAudioSeconds(result) },
     };
   }

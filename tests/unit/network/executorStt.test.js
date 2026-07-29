@@ -1,14 +1,14 @@
 import { describe, it, expect, vi } from 'vitest';
 import { SpeechExecutor } from '../../../src/network/executor.js';
 
-const MODELS = [{ id: 'parakeet-tdt', task: 'stt', maxConcurrent: 1, engine: 'parakeet' }];
+const MODELS = [{ id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' }];
 
 const job = (overrides = {}) => ({
   jobID: 'job-stt-1',
   projectID: 'proj-1',
   jobType: 'speech',
   task: 'stt',
-  modelID: 'parakeet-tdt',
+  modelID: 'parakeet-tdt-0.6b-v3',
   params: {},
   input: { url: 'https://s3.test/in/clip.mp3?sig=1' },
   output: null,
@@ -63,7 +63,8 @@ describe('SpeechExecutor STT', () => {
       .toHaveBeenCalledWith('/tmp/sogni-speech-job-abc/input.mp3', { timestamps: true });
     expect(result).toEqual({
       jobID: 'job-stt-1',
-      transcript: {
+      transcript: 'hello world',
+      transcriptDetails: {
         text: 'hello world',
         rawOutput: '',
         timestamps: [{ start: 0, end: 2.5, text: 'hello world' }],
@@ -89,6 +90,19 @@ describe('SpeechExecutor STT', () => {
 
     const result = await executor.execute(request);
     expect(result.meta.audioSeconds).toBeNull();
+  });
+
+  // The broker stores transcript as a string column, so a daemon result without a
+  // text field still has to leave the wire field a string.
+  it('keeps transcript a string when the daemon returns no text', async () => {
+    const { executor, transcriptionService } = setup();
+    const request = job();
+    executor.accept(request);
+    transcriptionService.transcribe.mockResolvedValueOnce({ rawOutput: '' });
+
+    const result = await executor.execute(request);
+    expect(result.transcript).toBe('');
+    expect(result.transcriptDetails).toEqual({ rawOutput: '' });
   });
 
   it('maps a download failure to input_download_failed', async () => {
@@ -216,6 +230,6 @@ describe('SpeechExecutor STT', () => {
 
     expect(executor.activeJobs.get('job-stt-1')).toBe(replacement);
     expect(executor.activeRequests).toBe(1);
-    expect(executor.modelCounts.get('parakeet-tdt')).toBe(1);
+    expect(executor.modelCounts.get('parakeet-tdt-0.6b-v3')).toBe(1);
   });
 });

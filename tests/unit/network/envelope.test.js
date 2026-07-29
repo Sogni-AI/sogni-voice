@@ -12,7 +12,7 @@ describe('envelope', () => {
   });
 
   it('round-trips through decodeFrame', () => {
-    const job = { jobID: 'job-1', jobType: 'speech', task: 'stt', modelID: 'parakeet-tdt' };
+    const job = { jobID: 'job-1', jobType: 'speech', task: 'stt', modelID: 'parakeet-tdt-0.6b-v3' };
     expect(decodeFrame(encodeFrame('jobRequest', job))).toEqual({ type: 'jobRequest', data: job });
   });
 

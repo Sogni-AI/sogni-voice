@@ -95,6 +95,33 @@ describe('SpeechWorkerSupervisor', () => {
     expect(client.sentTypes()).toEqual(['workerInfo']);
   });
 
+  // A broker that streams an unrecognized type would otherwise write a log line
+  // per frame for as long as it keeps sending them.
+  it('logs an unknown frame type once, however many arrive', () => {
+    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
+    const quiet = new SpeechWorkerSupervisor({
+      client,
+      executor,
+      speechModels: MODELS,
+      maxConcurrentJobs: 2,
+      logger,
+    });
+    quiet.start();
+
+    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
+    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
+    client.emit('frame', 'speechModelDownload', { modelID: 'y' });
+
+    const ignored = logger.log.mock.calls
+      .filter(([line]) => line.includes('Ignoring frame type speechModelDownload'));
+    expect(ignored).toHaveLength(1);
+
+    // A different unknown type still gets its own line.
+    client.emit('frame', 'someOtherFrame', {});
+    expect(logger.log.mock.calls
+      .filter(([line]) => line.includes('Ignoring frame type someOtherFrame'))).toHaveLength(1);
+  });
+
   it('emits capacity updates on the configured interval', async () => {
     supervisor.start();
     client.emit('open');

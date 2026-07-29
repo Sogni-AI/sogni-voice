@@ -7,6 +7,12 @@ import { buildUserAgent, loadOrCreateWorkerId, resolveSocketUrl } from './config
 import { JobError, SpeechExecutor } from './executor.js';
 import { SogniSocketClient } from './socketClient.js';
 
+// A broker that streams an unrecognized frame type at us — a protocol addition we
+// have not shipped support for yet — would otherwise write one log line per frame
+// forever. One line per type is all the diagnostic anyone needs; the cap bounds
+// the set itself against a peer emitting unbounded distinct types.
+const UNKNOWN_FRAME_TYPE_LOG_LIMIT = 50;
+
 export class SpeechWorkerSupervisor {
   constructor({
     client,
@@ -28,6 +34,7 @@ export class SpeechWorkerSupervisor {
     this.logger = logger;
     this.capacityTimer = null;
     this.inFlight = new Set();
+    this.loggedUnknownFrameTypes = new Set();
   }
 
   start() {
@@ -62,8 +69,18 @@ export class SpeechWorkerSupervisor {
         this.handleAbort(data);
         break;
       default:
-        this.logger.log(`[speech-worker] Ignoring frame type ${type}`);
+        this.logUnknownFrame(type);
     }
+  }
+
+  logUnknownFrame(type) {
+    if (this.loggedUnknownFrameTypes.has(type)) return;
+    if (this.loggedUnknownFrameTypes.size >= UNKNOWN_FRAME_TYPE_LOG_LIMIT) return;
+
+    this.loggedUnknownFrameTypes.add(type);
+    this.logger.log(
+      `[speech-worker] Ignoring frame type ${type} (further occurrences not logged)`,
+    );
   }
 
   sendWorkerInfo() {
@@ -147,6 +164,13 @@ export class SpeechWorkerSupervisor {
     const message = error?.message || String(error);
     this.client.send('jobError', { jobID: jobID || 'unknown', code, message });
     this.logger.error(`[speech-worker] Job ${jobID} failed (${code}): ${message}`);
+
+    // The frame carries only the adapter's message string. When the executor mapped
+    // an underlying failure, its stack is the one worth having in the log — a daemon
+    // crash otherwise reads as a bare "exited with code 1" with no trace of where.
+    if (error?.cause) {
+      this.logger.error(`[speech-worker] Job ${jobID} caused by:`, error.cause);
+    }
   }
 
   // Gated on inFlight, not executor idleness: execute() frees its concurrency slot

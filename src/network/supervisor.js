@@ -1,7 +1,7 @@
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { ttsService } from '../services/tts.js';
-import { qwenTtsBaseService } from '../services/qwenTts.js';
+import { qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { buildSpeechModels, buildWorkerInfo } from './capabilities.js';
 import { buildUserAgent, loadOrCreateWorkerId, resolveSocketUrl } from './config.js';
 import { JobError, SpeechExecutor } from './executor.js';
@@ -209,7 +209,9 @@ export function createSupervisor(overrides = {}) {
     maxConcurrentJobs: networkConfig.maxConcurrentJobs,
     transcriptionService,
     ttsService,
-    qwenTtsService: config.qwenTts.enabled ? qwenTtsBaseService : null,
+    // PRESET synthesis must use the CustomVoice daemon; the Base daemon only
+    // resolves voice-clone IDs (staging canary finding, 2026-07-30).
+    qwenTtsService: config.qwenTts.enabled ? qwenTtsCustomVoiceService : null,
   });
 
   const client = overrides.client || new SogniSocketClient({

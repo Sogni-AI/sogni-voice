@@ -105,7 +105,7 @@ cp .env.example .env
 npm run dev
 
 # 4. Start the server (prod)
-pm2 start ecosystem.config.cjs
+npm run pm2:start
 ```
 
 The server will be available at `http://localhost:3000`.
@@ -328,6 +328,25 @@ To start on system boot:
 pm2 startup
 pm2 save
 ```
+
+### Optional Sogni Network Worker
+
+The REST API does not require a Sogni worker account. Both `npm run pm2:start`
+and an unconfigured `pm2 start ecosystem.config.cjs` start only the local
+`sogni-voice` API service.
+
+To opt in to paid speech jobs from the Sogni network, set
+`SOGNI_WORKER_API_KEY` (and optionally `SOGNI_ENV`) in `.env`, then start the
+separate worker process:
+
+```bash
+npm run pm2:worker:start
+```
+
+Use `npm run pm2:worker:stop`, `npm run pm2:worker:restart`, and
+`npm run pm2:worker:logs` to manage it independently. Starting the worker this
+way explicitly enables `SOGNI_NETWORK_WORKER` for that PM2 process; standalone
+API users do not need to add any network-worker settings.
 
 ### Using with ClawdBot
 

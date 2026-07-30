@@ -3,6 +3,9 @@ require('dotenv').config();
 const port = parseInt(process.env.PORT, 10) || 3000;
 const host = process.env.HOST || '127.0.0.1';
 const corsOrigins = process.env.CORS_ORIGINS || 'local';
+const networkWorkerEnabled = ['1', 'true', 'yes', 'on'].includes(
+  String(process.env.SOGNI_NETWORK_WORKER || '').trim().toLowerCase(),
+);
 
 module.exports = {
   apps: [
@@ -38,7 +41,10 @@ module.exports = {
         ORT_INTER_OP_NUM_THREADS: '1', // Keep sequential between operations
       },
     },
-    {
+    // Keep the optional paid-network worker out of the PM2 app list unless it
+    // was explicitly enabled. This preserves the historical behavior of
+    // `pm2 start ecosystem.config.cjs` for standalone REST API installations.
+    ...(networkWorkerEnabled ? [{
       name: 'sogni-speech-worker',
       script: 'src/network/index.js',
       exec_mode: 'fork',
@@ -62,6 +68,6 @@ module.exports = {
         NODE_ENV: 'production',
         SOGNI_NETWORK_WORKER: 'true',
       },
-    },
+    }] : []),
   ],
 };

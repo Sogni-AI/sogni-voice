@@ -15,7 +15,7 @@
     "pm2:status": "pm2 status",
     "worker:start": "node src/network/index.js",
     "worker:dev": "node --watch src/network/index.js",
-    "pm2:worker:start": "pm2 start ecosystem.config.cjs --only sogni-speech-worker",
+    "pm2:worker:start": "SOGNI_NETWORK_WORKER=true pm2 start ecosystem.config.cjs --only sogni-speech-worker",
     "pm2:worker:stop": "pm2 stop sogni-speech-worker",
     "pm2:worker:restart": "pm2 restart sogni-speech-worker",
     "pm2:worker:delete": "pm2 delete sogni-speech-worker",

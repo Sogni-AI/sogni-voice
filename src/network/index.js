@@ -1,7 +1,7 @@
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { ttsService } from '../services/tts.js';
-import { qwenTtsBaseService } from '../services/qwenTts.js';
+import { qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import { buildSpeechModels } from './capabilities.js';
 import { createSupervisor } from './supervisor.js';
@@ -33,7 +33,10 @@ const preWarm = async () => {
   const targets = [
     ['parakeet', 'Transcription daemon', () => transcriptionService.initialize()],
     ['kokoro', 'Kokoro TTS daemon', () => ttsService.initialize()],
-    ['qwen-preset', 'Qwen TTS Base daemon', () => qwenTtsBaseService.initialize()],
+    // qwen3-tts-preset serves PRESET voices, which live in the CustomVoice
+    // daemon — the Base daemon only resolves voice-clone IDs and fails preset
+    // jobs with "Voice clone not found" (found by the first staging canary).
+    ['qwen-preset', 'Qwen TTS CustomVoice daemon', () => qwenTtsCustomVoiceService.initialize()],
   ].filter(([engine]) => engines.has(engine));
 
   await Promise.all(targets.map(async ([, name, initialize]) => {

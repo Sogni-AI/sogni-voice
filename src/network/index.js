@@ -16,6 +16,12 @@ if (!config.networkWorker.apiKey) {
   process.exit(1);
 }
 
+// Standard worker auth is api-key + NFT; the broker rejects either alone (4021).
+if (!config.networkWorker.nftTokenId) {
+  console.error('[speech-worker] SOGNI_WORKER_NFT_TOKEN_ID is required; exiting.');
+  process.exit(1);
+}
+
 const speechModels = buildSpeechModels();
 if (speechModels.length === 0) {
   console.error('[speech-worker] No speech engines are enabled; nothing to advertise. Exiting.');
@@ -86,7 +92,7 @@ const gracefulShutdown = async (signal) => {
     settle('Temp file cleanup', () => tempFileManager.cleanupAll()),
     settle('Transcription daemon shutdown', () => transcriptionService.shutdown()),
     settle('Kokoro TTS daemon shutdown', () => ttsService.shutdown()),
-    settle('Qwen TTS Base daemon shutdown', () => qwenTtsBaseService.shutdown()),
+    settle('Qwen TTS CustomVoice daemon shutdown', () => qwenTtsCustomVoiceService.shutdown()),
   ]);
 
   process.exit(failed ? 1 : 0);

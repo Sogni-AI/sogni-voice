@@ -1,9 +1,0 @@
-{
-  "version": 1,
-  "frames": ["workerInfo", "speechCapacityUpdate", "jobRequest", "jobState", "jobProgress", "jobResult", "jobError"],
-  "jobStateField": "type",
-  "jobStateValues": ["accepted", "started"],
-  "modelIds": { "stt": ["parakeet-tdt-0.6b-v3"], "tts": ["kokoro-82m", "qwen3-tts-preset"] },
-  "transcriptType": "string",
-  "parakeetAllowedParams": []
-}

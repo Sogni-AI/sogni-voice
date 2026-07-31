@@ -1,49 +1,46 @@
+import { randomUUID } from 'node:crypto';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { ttsService } from '../services/tts.js';
 import { qwenTtsCustomVoiceService } from '../services/qwenTts.js';
 import { buildSpeechModels, buildWorkerInfo } from './capabilities.js';
-import { buildUserAgent, loadOrCreateWorkerId, resolveSocketUrl } from './config.js';
-import { JobError, SpeechExecutor } from './executor.js';
+import { buildUserAgent, loadOrCreateWorkerId, resolveApiUrl, resolveSocketUrl } from './config.js';
+import { JobError, SpeechExecutor, WORKER_ERROR_CODES } from './executor.js';
 import { SogniSocketClient } from './socketClient.js';
 
-// A broker that streams an unrecognized frame type at us — a protocol addition we
-// have not shipped support for yet — would otherwise write one log line per frame
-// forever. One line per type is all the diagnostic anyone needs; the cap bounds
-// the set itself against a peer emitting unbounded distinct types.
+// A broker that streams an unrecognized frame type at us would otherwise write
+// one log line per frame forever. One line per type is all the diagnostic
+// anyone needs; the cap bounds the set itself.
 const UNKNOWN_FRAME_TYPE_LOG_LIMIT = 50;
+
+// The audio reaper allows 120s between updates once a job is started; pulsing
+// well inside that keeps a long synthesis alive and observable.
+const PROGRESS_PULSE_INTERVAL_MS = 25000;
 
 export class SpeechWorkerSupervisor {
   constructor({
     client,
     executor,
     speechModels,
-    maxConcurrentJobs,
-    capacityIntervalMs = config.networkWorker.capacityIntervalMs,
-    progressIntervalMs = 30000,
     drainTimeoutMs = config.networkWorker.drainTimeoutMs,
+    progressIntervalMs = PROGRESS_PULSE_INTERVAL_MS,
     logger = console,
   }) {
     this.client = client;
     this.executor = executor;
     this.speechModels = speechModels;
-    this.maxConcurrentJobs = maxConcurrentJobs;
-    this.capacityIntervalMs = capacityIntervalMs;
-    this.progressIntervalMs = progressIntervalMs;
     this.drainTimeoutMs = drainTimeoutMs;
+    this.progressIntervalMs = progressIntervalMs;
     this.logger = logger;
-    this.capacityTimer = null;
     this.inFlight = new Set();
+    // jobID -> imgID for jobs currently running; lets an inbound cancellation
+    // echo the jobError with the imgID the broker expects.
+    this.runningJobs = new Map();
     this.loggedUnknownFrameTypes = new Set();
   }
 
   start() {
-    this.client.on('open', () => {
-      this.sendWorkerInfo();
-      this.startCapacityLoop();
-    });
     this.client.on('frame', (type, data) => this.handleFrame(type, data));
-    this.client.on('close', () => this.stopCapacityLoop());
     this.client.connect();
   }
 
@@ -51,8 +48,10 @@ export class SpeechWorkerSupervisor {
   // async path started here owns its own rejection handling.
   handleFrame(type, data) {
     switch (type) {
+      // The broker ignores everything sent before 'authenticated'; workerInfo
+      // goes out only in response to it (once per (re)connection).
       case 'authenticated':
-        this.logger.log('[speech-worker] Broker authenticated the worker');
+        this.logger.log(`[speech-worker] Authenticated as ${data?.username || data?.address || 'unknown'}`);
         this.sendWorkerInfo();
         break;
       case 'jobRequest': {
@@ -64,9 +63,14 @@ export class SpeechWorkerSupervisor {
         this.inFlight.add(running);
         break;
       }
+      // There is no dedicated cancel message for render workers: cancellation
+      // arrives as a jobError with isFromWorker: false.
       case 'jobError':
-      case 'jobCancel':
-        this.handleAbort(data);
+        this.handleCancellation(data);
+        break;
+      case 'modelDownloadSuggest':
+      case 'pong':
+      case 'socketEventSubscriptionsUpdated':
         break;
       default:
         this.logUnknownFrame(type);
@@ -84,93 +88,102 @@ export class SpeechWorkerSupervisor {
   }
 
   sendWorkerInfo() {
-    const workerInfo = buildWorkerInfo({
-      speechModels: this.speechModels,
-      maxConcurrentJobs: this.maxConcurrentJobs,
-    });
+    const workerInfo = buildWorkerInfo({ speechModels: this.speechModels });
     this.client.send('workerInfo', workerInfo);
-    const advertised = workerInfo.speechModels.map((model) => `${model.id}/${model.task}`);
-    this.logger.log(`[speech-worker] Registered: ${advertised.join(', ') || 'no models'}`);
-  }
-
-  sendCapacityUpdate() {
-    this.client.send('speechCapacityUpdate', { activeRequests: this.executor.activeRequests });
-  }
-
-  startCapacityLoop() {
-    this.stopCapacityLoop();
-    this.capacityTimer = setInterval(() => this.sendCapacityUpdate(), this.capacityIntervalMs);
-    if (typeof this.capacityTimer.unref === 'function') this.capacityTimer.unref();
-  }
-
-  stopCapacityLoop() {
-    if (this.capacityTimer) {
-      clearInterval(this.capacityTimer);
-      this.capacityTimer = null;
-    }
+    this.logger.log(
+      `[speech-worker] Registered as fast worker (rating ${workerInfo.hardwareRating}): ${workerInfo.workerModels.join(', ')}`,
+    );
   }
 
   // A dataless broker frame decodes to null, so every field read is optional.
-  handleAbort(data) {
+  handleCancellation(data) {
     const jobID = data?.jobID;
     if (!jobID) return;
-    if (this.executor.abort(jobID)) {
-      this.logger.log(`[speech-worker] Aborted job ${jobID} at broker request`);
-    }
+
+    const imgID = this.runningJobs.get(jobID);
+    if (!this.executor.abort(jobID)) return;
+
+    this.logger.log(`[speech-worker] Cancelling job ${jobID} at broker request (${data?.error || 'no reason'})`);
+    // The broker waits for the worker to echo a jobError back to settle the
+    // cancellation, then readyToAcceptJobs clears the 30s cancel cooldown.
+    this.client.send('jobError', {
+      jobID,
+      imgID: imgID || randomUUID().toUpperCase(),
+      isFromWorker: true,
+      error: WORKER_ERROR_CODES.cancelled,
+      error_message: 'Job cancelled at broker request',
+    });
+    this.client.send('readyToAcceptJobs', { ready: true });
   }
 
   async handleJobRequest(job) {
+    // The worker mints the asset id: it is the upload key and the id the artist
+    // downloads by. Uppercase UUID by broker convention.
+    const imgID = randomUUID().toUpperCase();
+
     try {
       this.executor.accept(job);
     } catch (error) {
-      this.sendJobError(job?.jobID, error);
+      this.sendJobError(job?.jobID, imgID, error);
       return;
     }
 
-    // The broker reads the state off `type`, not `state`; a jobState it cannot parse
-    // leaves the dispatch unacknowledged and the job is reaped after 30s.
-    this.client.send('jobState', { jobID: job.jobID, type: 'accepted' });
-    this.client.send('jobState', { jobID: job.jobID, type: 'started' });
+    this.runningJobs.set(job.jobID, imgID);
 
-    // Progress keepalive: the broker records lastActivityTime from these frames
-    // for diagnostics only — its reaper is strictly deadline-based (startTime +
-    // timeoutMs), so pulsing cannot extend a job's life. Kept because a silent
-    // multi-minute synthesis is undebuggable in an incident without it.
-    const startedAt = Date.now();
+    // jobStarted latches imgID broker-side and starts the 120s inter-update
+    // budget. A jobState without `type` earns a 24h shadowban, so these frames
+    // are built inline and never from spread payloads.
+    this.client.send('jobState', { type: 'jobStarted', jobID: job.jobID, imgID });
+
     const progressTimer = setInterval(() => {
-      const elapsed = Date.now() - startedAt;
-      const progress = Math.min(0.95, elapsed / (job.timeoutMs || 600000));
-      this.client.send('jobProgress', { jobID: job.jobID, progress });
+      this.client.send('jobProgress', { jobID: job.jobID, imgID, step: 0, stepCount: 1 });
     }, this.progressIntervalMs);
     if (typeof progressTimer.unref === 'function') progressTimer.unref();
 
     try {
-      const result = await this.executor.execute(job);
-      this.client.send('jobResult', result);
+      const result = await this.executor.execute(job, { imgID });
+      // Ordering is load-bearing: jobResult must reach the broker before
+      // jobCompleted or the worker is shadowbanned for 24h.
+      this.client.send('jobResult', {
+        jobID: job.jobID,
+        imgID,
+        lastSeed: result.lastSeed,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        performedStepCount: result.performedStepCount,
+        timings: result.timings,
+      });
+      this.client.send('jobState', { type: 'jobCompleted', jobID: job.jobID, imgID });
       this.logger.log(
-        `[speech-worker] Completed job ${job.jobID} in ${result?.meta?.durationMs}ms`,
+        `[speech-worker] Completed job ${job.jobID} in ${result.timings?.total?.toFixed(2)}s`,
       );
     } catch (error) {
-      // The broker initiated the abort, so it needs no failure frame back.
+      // The broker initiated the abort and already got its jobError echo.
       if (error instanceof JobError && error.code === 'aborted') {
-        this.logger.log(`[speech-worker] Job ${job.jobID} stopped after abort`);
+        this.logger.log(`[speech-worker] Job ${job.jobID} stopped after cancellation`);
         return;
       }
-      this.sendJobError(job.jobID, error);
+      this.sendJobError(job.jobID, imgID, error);
     } finally {
       clearInterval(progressTimer);
+      this.runningJobs.delete(job.jobID);
     }
   }
 
-  sendJobError(jobID, error) {
+  sendJobError(jobID, imgID, error) {
     const code = error instanceof JobError ? error.code : 'internal_error';
     const message = error?.message || String(error);
-    this.client.send('jobError', { jobID: jobID || 'unknown', code, message });
+    this.client.send('jobError', {
+      jobID: jobID || 'unknown',
+      imgID,
+      isFromWorker: true,
+      error: code,
+      error_message: message,
+    });
     this.logger.error(`[speech-worker] Job ${jobID} failed (${code}): ${message}`);
 
-    // The frame carries only the adapter's message string. When the executor mapped
-    // an underlying failure, its stack is the one worth having in the log — a daemon
-    // crash otherwise reads as a bare "exited with code 1" with no trace of where.
+    // The frame carries only the mapped message string. When the executor mapped
+    // an underlying failure, its stack is the one worth having in the log.
     if (error?.cause) {
       this.logger.error(`[speech-worker] Job ${jobID} caused by:`, error.cause);
     }
@@ -182,7 +195,6 @@ export class SpeechWorkerSupervisor {
   // terminal frame is on the wire.
   async shutdown() {
     this.executor.startDrain();
-    this.stopCapacityLoop();
     this.logger.log(`[speech-worker] Draining ${this.inFlight.size} in-flight job(s)`);
 
     await Promise.race([
@@ -206,6 +218,7 @@ export function createSupervisor(overrides = {}) {
 
   const executor = overrides.executor || new SpeechExecutor({
     speechModels,
+    apiUrl: resolveApiUrl(networkConfig.sogniEnv),
     maxConcurrentJobs: networkConfig.maxConcurrentJobs,
     transcriptionService,
     ttsService,
@@ -217,6 +230,7 @@ export function createSupervisor(overrides = {}) {
   const client = overrides.client || new SogniSocketClient({
     url: resolveSocketUrl(networkConfig.sogniEnv),
     apiKey: networkConfig.apiKey,
+    nftTokenId: networkConfig.nftTokenId,
     workerId: loadOrCreateWorkerId(networkConfig.workerIdFile),
     userAgent: buildUserAgent(),
     reconnectInitialDelayMs: networkConfig.reconnectInitialDelayMs,
@@ -227,8 +241,6 @@ export function createSupervisor(overrides = {}) {
     client,
     executor,
     speechModels,
-    maxConcurrentJobs: networkConfig.maxConcurrentJobs,
-    capacityIntervalMs: networkConfig.capacityIntervalMs,
     drainTimeoutMs: networkConfig.drainTimeoutMs,
   });
 }

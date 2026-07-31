@@ -20,26 +20,31 @@ describe('SogniSocketClient', () => {
   const makeClient = (overrides = {}) => new SogniSocketClient({
     url: server.url,
     apiKey: 'test-api-key',
+    nftTokenId: '12345',
     workerId: 'WORKER-UUID',
-    userAgent: 'Sogni/3.0.118 (Darwin) | Speech:MLX | speech-worker/1.0.0',
+    userAgent: 'Sogni/4.0.0 (macOS) [sogni-voice-speech-worker/2.0.0]',
     reconnectInitialDelayMs: 20,
     reconnectMaxDelayMs: 80,
     logger: silentLogger,
     ...overrides,
   });
 
-  it('sends the frozen upgrade headers and no nft-token-id', async () => {
+  // Standard worker auth: api-key + nft-token-id. No authorization header
+  // (it would force the JWT branch) and no worker-subtype (the LLM lane
+  // selector) — their absence is as load-bearing as the values sent.
+  it('sends the frozen standard-worker upgrade headers', async () => {
     client = makeClient();
     client.connect();
     await waitFor(() => server.headers !== null);
 
     expect(server.headers['api-key']).toBe('test-api-key');
+    expect(server.headers['nft-token-id']).toBe('12345');
     expect(server.headers['app-id']).toBe('WORKER-UUID');
     expect(server.headers['client-type']).toBe('worker');
-    expect(server.headers['worker-subtype']).toBe('speech');
     expect(server.headers['user-agent'])
-      .toBe('Sogni/3.0.118 (Darwin) | Speech:MLX | speech-worker/1.0.0');
-    expect(server.headers['nft-token-id']).toBeUndefined();
+      .toBe('Sogni/4.0.0 (macOS) [sogni-voice-speech-worker/2.0.0]');
+    expect(server.headers['worker-subtype']).toBeUndefined();
+    expect(server.headers.authorization).toBeUndefined();
   });
 
   it('emits open and delivers decoded frames', async () => {

@@ -1,286 +1,272 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
+import { describe, it, expect, vi } from 'vitest';
 import { SpeechWorkerSupervisor } from '../../../src/network/supervisor.js';
 import { JobError } from '../../../src/network/executor.js';
-import { waitFor } from '../../utils/mockSogniSocket.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
+  { id: 'kokoro_82m', task: 'tts', engine: 'kokoro' },
 ];
-
-const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
 
 class FakeClient extends EventEmitter {
   constructor() {
     super();
     this.sent = [];
-    this.connect = vi.fn();
-    this.close = vi.fn();
+    this.connected = false;
+    this.closed = false;
   }
+
+  connect() { this.connected = true; }
+  close() { this.closed = true; }
 
   send(type, data) {
     this.sent.push({ type, data });
     return true;
   }
 
-  sentTypes() {
-    return this.sent.map((frame) => frame.type);
-  }
+  framesOf(type) { return this.sent.filter((f) => f.type === type); }
 }
 
-const sttJob = (jobID = 'job-1') => ({
-  jobID,
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'stt',
-  modelID: 'parakeet-tdt-0.6b-v3',
-  params: {},
-  input: { url: 'https://s3.test/in/clip.wav' },
-  output: null,
-  timeoutMs: 60000,
+const job = (overrides = {}) => ({
+  jobID: 'A0000000-0000-4000-8000-000000000031',
+  jobType: 'audio',
+  keyFrames: [{ modelID: 'kokoro_82m', positivePrompt: 'Hi.', duration: 1, steps: 1, seed: -1 }],
+  ...overrides,
 });
 
-describe('SpeechWorkerSupervisor', () => {
-  let client;
-  let executor;
-  let supervisor;
+const RESULT = {
+  lastSeed: 0,
+  performedStepCount: 1,
+  timings: { inference: 0.4, assetUpload: 0.1, total: 0.6 },
+};
 
-  beforeEach(() => {
-    client = new FakeClient();
-    executor = {
-      activeRequests: 0,
-      accept: vi.fn(),
-      execute: vi.fn(async (job) => ({
-        jobID: job.jobID,
-        transcript: 'hi',
-        transcriptDetails: { text: 'hi', rawOutput: '' },
-        meta: { audioSeconds: 1.2, durationMs: 900 },
-      })),
-      abort: vi.fn(() => true),
-      startDrain: vi.fn(),
-    };
-    supervisor = new SpeechWorkerSupervisor({
-      client,
-      executor,
-      speechModels: MODELS,
-      maxConcurrentJobs: 2,
-      capacityIntervalMs: 20,
-      drainTimeoutMs: 2000,
-      logger: silentLogger,
-    });
+const setup = ({ executor: executorOverrides = {}, ...rest } = {}) => {
+  const client = new FakeClient();
+  const executor = {
+    accept: vi.fn(() => MODELS[0]),
+    execute: vi.fn(async () => ({ ...RESULT })),
+    abort: vi.fn(() => true),
+    startDrain: vi.fn(),
+    activeRequests: 0,
+    ...executorOverrides,
+  };
+  const logger = { log: vi.fn(), error: vi.fn() };
+  const supervisor = new SpeechWorkerSupervisor({
+    client,
+    executor,
+    speechModels: MODELS,
+    drainTimeoutMs: 500,
+    progressIntervalMs: 60000,
+    logger,
+    ...rest,
+  });
+  supervisor.start();
+  return { client, executor, logger, supervisor };
+};
+
+const flush = () => new Promise((resolve) => setImmediate(resolve));
+
+const UUID_RE = /^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/;
+
+describe('SpeechWorkerSupervisor (standard contract)', () => {
+  it('connects on start and registers only after authenticated', () => {
+    const { client } = setup();
+    expect(client.connected).toBe(true);
+    expect(client.framesOf('workerInfo')).toHaveLength(0);
+
+    client.emit('frame', 'authenticated', { username: 'universal' });
+    const infos = client.framesOf('workerInfo');
+    expect(infos).toHaveLength(1);
+    expect(infos[0].data.workerModels).toEqual(['kokoro_82m']);
+    expect(infos[0].data.hardwareRating).toBeGreaterThanOrEqual(70);
+    expect(infos[0].data.hardwareInfo.cpuBrand).toBeTruthy();
   });
 
-  it('connects and registers workerInfo on open', () => {
-    supervisor.start();
-    expect(client.connect).toHaveBeenCalled();
+  it('re-registers on every authenticated frame (reconnects)', () => {
+    const { client } = setup();
+    client.emit('frame', 'authenticated', {});
+    client.emit('frame', 'authenticated', {});
+    expect(client.framesOf('workerInfo')).toHaveLength(2);
+  });
 
-    client.emit('open');
-    expect(client.sent[0]).toEqual({
-      type: 'workerInfo',
-      data: {
-        speechModels: [
-          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-          { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-        ],
-        loadedModelIDs: [],
-        maxConcurrentJobs: 2,
+  it('runs the happy path in the load-bearing order: jobStarted, jobResult, jobCompleted', async () => {
+    const { client, executor } = setup();
+    client.emit('frame', 'jobRequest', job());
+    await flush();
+
+    const types = client.sent.map((f) => f.type);
+    expect(types).toEqual(['jobState', 'jobResult', 'jobState']);
+
+    const [started] = client.framesOf('jobState');
+    expect(started.data.type).toBe('jobStarted');
+    expect(started.data.jobID).toBe('A0000000-0000-4000-8000-000000000031');
+    expect(started.data.imgID).toMatch(UUID_RE);
+
+    const [result] = client.framesOf('jobResult');
+    expect(result.data).toMatchObject({
+      jobID: 'A0000000-0000-4000-8000-000000000031',
+      imgID: started.data.imgID,
+      lastSeed: 0,
+      userCanceled: false,
+      triggeredNSFWFilter: false,
+      performedStepCount: 1,
+    });
+    expect(result.data.timings).toMatchObject({ inference: 0.4 });
+
+    const completed = client.framesOf('jobState')[1];
+    expect(completed.data).toMatchObject({ type: 'jobCompleted', imgID: started.data.imgID });
+
+    // jobResult must be on the wire before jobCompleted (24h shadowban otherwise).
+    expect(client.sent.indexOf(result)).toBeLessThan(client.sent.indexOf(completed));
+
+    expect(executor.execute).toHaveBeenCalledWith(expect.objectContaining({
+      jobID: 'A0000000-0000-4000-8000-000000000031',
+    }), { imgID: started.data.imgID });
+  });
+
+  it('sends a jobError with the mapped code when execution fails, and no jobCompleted', async () => {
+    const { client } = setup({
+      executor: {
+        execute: vi.fn(async () => {
+          throw new JobError('imgUploadFailure', 'HTTP 503');
+        }),
       },
     });
-    supervisor.stopCapacityLoop();
-  });
+    client.emit('frame', 'jobRequest', job());
+    await flush();
 
-  it('re-registers when the broker sends authenticated', () => {
-    supervisor.start();
-    client.emit('frame', 'authenticated', { ok: true });
-    expect(client.sentTypes()).toEqual(['workerInfo']);
-  });
-
-  // A broker that streams an unrecognized type would otherwise write a log line
-  // per frame for as long as it keeps sending them.
-  it('logs an unknown frame type once, however many arrive', () => {
-    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const quiet = new SpeechWorkerSupervisor({
-      client,
-      executor,
-      speechModels: MODELS,
-      maxConcurrentJobs: 2,
-      logger,
+    const errors = client.framesOf('jobError');
+    expect(errors).toHaveLength(1);
+    expect(errors[0].data).toMatchObject({
+      jobID: 'A0000000-0000-4000-8000-000000000031',
+      isFromWorker: true,
+      error: 'imgUploadFailure',
+      error_message: 'HTTP 503',
     });
-    quiet.start();
-
-    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
-    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
-    client.emit('frame', 'speechModelDownload', { modelID: 'y' });
-
-    const ignored = logger.log.mock.calls
-      .filter(([line]) => line.includes('Ignoring frame type speechModelDownload'));
-    expect(ignored).toHaveLength(1);
-
-    // A different unknown type still gets its own line.
-    client.emit('frame', 'someOtherFrame', {});
-    expect(logger.log.mock.calls
-      .filter(([line]) => line.includes('Ignoring frame type someOtherFrame'))).toHaveLength(1);
+    expect(errors[0].data.imgID).toMatch(UUID_RE);
+    expect(client.sent.filter((f) => f.type === 'jobState' && f.data.type === 'jobCompleted')).toHaveLength(0);
   });
 
-  it('emits capacity updates on the configured interval', async () => {
-    supervisor.start();
-    client.emit('open');
-    executor.activeRequests = 1;
-
-    await new Promise((resolve) => setTimeout(resolve, 70));
-    supervisor.stopCapacityLoop();
-
-    const capacity = client.sent.filter((frame) => frame.type === 'speechCapacityUpdate');
-    expect(capacity.length).toBeGreaterThanOrEqual(2);
-    expect(capacity[0].data).toEqual({ activeRequests: 1 });
-  });
-
-  it('runs a job and emits accepted, started, then jobResult', async () => {
-    supervisor.start();
-    await supervisor.handleJobRequest(sttJob());
-
-    expect(client.sentTypes()).toEqual(['jobState', 'jobState', 'jobResult']);
-    expect(client.sent[0].data).toEqual({ jobID: 'job-1', type: 'accepted' });
-    expect(client.sent[1].data).toEqual({ jobID: 'job-1', type: 'started' });
-    expect(client.sent[2].data).toEqual({
-      jobID: 'job-1',
-      transcript: 'hi',
-      transcriptDetails: { text: 'hi', rawOutput: '' },
-      meta: { audioSeconds: 1.2, durationMs: 900 },
+  it('rejects unacceptable jobs with a jobError and never starts them', async () => {
+    const { client } = setup({
+      executor: {
+        accept: vi.fn(() => {
+          throw new JobError('unsupported_model', 'No enabled engine for modelID "x"');
+        }),
+      },
     });
+    client.emit('frame', 'jobRequest', job());
+    await flush();
+
+    expect(client.framesOf('jobState')).toHaveLength(0);
+    expect(client.framesOf('jobError')[0].data.error).toBe('unsupported_model');
   });
 
-  it('emits jobError without jobState when the job is rejected at accept', async () => {
-    executor.accept.mockImplementationOnce(() => {
-      throw new JobError('capacity_exceeded', 'Worker is at capacity (2 concurrent jobs)');
+  // Cancellation arrives as an inbound jobError (isFromWorker: false); the
+  // broker waits for the worker's echo, then readyToAcceptJobs clears the
+  // 30s cancel cooldown.
+  it('handles inbound cancellation: abort, echo jobError, readyToAcceptJobs', async () => {
+    let releaseExecute;
+    const gate = new Promise((resolve) => { releaseExecute = resolve; });
+    const { client, executor } = setup({
+      executor: {
+        execute: vi.fn(async () => {
+          await gate;
+          throw new JobError('aborted', 'aborted');
+        }),
+      },
     });
-    supervisor.start();
+    client.emit('frame', 'jobRequest', job());
+    await flush();
+    const startedImgID = client.framesOf('jobState')[0].data.imgID;
 
-    await supervisor.handleJobRequest(sttJob('job-2'));
-
-    expect(client.sentTypes()).toEqual(['jobError']);
-    expect(client.sent[0].data).toEqual({
-      jobID: 'job-2',
-      code: 'capacity_exceeded',
-      message: 'Worker is at capacity (2 concurrent jobs)',
+    client.emit('frame', 'jobError', {
+      jobID: 'A0000000-0000-4000-8000-000000000031',
+      isFromWorker: false,
+      error: 'artistCanceled',
     });
-    expect(executor.execute).not.toHaveBeenCalled();
-  });
 
-  it('reports an execution failure as jobError', async () => {
-    executor.execute.mockRejectedValueOnce(new JobError('stt_failed', 'daemon died'));
-    supervisor.start();
-
-    await supervisor.handleJobRequest(sttJob('job-3'));
-
-    expect(client.sent[2]).toEqual({
-      type: 'jobError',
-      data: { jobID: 'job-3', code: 'stt_failed', message: 'daemon died' },
+    expect(executor.abort).toHaveBeenCalledWith('A0000000-0000-4000-8000-000000000031');
+    const echo = client.framesOf('jobError')[0];
+    expect(echo.data).toMatchObject({
+      jobID: 'A0000000-0000-4000-8000-000000000031',
+      imgID: startedImgID,
+      isFromWorker: true,
+      error: 'workerCancelled',
     });
+    expect(client.framesOf('readyToAcceptJobs')[0].data).toEqual({ ready: true });
+
+    // The aborted execution produces no further frames.
+    releaseExecute();
+    await flush();
+    expect(client.framesOf('jobError')).toHaveLength(1);
+    expect(client.framesOf('jobResult')).toHaveLength(0);
   });
 
-  it('labels an unexpected error internal_error', async () => {
-    executor.execute.mockRejectedValueOnce(new TypeError('undefined is not a function'));
-    supervisor.start();
-
-    await supervisor.handleJobRequest(sttJob('job-4'));
-
-    expect(client.sent[2].data.code).toBe('internal_error');
+  it('ignores a cancellation for a job it is not running', () => {
+    const { client, executor } = setup({ executor: { abort: vi.fn(() => false) } });
+    client.emit('frame', 'jobError', { jobID: 'nope', isFromWorker: false });
+    expect(executor.abort).toHaveBeenCalledWith('nope');
+    expect(client.framesOf('jobError')).toHaveLength(0);
+    expect(client.framesOf('readyToAcceptJobs')).toHaveLength(0);
   });
 
-  it('stays silent after an aborted job', async () => {
-    executor.execute.mockRejectedValueOnce(new JobError('aborted', 'Job job-5 was aborted'));
-    supervisor.start();
+  it('silently accepts expected broker frames and logs unknown types once', () => {
+    const { client, logger } = setup();
+    client.emit('frame', 'modelDownloadSuggest', { modelID: 'x' });
+    client.emit('frame', 'pong', null);
+    client.emit('frame', 'socketEventSubscriptionsUpdated', {});
+    expect(logger.log).not.toHaveBeenCalled();
 
-    await supervisor.handleJobRequest(sttJob('job-5'));
-
-    expect(client.sentTypes()).toEqual(['jobState', 'jobState']);
+    client.emit('frame', 'mysteryFrame', {});
+    client.emit('frame', 'mysteryFrame', {});
+    const unknownLogs = logger.log.mock.calls.filter(([line]) => line.includes('mysteryFrame'));
+    expect(unknownLogs).toHaveLength(1);
   });
 
-  it('treats an inbound jobError as an abort', () => {
-    supervisor.start();
-    client.emit('frame', 'jobError', { jobID: 'job-6', code: 'cancelled', message: 'user cancel' });
-    expect(executor.abort).toHaveBeenCalledWith('job-6');
+  it('handles a dataless cancellation frame without throwing', () => {
+    const { client } = setup();
+    expect(() => client.emit('frame', 'jobError', null)).not.toThrow();
   });
 
-  it('also handles a defensive jobCancel', () => {
-    supervisor.start();
-    client.emit('frame', 'jobCancel', { jobID: 'job-7' });
-    expect(executor.abort).toHaveBeenCalledWith('job-7');
-  });
+  it('shutdown drains in-flight jobs before closing the socket', async () => {
+    let releaseExecute;
+    const gate = new Promise((resolve) => { releaseExecute = resolve; });
+    const { client, executor, supervisor } = setup({
+      executor: { execute: vi.fn(async () => { await gate; return { ...RESULT }; }) },
+    });
+    client.emit('frame', 'jobRequest', job());
+    await flush();
 
-  it('ignores unknown frame types', () => {
-    supervisor.start();
-    expect(() => client.emit('frame', 'supportedModels', { models: [] })).not.toThrow();
-    expect(client.sent).toEqual([]);
-  });
-
-  it('tolerates dataless broker frames', () => {
-    supervisor.start();
-    expect(() => client.emit('frame', 'jobCancel', null)).not.toThrow();
-    expect(executor.abort).not.toHaveBeenCalled();
-  });
-
-  it('sends the last jobResult before closing the socket on shutdown', async () => {
-    supervisor.start();
-    client.emit('open');
-
-    let releaseJob;
-    executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseJob = () => resolve({
-        jobID: 'job-8',
-        transcript: 'late',
-        transcriptDetails: { text: 'late', rawOutput: '' },
-        meta: { audioSeconds: 1, durationMs: 5 },
-      });
-    }));
-
-    client.emit('frame', 'jobRequest', sttJob('job-8'));
-    await waitFor(() => client.sentTypes().includes('jobState'));
-
-    const draining = supervisor.shutdown();
+    const shutdown = supervisor.shutdown();
     expect(executor.startDrain).toHaveBeenCalled();
-    expect(client.close).not.toHaveBeenCalled();
+    expect(client.closed).toBe(false);
 
-    releaseJob();
-    await draining;
-
-    const meaningful = client.sentTypes().filter((type) => type !== 'speechCapacityUpdate');
-    expect(meaningful).toEqual(['workerInfo', 'jobState', 'jobState', 'jobResult']);
-    expect(client.close).toHaveBeenCalled();
-    expect(supervisor.capacityTimer).toBeNull();
-    expect(supervisor.inFlight.size).toBe(0);
+    releaseExecute();
+    await shutdown;
+    expect(client.closed).toBe(true);
+    // The drained job still completed its full frame sequence.
+    expect(client.framesOf('jobResult')).toHaveLength(1);
   });
 
-  it('emits jobProgress keepalives while a job is in flight and stops after the terminal frame', async () => {
-    supervisor.progressIntervalMs = 10;
-    supervisor.start();
-    let releaseJob;
-    executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseJob = () => resolve({
-        jobID: 'job-9',
-        transcript: 'slow',
-        transcriptDetails: { text: 'slow', rawOutput: '' },
-        meta: { audioSeconds: 1, durationMs: 5 },
-      });
-    }));
+  it('shutdown gives up after the drain timeout', async () => {
+    const { client, supervisor } = setup({
+      executor: { execute: vi.fn(() => new Promise(() => {})) },
+    });
+    client.emit('frame', 'jobRequest', job());
+    await flush();
 
-    client.emit('frame', 'jobRequest', sttJob('job-9'));
-    await waitFor(() => client.sentTypes().includes('jobProgress'));
+    await supervisor.shutdown();
+    expect(client.closed).toBe(true);
+  });
 
-    const pulse = client.sent.find((frame) => frame.type === 'jobProgress');
-    expect(pulse.data.jobID).toBe('job-9');
-    expect(pulse.data.progress).toBeGreaterThanOrEqual(0);
-    expect(pulse.data.progress).toBeLessThanOrEqual(0.95);
-
-    releaseJob();
-    await waitFor(() => client.sentTypes().includes('jobResult'));
-    const framesAtCompletion = client.sent.length;
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    const framesAfterWait = client.sent
-      .slice(framesAtCompletion)
-      .filter((frame) => frame.type === 'jobProgress');
-    expect(framesAfterWait).toEqual([]); // timer cleared with the job
+  it('keeps running when a job dispatch crashes unexpectedly', async () => {
+    const { client, logger } = setup({
+      executor: { accept: vi.fn(() => { throw new TypeError('boom'); }) },
+    });
+    client.emit('frame', 'jobRequest', job());
+    await flush();
+    // Mapped to internal_error, not an unhandled rejection.
+    expect(client.framesOf('jobError')[0].data.error).toBe('internal_error');
+    expect(logger.error).toHaveBeenCalled();
   });
 });

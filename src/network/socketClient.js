@@ -16,6 +16,7 @@ export class SogniSocketClient extends EventEmitter {
   constructor({
     url,
     apiKey,
+    nftTokenId,
     workerId,
     userAgent,
     reconnectInitialDelayMs = 5000,
@@ -31,6 +32,7 @@ export class SogniSocketClient extends EventEmitter {
     super();
     this.url = url;
     this.apiKey = apiKey;
+    this.nftTokenId = nftTokenId;
     this.workerId = workerId;
     this.userAgent = userAgent;
     this.reconnectInitialDelayMs = reconnectInitialDelayMs;
@@ -53,12 +55,15 @@ export class SogniSocketClient extends EventEmitter {
     this.intentionalClose = false;
   }
 
+  // Standard worker auth: api-key + nft-token-id, client-type 'worker'.
+  // NO authorization header (its presence forces the JWT branch and api-key
+  // auth never runs) and NO worker-subtype (that selects the LLM lane).
   buildHeaders() {
     return {
       'api-key': this.apiKey,
+      'nft-token-id': this.nftTokenId,
       'app-id': this.workerId,
       'client-type': 'worker',
-      'worker-subtype': 'speech',
       'user-agent': this.userAgent,
     };
   }
@@ -136,7 +141,7 @@ export class SogniSocketClient extends EventEmitter {
       this.safeEmit('close', code, reasonText);
 
       if (code === AUTH_FAILURE_CLOSE_CODE) {
-        this.logger.error('[speech-worker] Broker rejected our API key (4021); not retrying');
+        this.logger.error('[speech-worker] Broker rejected our API key / NFT (4021); not retrying');
         this.onAuthFailure();
         return;
       }

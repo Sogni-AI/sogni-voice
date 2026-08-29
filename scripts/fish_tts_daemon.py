@@ -33,6 +33,7 @@ Protocol:
   Ready:   {"status":"ready","voices":[...],"features":[...],"sample_rate":44100}
 """
 
+import gc
 import io
 import json
 import os
@@ -62,6 +63,15 @@ DEFAULT_MAX_BYTES_PER_CHUNK = max(
 )
 CHUNK_PAUSE_SECONDS = 0.12
 DEFAULT_VOICE = "default"
+# MLX otherwise defaults its free-buffer cache to nearly the full process memory
+# limit. Two GiB preserves useful within-request reuse without pinning tens of
+# GiB between occasional TTS requests.
+MLX_CACHE_LIMIT_BYTES = 2 * 1024**3
+MLX_MEMORY_REQUEST_TYPES = frozenset({
+    "generate",
+    "generate_voice_clone",
+    "create_voice_clone",
+})
 
 _SPEAKER_TAG_RE = re.compile(r"<\|speaker:\d+\|>")
 _STANDALONE_HANDLE_RE = re.compile(r"(?<![\w.+/-])@([A-Za-z0-9_]+)\b")
@@ -70,6 +80,12 @@ _SENTENCE_BOUNDARY_RE = re.compile(r"(?<=[.!?])\s+|(?<=[。！？])\s*")
 
 def _log(msg: str) -> None:
     print(f"[fish-tts-daemon] {msg}", file=sys.stderr)
+
+
+def _format_gib(value: int | None) -> str:
+    if value is None:
+        return "unknown"
+    return f"{value / (1024**3):.2f} GiB"
 
 
 def _utf8_len(text: str) -> int:
@@ -188,6 +204,77 @@ class FishTTSDaemon:
             return False
         return True
 
+    def _configure_mlx_memory(self, mx) -> None:
+        """Bound MLX's free-buffer cache without evicting model weights."""
+        self._mx = mx
+        try:
+            previous_limit = mx.set_cache_limit(MLX_CACHE_LIMIT_BYTES)
+        except Exception as e:  # noqa: BLE001 - memory tuning is best-effort
+            _log(f"Unable to set MLX cache limit: {e}")
+            return
+        _log(
+            "MLX free-cache limit set to "
+            f"{_format_gib(MLX_CACHE_LIMIT_BYTES)} "
+            f"(previously {_format_gib(previous_limit)})"
+        )
+
+    def _mlx_memory_snapshot(self) -> dict[str, int] | None:
+        if self._mx is None:
+            return None
+        try:
+            return {
+                "active": int(self._mx.get_active_memory()),
+                "cache": int(self._mx.get_cache_memory()),
+                "peak": int(self._mx.get_peak_memory()),
+            }
+        except Exception as e:  # noqa: BLE001 - observability must not break TTS
+            _log(f"Unable to read MLX memory counters: {e}")
+            return None
+
+    def _release_request_memory(self, request_type: str | None) -> None:
+        """Release disposable Metal buffers after a model-backed request.
+
+        The model remains referenced by ``self.model``. Only completed command
+        buffers, unreachable Python objects, and MLX's free allocation cache are
+        drained, so later requests avoid a model reload while cached RAM becomes
+        reclaimable by the operating system.
+        """
+        if request_type not in MLX_MEMORY_REQUEST_TYPES or self._mx is None:
+            return
+
+        started = time.perf_counter()
+        before = self._mlx_memory_snapshot()
+        try:
+            self._mx.synchronize()
+        except Exception as e:  # noqa: BLE001 - cleanup is best-effort
+            _log(f"MLX synchronize after {request_type} failed: {e}")
+
+        gc.collect()
+        try:
+            self._mx.clear_cache()
+        except Exception as e:  # noqa: BLE001 - never fail a completed request
+            _log(f"MLX cache cleanup after {request_type} failed: {e}")
+
+        after = self._mlx_memory_snapshot()
+        try:
+            self._mx.reset_peak_memory()
+        except Exception as e:  # noqa: BLE001 - metric reset is best-effort
+            _log(f"Unable to reset MLX peak-memory counter: {e}")
+
+        elapsed_ms = (time.perf_counter() - started) * 1000.0
+        if before is not None and after is not None:
+            reclaimed = max(0, before["cache"] - after["cache"])
+            _log(
+                f"MLX cleanup after {request_type}: "
+                f"active={_format_gib(after['active'])}, "
+                f"cache={_format_gib(after['cache'])}, "
+                f"request_peak={_format_gib(before['peak'])}, "
+                f"reclaimed={_format_gib(reclaimed)}, "
+                f"elapsed={elapsed_ms:.1f}ms"
+            )
+        else:
+            _log(f"MLX cleanup after {request_type} completed in {elapsed_ms:.1f}ms")
+
     def load_model(self) -> bool:
         try:
             _log(f"Loading Fish S2 Pro model from {MODEL_PATH} ...")
@@ -205,7 +292,7 @@ class FishTTSDaemon:
             os.environ.setdefault("FISH_MLX_MAX_TOKENS", str(DEFAULT_MAX_TOKENS))
             from local_mlx.host_server import FishMLXServer, _encode_wav_pcm16
 
-            self._mx = mx
+            self._configure_mlx_memory(mx)
             self._np = np
             self._load_audio = load_audio
             self._encode_wav = _encode_wav_pcm16
@@ -215,6 +302,10 @@ class FishTTSDaemon:
             self.server = FishMLXServer(model_path=Path(MODEL_PATH), lazy=False, warmup=False)
             self.model = self.server.ensure_model()
             self.sample_rate = int(getattr(self.model, "sample_rate", 44100))
+            try:
+                mx.reset_peak_memory()
+            except Exception as e:  # noqa: BLE001 - metric reset is best-effort
+                _log(f"Unable to reset MLX peak-memory counter after load: {e}")
             _log(f"Model loaded (sample_rate={self.sample_rate})")
             return True
         except Exception as e:  # noqa: BLE001 - report any load failure to the parent
@@ -513,6 +604,27 @@ class FishTTSDaemon:
     def send_response(self, response: dict) -> None:
         print(json.dumps(response), flush=True)
 
+    @staticmethod
+    def _request_type_for_cleanup(line: str) -> str | None:
+        try:
+            request = json.loads(line)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(request, dict):
+            return None
+        if request.get("command") == "shutdown":
+            return None
+        request_type = request.get("type", "generate")
+        return request_type if isinstance(request_type, str) else None
+
+    def _handle_line(self, line: str) -> None:
+        """Send the response first, then reclaim memory before the next request."""
+        request_type = self._request_type_for_cleanup(line)
+        try:
+            self.send_response(self.handle_request(line))
+        finally:
+            self._release_request_memory(request_type)
+
     def handle_request(self, line: str) -> dict:
         try:
             request = json.loads(line)
@@ -603,7 +715,7 @@ class FishTTSDaemon:
                 line = line.strip()
                 if not line:
                     continue
-                self.send_response(self.handle_request(line))
+                self._handle_line(line)
             except Exception as e:  # noqa: BLE001
                 _log(f"Unexpected error in main loop: {e}")
                 traceback.print_exc(file=sys.stderr)

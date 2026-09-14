@@ -1,3 +1,4 @@
+import { DaemonRequestQueue } from '../utils/daemonRequestQueue.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { readdir, stat } from 'node:fs/promises';
@@ -50,8 +51,13 @@ export class MossTTSService {
     this.daemonProcess = null;
     this.daemonReady = false;
     this.initPromise = null;
-    this.requestIdCounter = 0;
     this.pendingRequests = new Map();
+    this.requestQueue = new DaemonRequestQueue({
+      ensureDaemon: () => this._ensureDaemon(),
+      getProcess: () => this.daemonReady ? this.daemonProcess : null,
+      pendingRequests: this.pendingRequests,
+      createError: (message) => new MossTTSError(message),
+    });
     this.readlineInterface = null;
     this.startupTimeoutId = null;
     this.modelInfo = {
@@ -66,8 +72,14 @@ export class MossTTSService {
   async initialize() {
     if (this.daemonReady) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._startDaemon();
-    return this.initPromise;
+    const initialization = this._startDaemon();
+    this.initPromise = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (this.initPromise === initialization) this.initPromise = null;
+      throw error;
+    }
   }
 
   async _startDaemon() {
@@ -185,8 +197,6 @@ export class MossTTSService {
 
   async _ensureDaemon() {
     if (!this.daemonReady || !this.daemonProcess) {
-      this.initPromise = null;
-      this.daemonReady = false;
       await this.initialize();
     }
   }
@@ -200,42 +210,15 @@ export class MossTTSService {
     );
   }
 
-  async _request(type, payload = {}) {
-    await this._ensureDaemon();
-    if (!this.daemonReady || !this.daemonProcess) {
-      throw new MossTTSError('MOSS-TTS-Nano daemon is not available');
-    }
-
-    const requestId = `moss-tts-${++this.requestIdCounter}`;
-    const timeout = this.requestTimeout(type, payload);
-    return new Promise((resolveRequest, rejectRequest) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        rejectRequest(new MossTTSError(`MOSS-TTS-Nano ${type} request timed out`));
-      }, timeout);
-
-      this.pendingRequests.set(requestId, {
-        resolve: (result) => {
-          clearTimeout(timeoutId);
-          resolveRequest(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          rejectRequest(error);
-        },
-      });
-
-      try {
-        this.daemonProcess.stdin.write(`${JSON.stringify({ id: requestId, type, ...payload })}\n`);
-      } catch (error) {
-        this.pendingRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        rejectRequest(new MossTTSError(`Failed to write to MOSS-TTS-Nano daemon: ${error.message}`, error));
-      }
+  async _request(type, payload = {}, { signal } = {}) {
+    return this.requestQueue.request({ type, ...payload }, {
+      signal,
+      timeout: this.requestTimeout(type, payload),
+      interruptOnTimeout: type === 'generate',
     });
   }
 
-  async generate(text, { voiceId, outputPath } = {}) {
+  async generate(text, { voiceId, outputPath, signal } = {}) {
     if (!voiceId) throw new MossTTSError('voiceId is required');
     if (!outputPath) throw new MossTTSError('outputPath is required');
 
@@ -243,7 +226,7 @@ export class MossTTSService {
       text,
       voice_id: voiceId,
       output_path: outputPath,
-    });
+    }, { signal });
     return {
       outputPath: response.output_path,
       voiceId: response.voice_id,
@@ -318,6 +301,7 @@ export class MossTTSService {
   }
 
   async shutdown() {
+    this.requestQueue.cancelWaiting(new MossTTSError('TTS service shutting down'));
     if (!this.daemonProcess) return;
     return new Promise((resolveShutdown) => {
       const processToStop = this.daemonProcess;

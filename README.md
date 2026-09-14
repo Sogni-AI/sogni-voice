@@ -1192,6 +1192,35 @@ If you ran `./setup.sh`, you can opt to predownload models during setup to avoid
 
 ## Performance
 
+### Cancelling TTS requests
+
+Cancelling an HTTP request (for example, with a fetch `AbortController`, Ctrl-C
+in curl, or a closed connection) cancels its speech generation. This applies to
+Kokoro, Pocket TTS, Fish Speech, MOSS-TTS-Nano, and all Qwen3-TTS generation modes,
+including saved voice clones and voice design.
+
+- Queued requests are removed before inference starts. Other requests keep their
+  place in the queue, and cancelling queued work keeps the model loaded.
+- Active generation stops by terminating its Python daemon with `SIGKILL`.
+  The current backend calls do not support a safe per-request interrupt. The
+  next request reloads that model, so it incurs the model's startup cost.
+- Generation timeouts also stop active inference. The timeout budget includes
+  time waiting behind a busy worker; initial model loading retains its separate
+  startup timeout.
+- Cancellation during model loading prevents that request from generating; the
+  shared initialization can finish for other callers.
+- Temporary output is cleaned after the cancelled worker exits. Cancelling
+  during output conversion also aborts FFmpeg.
+
+Each daemon processes one request at a time. Other daemons, including separate
+Qwen Base, CustomVoice, and VoiceDesign models, continue independently.
+
+Reverse proxies must forward client disconnects to the API. The supplied nginx
+configuration explicitly sets
+[`proxy_ignore_client_abort off`](https://nginx.org/en/docs/http/ngx_http_proxy_module.html#proxy_ignore_client_abort).
+A client that merely stops awaiting a response while leaving its connection
+open has not cancelled the server request.
+
 ### Daemon Architecture
 
 All services use persistent Python daemons that keep ML models loaded in memory:

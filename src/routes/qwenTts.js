@@ -1,3 +1,4 @@
+import { requestCancellation } from '../utils/requestCancellation.js';
 import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { readFile, unlink, mkdir, writeFile, readdir, stat, lstat } from 'node:fs/promises';
@@ -158,6 +159,8 @@ export const qwenTtsRoutes = [
       tags: ['api', 'qwen-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -169,12 +172,13 @@ export const qwenTtsRoutes = [
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
         const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, {
+          signal,
           speaker: voice,
           language,
           outputPath,
         });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -198,9 +202,9 @@ export const qwenTtsRoutes = [
             '-b:a', '32k',
             '-y',
             opusPath,
-          ], { timeout: 300000 });
+          ], { timeout: 300000, signal });
 
-          const opusBuffer = await readFile(opusPath);
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS request completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -214,10 +218,12 @@ export const qwenTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         console.error('Qwen TTS error:', error);
         throw Boom.badImplementation('Qwen TTS generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }
@@ -253,6 +259,8 @@ export const qwenTtsRoutes = [
       tags: ['api', 'qwen-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -277,13 +285,14 @@ export const qwenTtsRoutes = [
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
         const result = await qwenTtsCustomVoiceService.generateCustomVoice(text, {
+          signal,
           speaker,
           instruct,
           language,
           outputPath,
         });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -303,8 +312,8 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ], { timeout: 300000 });
-          const opusBuffer = await readFile(opusPath);
+          ], { timeout: 300000, signal });
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS custom-voice request completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -318,10 +327,12 @@ export const qwenTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         console.error('Qwen TTS custom-voice error:', error);
         throw Boom.badImplementation('Qwen TTS custom-voice generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }
@@ -355,6 +366,8 @@ export const qwenTtsRoutes = [
       tags: ['api', 'qwen-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -378,12 +391,13 @@ export const qwenTtsRoutes = [
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
         const result = await qwenTtsVoiceDesignService.generateVoiceDesign(text, {
+          signal,
           instruct,
           language,
           outputPath,
         });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -402,8 +416,8 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ], { timeout: 300000 });
-          const opusBuffer = await readFile(opusPath);
+          ], { timeout: 300000, signal });
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS voice-design request completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -417,10 +431,12 @@ export const qwenTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         console.error('Qwen TTS voice-design error:', error);
         throw Boom.badImplementation('Qwen TTS voice-design generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }
@@ -536,6 +552,8 @@ export const qwenTtsRoutes = [
       tags: ['api', 'qwen-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -553,9 +571,9 @@ export const qwenTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('qwen-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await qwenTtsBaseService.generateVoiceClone(text, { cloneId, language, outputPath });
+        const result = await qwenTtsBaseService.generateVoiceClone(text, { signal, cloneId, language, outputPath });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -574,8 +592,8 @@ export const qwenTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ], { timeout: 300000 });
-          const opusBuffer = await readFile(opusPath);
+          ], { timeout: 300000, signal });
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Qwen TTS clone generation completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -589,6 +607,7 @@ export const qwenTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         if (error.message?.includes('not found')) {
           throw Boom.notFound(`Voice clone '${request.params.cloneId}' not found`);
@@ -596,6 +615,7 @@ export const qwenTtsRoutes = [
         console.error('Qwen TTS clone generation error:', error);
         throw Boom.badImplementation('Voice clone generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }

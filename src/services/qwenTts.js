@@ -1,3 +1,4 @@
+import { DaemonRequestQueue } from '../utils/daemonRequestQueue.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
@@ -32,8 +33,13 @@ export class QwenTTSService {
     this.daemonProcess = null;
     this.daemonReady = false;
     this.initPromise = null;
-    this.requestIdCounter = 0;
     this.pendingRequests = new Map();
+    this.requestQueue = new DaemonRequestQueue({
+      ensureDaemon: () => this._ensureDaemon(),
+      getProcess: () => this.daemonReady ? this.daemonProcess : null,
+      pendingRequests: this.pendingRequests,
+      createError: (message) => new QwenTTSError(message),
+    });
     this.readlineInterface = null;
     this.startupTimeoutId = null;
     this.modelInfo = {
@@ -56,8 +62,14 @@ export class QwenTTSService {
     if (this.daemonReady) return;
     if (this.initPromise) return this.initPromise;
 
-    this.initPromise = this._startDaemon();
-    return this.initPromise;
+    const initialization = this._startDaemon();
+    this.initPromise = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (this.initPromise === initialization) this.initPromise = null;
+      throw error;
+    }
   }
 
   async _startDaemon() {
@@ -148,6 +160,8 @@ export class QwenTTSService {
 
       // Handle daemon exit
       this.daemonProcess.on('close', (code) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         console.log(`Qwen TTS daemon (${this.variant}) exited with code ${code}`);
         this.daemonReady = false;
         this.daemonProcess = null;
@@ -170,6 +184,8 @@ export class QwenTTSService {
       });
 
       this.daemonProcess.on('error', (error) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         this.initPromise = null;
         reject(new QwenTTSError(`Failed to spawn Qwen TTS daemon: ${error.message}`, error));
       });
@@ -191,8 +207,6 @@ export class QwenTTSService {
   async _ensureDaemon() {
     if (!this.daemonReady || !this.daemonProcess) {
       console.log(`Qwen TTS daemon (${this.variant}) not available, attempting to start...`);
-      this.initPromise = null;
-      this.daemonReady = false;
       await this.initialize();
     }
   }
@@ -200,46 +214,11 @@ export class QwenTTSService {
   /**
    * Send a request to the daemon and wait for response
    */
-  async _sendRequest(request, { timeout: customTimeout } = {}) {
-    await this._ensureDaemon();
-
-    if (!this.daemonProcess || !this.daemonReady) {
-      throw new QwenTTSError('Qwen TTS daemon not available');
-    }
-
-    const requestId = `req-${++this.requestIdCounter}`;
-    request.id = requestId;
-
-    const timeout = customTimeout || config.qwenTts.timeout || 300000;
-    console.log(`[qwen-tts-${this.variant}] Sending request ${requestId}: type=${request.type}, timeout=${timeout}ms`);
-
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        console.log(`[qwen-tts-${this.variant}] Request ${requestId} timed out after ${timeout}ms`);
-        reject(new QwenTTSError('Qwen TTS request timed out'));
-      }, timeout);
-
-      this.pendingRequests.set(requestId, {
-        resolve: (result) => {
-          clearTimeout(timeoutId);
-          console.log(`[qwen-tts-${this.variant}] Request ${requestId} completed successfully`);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          console.log(`[qwen-tts-${this.variant}] Request ${requestId} failed: ${error.message}`);
-          reject(error);
-        },
-      });
-
-      try {
-        this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
-      } catch (error) {
-        this.pendingRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        reject(new QwenTTSError(`Failed to write to daemon: ${error.message}`));
-      }
+  async _sendRequest(request, { timeout: customTimeout, signal } = {}) {
+    return this.requestQueue.request(request, {
+      signal,
+      timeout: customTimeout || config.qwenTts.timeout || 300000,
+      interruptOnTimeout: request.type.startsWith('generate'),
     });
   }
 
@@ -269,7 +248,7 @@ export class QwenTTSService {
       voice,
       language,
       output_path: outputPath,
-    }, { timeout: computeGenerationTimeout(text) });
+    }, { timeout: computeGenerationTimeout(text), signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -307,7 +286,7 @@ export class QwenTTSService {
       instruct,
       language,
       output_path: outputPath,
-    }, { timeout: computeGenerationTimeout(text) });
+    }, { timeout: computeGenerationTimeout(text), signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -347,7 +326,7 @@ export class QwenTTSService {
       instruct,
       language,
       output_path: outputPath,
-    }, { timeout: computeGenerationTimeout(text) });
+    }, { timeout: computeGenerationTimeout(text), signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -419,7 +398,7 @@ export class QwenTTSService {
       clone_id: cloneId,
       language,
       output_path: outputPath,
-    }, { timeout: computeGenerationTimeout(text) });
+    }, { timeout: computeGenerationTimeout(text), signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -576,26 +555,28 @@ export class QwenTTSService {
    * Gracefully shutdown the daemon
    */
   async shutdown() {
+    this.requestQueue.cancelWaiting(new QwenTTSError('TTS service shutting down'));
     if (!this.daemonProcess) return;
+    const processToStop = this.daemonProcess;
 
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => {
         console.log(`Qwen TTS daemon (${this.variant}) shutdown timeout, forcing kill...`);
-        this.daemonProcess?.kill('SIGKILL');
+        processToStop.kill('SIGKILL');
         resolve();
       }, 5000);
 
-      this.daemonProcess.once('close', () => {
+      processToStop.once('close', () => {
         clearTimeout(timeoutId);
         resolve();
       });
 
       // Send shutdown command
       try {
-        this.daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
+        processToStop.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
       } catch (e) {
         // stdin may already be closed
-        this.daemonProcess.kill('SIGTERM');
+        processToStop.kill('SIGTERM');
       }
     });
   }

@@ -1,3 +1,4 @@
+import { requestCancellation } from '../utils/requestCancellation.js';
 import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { createWriteStream } from 'node:fs';
@@ -54,8 +55,8 @@ const throwMappedError = (error) => {
   throw error;
 };
 
-const sendAudio = async ({ h, outputPath, format, result, filename = 'fish-s2-output' }) => {
-  const wavBuffer = await readFile(outputPath);
+const sendAudio = async ({ signal, h, outputPath, format, result, filename = 'fish-s2-output' }) => {
+  const wavBuffer = await readFile(outputPath, { signal });
   if (format === 'buffer') {
     return {
       success: true,
@@ -71,8 +72,8 @@ const sendAudio = async ({ h, outputPath, format, result, filename = 'fish-s2-ou
     await execFileAsync('ffmpeg', [
       '-nostdin', '-y', '-loglevel', 'error',
       '-i', outputPath, '-c:a', 'libopus', '-b:a', '64k', opusPath,
-    ], { timeout: 300000 });
-    const opusBuffer = await readFile(opusPath);
+    ], { timeout: 300000, signal });
+    const opusBuffer = await readFile(opusPath, { signal });
     return h.response(opusBuffer)
       .type('audio/opus')
       .header('Content-Disposition', `attachment; filename="${filename}.opus"`);
@@ -159,18 +160,22 @@ export const fishTtsRoutes = [
       tags: ['api', 'fish-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       let tempDir = null;
       try {
         const { text, format: payloadFormat, maxTokens, temperature } = request.payload;
         tempDir = await tempFileManager.createTempDir('fish-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
-        const result = await fishTtsService.generate(text, { outputPath, maxTokens, temperature });
-        return await sendAudio({ h, outputPath, format: request.query.format || payloadFormat, result });
+        const result = await fishTtsService.generate(text, { signal, outputPath, maxTokens, temperature });
+        return await sendAudio({ signal, h, outputPath, format: request.query.format || payloadFormat, result });
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (!error.isBoom) console.error('Fish S2 generation error:', error);
         throwMappedError(error);
         throw Boom.badImplementation('Fish S2 generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) await tempFileManager.cleanup(tempDir);
       }
     },
@@ -194,6 +199,8 @@ export const fishTtsRoutes = [
       tags: ['api', 'fish-tts', 'voice-cloning'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       let tempDir = null;
       try {
         const { cloneId } = request.params;
@@ -201,17 +208,21 @@ export const fishTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('fish-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
         const result = await fishTtsService.generateVoiceClone(text, {
+          signal,
           cloneId, outputPath, maxTokens, temperature,
         });
         return await sendAudio({
+          signal,
           h, outputPath, format: request.query.format || payloadFormat, result,
           filename: `fish-s2-${cloneId}`,
         });
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (!error.isBoom) console.error('Fish S2 clone generation error:', error);
         throwMappedError(error);
         throw Boom.badImplementation('Fish S2 clone generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) await tempFileManager.cleanup(tempDir);
       }
     },

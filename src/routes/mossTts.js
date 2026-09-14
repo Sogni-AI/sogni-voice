@@ -1,3 +1,4 @@
+import { requestCancellation } from '../utils/requestCancellation.js';
 import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { createWriteStream } from 'node:fs';
@@ -59,8 +60,8 @@ const throwMappedError = (error) => {
   throw error;
 };
 
-const sendAudio = async ({ h, outputPath, format, voiceId, result }) => {
-  const wavBuffer = await readFile(outputPath);
+const sendAudio = async ({ signal, h, outputPath, format, voiceId, result }) => {
+  const wavBuffer = await readFile(outputPath, { signal });
   if (format === 'buffer') {
     return {
       success: true,
@@ -83,8 +84,8 @@ const sendAudio = async ({ h, outputPath, format, voiceId, result }) => {
       '-i', outputPath,
       '-c:a', 'libopus', '-b:a', '64k',
       opusPath,
-    ], { timeout: 300000 });
-    const opusBuffer = await readFile(opusPath);
+    ], { timeout: 300000, signal });
+    const opusBuffer = await readFile(opusPath, { signal });
     return h.response(opusBuffer)
       .type('audio/opus')
       .header('Content-Disposition', 'attachment; filename="moss-output.opus"');
@@ -115,6 +116,8 @@ export const mossTtsRoutes = [
       tags: ['api', 'moss-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       let tempDir = null;
       try {
         const { text, voice: requestedVoice, format: payloadFormat } = request.payload;
@@ -127,8 +130,9 @@ export const mossTtsRoutes = [
 
         tempDir = await tempFileManager.createTempDir('moss-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
-        const result = await mossTtsService.generate(text, { voiceId, outputPath });
+        const result = await mossTtsService.generate(text, { signal, voiceId, outputPath });
         return await sendAudio({
+          signal,
           h,
           outputPath,
           format: request.query.format || payloadFormat,
@@ -136,10 +140,12 @@ export const mossTtsRoutes = [
           result,
         });
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (!error.isBoom) console.error('MOSS-TTS-Nano generation error:', error);
         throwMappedError(error);
         throw Boom.badImplementation('MOSS-TTS-Nano generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) await tempFileManager.cleanup(tempDir);
       }
     },

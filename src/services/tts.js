@@ -1,3 +1,4 @@
+import { DaemonRequestQueue } from '../utils/daemonRequestQueue.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
@@ -11,12 +12,21 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 let daemonProcess = null;
 let daemonReady = false;
 let initPromise = null;
-let requestIdCounter = 0;
 let readlineInterface = null;
 let startupTimeoutId = null;
 const pendingRequests = new Map();
+let requestQueue;
 
 export class TTSService {
+  constructor() {
+    requestQueue ??= new DaemonRequestQueue({
+      ensureDaemon: () => this._ensureDaemon(),
+      getProcess: () => daemonReady ? daemonProcess : null,
+      pendingRequests,
+      createError: (message) => new TTSError(message),
+    });
+  }
+
   /**
    * Initialize the TTS daemon. Uses promise deduplication
    * to prevent multiple simultaneous initializations.
@@ -25,8 +35,14 @@ export class TTSService {
     if (daemonReady) return;
     if (initPromise) return initPromise;
 
-    initPromise = this._startDaemon();
-    return initPromise;
+    const initialization = this._startDaemon();
+    initPromise = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (initPromise === initialization) initPromise = null;
+      throw error;
+    }
   }
 
   async _startDaemon() {
@@ -107,6 +123,8 @@ export class TTSService {
 
       // Handle daemon exit
       daemonProcess.on('close', (code) => {
+        clearTimeout(startupTimeoutId);
+        startupTimeoutId = null;
         console.log(`TTS daemon exited with code ${code}`);
         daemonReady = false;
         daemonProcess = null;
@@ -129,6 +147,8 @@ export class TTSService {
       });
 
       daemonProcess.on('error', (error) => {
+        clearTimeout(startupTimeoutId);
+        startupTimeoutId = null;
         initPromise = null;
         reject(new TTSError(`Failed to spawn TTS daemon: ${error.message}`, error));
       });
@@ -138,6 +158,7 @@ export class TTSService {
       startupTimeoutId = setTimeout(() => {
         if (!daemonReady) {
           this.shutdown();
+          initPromise = null;
           reject(new TTSError('TTS daemon initialization timed out'));
         }
       }, startupTimeout);
@@ -150,8 +171,6 @@ export class TTSService {
   async _ensureDaemon() {
     if (!daemonReady || !daemonProcess) {
       console.log('TTS daemon not available, attempting to start...');
-      initPromise = null;
-      daemonReady = false;
       await this.initialize();
     }
   }
@@ -172,90 +191,52 @@ export class TTSService {
       speed = config.tts.defaultSpeed,
       outputPath,
       timestamps = false,
+      signal,
     } = options;
 
-    if (!outputPath) {
-      throw new TTSError('outputPath is required');
-    }
+    if (!outputPath) throw new TTSError('outputPath is required');
 
-    await this._ensureDaemon();
+    const result = await requestQueue.request({
+      text, voice, speed, output_path: outputPath, timestamps,
+    }, { signal, timeout: config.tts.timeout || 60000 });
 
-    if (!daemonProcess || !daemonReady) {
-      throw new TTSError('TTS daemon not available');
-    }
-
-    const requestId = `req-${++requestIdCounter}`;
-
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        pendingRequests.delete(requestId);
-        reject(new TTSError('TTS generation timed out'));
-      }, config.tts.timeout || 60000);
-
-      pendingRequests.set(requestId, {
-        resolve: (result) => {
-          clearTimeout(timeoutId);
-          const response = {
-            audio: null, // Audio is saved to file, not returned
-            voice,
-            speed,
-            outputPath: result.outputPath,
-            duration: result.duration,
-          };
-          if (result.timestamps) {
-            response.timestamps = result.timestamps;
-          }
-          resolve(response);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          reject(error);
-        },
-      });
-
-      const request = JSON.stringify({
-        id: requestId,
-        text,
-        voice,
-        speed,
-        output_path: outputPath,
-        timestamps,
-      });
-
-      try {
-        daemonProcess.stdin.write(request + '\n');
-      } catch (error) {
-        pendingRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        reject(new TTSError(`Failed to write to daemon: ${error.message}`));
-      }
-    });
+    const response = {
+      audio: null,
+      voice,
+      speed,
+      outputPath: result.outputPath,
+      duration: result.duration,
+    };
+    if (result.timestamps) response.timestamps = result.timestamps;
+    return response;
   }
 
   /**
    * Gracefully shutdown the daemon
    */
   async shutdown() {
+    requestQueue.cancelWaiting(new TTSError('TTS service shutting down'));
     if (!daemonProcess) return;
+    const processToStop = daemonProcess;
 
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => {
         console.log('TTS daemon shutdown timeout, forcing kill...');
-        daemonProcess?.kill('SIGKILL');
+        processToStop.kill('SIGKILL');
         resolve();
       }, 5000);
 
-      daemonProcess.once('close', () => {
+      processToStop.once('close', () => {
         clearTimeout(timeoutId);
         resolve();
       });
 
       // Send shutdown command
       try {
-        daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
+        processToStop.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
       } catch (e) {
         // stdin may already be closed
-        daemonProcess.kill('SIGTERM');
+        processToStop.kill('SIGTERM');
       }
     });
   }

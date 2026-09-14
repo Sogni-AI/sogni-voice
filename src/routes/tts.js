@@ -1,3 +1,4 @@
+import { requestCancellation } from '../utils/requestCancellation.js';
 import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { readFile } from 'node:fs/promises';
@@ -44,6 +45,8 @@ export const ttsRoutes = [
       tags: ['api', 'tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -56,10 +59,10 @@ export const ttsRoutes = [
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
         // Generate audio to file (daemon-based MLX TTS)
-        const result = await ttsService.generate(text, { voice, speed, outputPath, timestamps });
+        const result = await ttsService.generate(text, { signal, voice, speed, outputPath, timestamps });
 
         // Read the generated WAV file
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         // Helper to build response with timestamps
         const buildJsonResponse = (audioBuffer, audioFormat) => {
@@ -90,8 +93,8 @@ export const ttsRoutes = [
               '-b:a', '32k',
               '-y',
               opusPath,
-            ], { timeout: 300000 });
-            audioBuffer = await readFile(opusPath);
+            ], { timeout: 300000, signal });
+            audioBuffer = await readFile(opusPath, { signal });
             audioFormat = 'opus';
           }
 
@@ -109,9 +112,9 @@ export const ttsRoutes = [
             '-b:a', '32k',
             '-y',
             opusPath,
-          ], { timeout: 300000 });
+          ], { timeout: 300000, signal });
 
-          const opusBuffer = await readFile(opusPath);
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`TTS request completed in ${(durationMs / 1000).toFixed(3)}s (${durationMs.toFixed(0)}ms)`);
           return h.response(opusBuffer)
@@ -126,10 +129,12 @@ export const ttsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         console.error('TTS error:', error);
         throw Boom.badImplementation('Text-to-speech generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }

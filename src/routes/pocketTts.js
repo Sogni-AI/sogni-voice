@@ -1,3 +1,4 @@
+import { requestCancellation } from '../utils/requestCancellation.js';
 import Joi from 'joi';
 import Boom from '@hapi/boom';
 import { readFile, mkdir, writeFile, readdir, stat, lstat } from 'node:fs/promises';
@@ -95,6 +96,8 @@ export const pocketTtsRoutes = [
       tags: ['api', 'pocket-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -107,9 +110,9 @@ export const pocketTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('pocket-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await pocketTtsService.generate(text, { voice, outputPath });
+        const result = await pocketTtsService.generate(text, { signal, voice, outputPath });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -127,8 +130,8 @@ export const pocketTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ], { timeout: 300000 });
-          const opusBuffer = await readFile(opusPath);
+          ], { timeout: 300000, signal });
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Pocket TTS request completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -142,10 +145,12 @@ export const pocketTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         console.error('Pocket TTS error:', error);
         throw Boom.badImplementation('Pocket TTS generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }
@@ -274,6 +279,8 @@ export const pocketTtsRoutes = [
       tags: ['api', 'pocket-tts'],
     },
     handler: async (request, h) => {
+      const cancellation = requestCancellation(request);
+      const { signal } = cancellation;
       const startTime = performance.now();
       let tempDir = null;
 
@@ -286,9 +293,9 @@ export const pocketTtsRoutes = [
         tempDir = await tempFileManager.createTempDir('pocket-tts-');
         const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
 
-        const result = await pocketTtsService.generateVoiceClone(text, { cloneId, outputPath });
+        const result = await pocketTtsService.generateVoiceClone(text, { signal, cloneId, outputPath });
 
-        const wavBuffer = await readFile(outputPath);
+        const wavBuffer = await readFile(outputPath, { signal });
 
         if (format === 'buffer') {
           const durationMs = performance.now() - startTime;
@@ -306,8 +313,8 @@ export const pocketTtsRoutes = [
           const opusPath = outputPath.replace('.wav', '.opus');
           await execFileAsync('ffmpeg', [
             '-i', outputPath, '-c:a', 'libopus', '-b:a', '32k', '-y', opusPath,
-          ], { timeout: 300000 });
-          const opusBuffer = await readFile(opusPath);
+          ], { timeout: 300000, signal });
+          const opusBuffer = await readFile(opusPath, { signal });
           const durationMs = performance.now() - startTime;
           console.log(`Pocket TTS clone generation completed in ${(durationMs / 1000).toFixed(3)}s`);
           return h.response(opusBuffer)
@@ -321,6 +328,7 @@ export const pocketTtsRoutes = [
           .type('audio/wav')
           .header('Content-Disposition', 'attachment; filename="output.wav"');
       } catch (error) {
+        if (signal.aborted && error.name === 'AbortError') return h.abandon;
         if (error.isBoom) throw error;
         if (error.message?.includes('not found')) {
           throw Boom.notFound(`Voice clone '${request.params.cloneId}' not found`);
@@ -328,6 +336,7 @@ export const pocketTtsRoutes = [
         console.error('Pocket TTS clone generation error:', error);
         throw Boom.badImplementation('Voice clone generation failed');
       } finally {
+        cancellation.dispose();
         if (tempDir) {
           await tempFileManager.cleanup(tempDir);
         }

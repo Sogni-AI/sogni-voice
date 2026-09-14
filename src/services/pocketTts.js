@@ -1,3 +1,4 @@
+import { DaemonRequestQueue } from '../utils/daemonRequestQueue.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname } from 'node:path';
@@ -13,8 +14,13 @@ export class PocketTTSService {
     this.daemonProcess = null;
     this.daemonReady = false;
     this.initPromise = null;
-    this.requestIdCounter = 0;
     this.pendingRequests = new Map();
+    this.requestQueue = new DaemonRequestQueue({
+      ensureDaemon: () => this._ensureDaemon(),
+      getProcess: () => this.daemonReady ? this.daemonProcess : null,
+      pendingRequests: this.pendingRequests,
+      createError: (message) => new PocketTTSError(message),
+    });
     this.readlineInterface = null;
     this.startupTimeoutId = null;
     this.voiceInfo = {
@@ -27,8 +33,14 @@ export class PocketTTSService {
     if (this.daemonReady) return;
     if (this.initPromise) return this.initPromise;
 
-    this.initPromise = this._startDaemon();
-    return this.initPromise;
+    const initialization = this._startDaemon();
+    this.initPromise = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (this.initPromise === initialization) this.initPromise = null;
+      throw error;
+    }
   }
 
   async _startDaemon() {
@@ -100,6 +112,8 @@ export class PocketTTSService {
       });
 
       this.daemonProcess.on('close', (code) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         console.log(`Pocket TTS daemon exited with code ${code}`);
         this.daemonReady = false;
         this.daemonProcess = null;
@@ -120,6 +134,8 @@ export class PocketTTSService {
       });
 
       this.daemonProcess.on('error', (error) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         this.initPromise = null;
         reject(new PocketTTSError(`Failed to spawn Pocket TTS daemon: ${error.message}`, error));
       });
@@ -137,52 +153,15 @@ export class PocketTTSService {
   async _ensureDaemon() {
     if (!this.daemonReady || !this.daemonProcess) {
       console.log('Pocket TTS daemon not available, attempting to start...');
-      this.initPromise = null;
-      this.daemonReady = false;
       await this.initialize();
     }
   }
 
-  async _sendRequest(request) {
-    await this._ensureDaemon();
-
-    if (!this.daemonProcess || !this.daemonReady) {
-      throw new PocketTTSError('Pocket TTS daemon not available');
-    }
-
-    const requestId = `req-${++this.requestIdCounter}`;
-    request.id = requestId;
-
-    const timeout = config.pocketTts.timeout || 60000;
-    console.log(`[pocket-tts] Sending request ${requestId}: type=${request.type}, timeout=${timeout}ms`);
-
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        console.log(`[pocket-tts] Request ${requestId} timed out after ${timeout}ms`);
-        reject(new PocketTTSError('Pocket TTS request timed out'));
-      }, timeout);
-
-      this.pendingRequests.set(requestId, {
-        resolve: (result) => {
-          clearTimeout(timeoutId);
-          console.log(`[pocket-tts] Request ${requestId} completed successfully`);
-          resolve(result);
-        },
-        reject: (error) => {
-          clearTimeout(timeoutId);
-          console.log(`[pocket-tts] Request ${requestId} failed: ${error.message}`);
-          reject(error);
-        },
-      });
-
-      try {
-        this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
-      } catch (error) {
-        this.pendingRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        reject(new PocketTTSError(`Failed to write to daemon: ${error.message}`));
-      }
+  async _sendRequest(request, { timeout: customTimeout, signal } = {}) {
+    return this.requestQueue.request(request, {
+      signal,
+      timeout: customTimeout || config.pocketTts.timeout || 60000,
+      interruptOnTimeout: request.type.startsWith('generate'),
     });
   }
 
@@ -201,7 +180,7 @@ export class PocketTTSService {
       text,
       voice,
       output_path: outputPath,
-    });
+    }, { signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -246,7 +225,7 @@ export class PocketTTSService {
       text,
       clone_id: cloneId,
       output_path: outputPath,
-    });
+    }, { signal: options.signal });
 
     return {
       outputPath: result.output_path,
@@ -303,24 +282,26 @@ export class PocketTTSService {
   }
 
   async shutdown() {
+    this.requestQueue.cancelWaiting(new PocketTTSError('TTS service shutting down'));
     if (!this.daemonProcess) return;
+    const processToStop = this.daemonProcess;
 
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => {
         console.log('Pocket TTS daemon shutdown timeout, forcing kill...');
-        this.daemonProcess?.kill('SIGKILL');
+        processToStop.kill('SIGKILL');
         resolve();
       }, 5000);
 
-      this.daemonProcess.once('close', () => {
+      processToStop.once('close', () => {
         clearTimeout(timeoutId);
         resolve();
       });
 
       try {
-        this.daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
+        processToStop.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
       } catch (e) {
-        this.daemonProcess.kill('SIGTERM');
+        processToStop.kill('SIGTERM');
       }
     });
   }

@@ -1,3 +1,4 @@
+import { DaemonRequestQueue } from '../utils/daemonRequestQueue.js';
 import { spawn } from 'node:child_process';
 import { createInterface } from 'node:readline';
 import { join, dirname, isAbsolute, resolve as resolvePath } from 'node:path';
@@ -34,8 +35,13 @@ export class FishTTSService {
     this.daemonProcess = null;
     this.daemonReady = false;
     this.initPromise = null;
-    this.requestIdCounter = 0;
     this.pendingRequests = new Map();
+    this.requestQueue = new DaemonRequestQueue({
+      ensureDaemon: () => this._ensureDaemon(),
+      getProcess: () => this.daemonReady ? this.daemonProcess : null,
+      pendingRequests: this.pendingRequests,
+      createError: (message) => new FishTTSError(message),
+    });
     this.readlineInterface = null;
     this.startupTimeoutId = null;
     this.modelInfo = {
@@ -52,8 +58,14 @@ export class FishTTSService {
   async initialize() {
     if (this.daemonReady) return;
     if (this.initPromise) return this.initPromise;
-    this.initPromise = this._startDaemon();
-    return this.initPromise;
+    const initialization = this._startDaemon();
+    this.initPromise = initialization;
+    try {
+      await initialization;
+    } catch (error) {
+      if (this.initPromise === initialization) this.initPromise = null;
+      throw error;
+    }
   }
 
   async _startDaemon() {
@@ -143,6 +155,8 @@ export class FishTTSService {
       });
 
       this.daemonProcess.on('close', (code) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         console.log(`Fish TTS daemon exited with code ${code}`);
         this.daemonReady = false;
         this.daemonProcess = null;
@@ -161,6 +175,8 @@ export class FishTTSService {
       });
 
       this.daemonProcess.on('error', (error) => {
+        clearTimeout(this.startupTimeoutId);
+        this.startupTimeoutId = null;
         this.initPromise = null;
         reject(new FishTTSError(`Failed to spawn Fish TTS daemon: ${error.message}`, error));
       });
@@ -178,40 +194,15 @@ export class FishTTSService {
   async _ensureDaemon() {
     if (!this.daemonReady || !this.daemonProcess) {
       console.log('Fish TTS daemon not available, attempting to start...');
-      this.initPromise = null;
-      this.daemonReady = false;
       await this.initialize();
     }
   }
 
-  async _sendRequest(request, { timeout: customTimeout } = {}) {
-    await this._ensureDaemon();
-    if (!this.daemonProcess || !this.daemonReady) {
-      throw new FishTTSError('Fish TTS daemon not available');
-    }
-
-    const requestId = `req-${++this.requestIdCounter}`;
-    request.id = requestId;
-    const timeout = customTimeout || config.fishTts.timeout || 300000;
-
-    return new Promise((resolve, reject) => {
-      const timeoutId = setTimeout(() => {
-        this.pendingRequests.delete(requestId);
-        reject(new FishTTSError('Fish TTS request timed out'));
-      }, timeout);
-
-      this.pendingRequests.set(requestId, {
-        resolve: (result) => { clearTimeout(timeoutId); resolve(result); },
-        reject: (error) => { clearTimeout(timeoutId); reject(error); },
-      });
-
-      try {
-        this.daemonProcess.stdin.write(JSON.stringify(request) + '\n');
-      } catch (error) {
-        this.pendingRequests.delete(requestId);
-        clearTimeout(timeoutId);
-        reject(new FishTTSError(`Failed to write to daemon: ${error.message}`));
-      }
+  async _sendRequest(request, { timeout: customTimeout, signal } = {}) {
+    return this.requestQueue.request(request, {
+      signal,
+      timeout: customTimeout || config.fishTts.timeout || 300000,
+      interruptOnTimeout: request.type.startsWith('generate'),
     });
   }
 
@@ -225,7 +216,7 @@ export class FishTTSService {
 
     const result = await this._sendRequest(
       { type: 'generate', text, output_path: outputPath, max_tokens: maxTokens, temperature },
-      { timeout: computeGenerationTimeout(text) },
+      { timeout: computeGenerationTimeout(text), signal: options.signal },
     );
     return {
       outputPath: result.output_path,
@@ -250,7 +241,7 @@ export class FishTTSService {
         max_tokens: maxTokens,
         temperature,
       },
-      { timeout: computeGenerationTimeout(text) },
+      { timeout: computeGenerationTimeout(text), signal: options.signal },
     );
     return { outputPath: result.output_path, duration: result.duration, cloneId };
   }
@@ -305,17 +296,19 @@ export class FishTTSService {
   }
 
   async shutdown() {
+    this.requestQueue.cancelWaiting(new FishTTSError('TTS service shutting down'));
     if (!this.daemonProcess) return;
+    const processToStop = this.daemonProcess;
     return new Promise((resolve) => {
       const timeoutId = setTimeout(() => {
-        this.daemonProcess?.kill('SIGKILL');
+        processToStop.kill('SIGKILL');
         resolve();
       }, 5000);
-      this.daemonProcess.once('close', () => { clearTimeout(timeoutId); resolve(); });
+      processToStop.once('close', () => { clearTimeout(timeoutId); resolve(); });
       try {
-        this.daemonProcess.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
+        processToStop.stdin.write(JSON.stringify({ command: 'shutdown' }) + '\n');
       } catch {
-        this.daemonProcess.kill('SIGTERM');
+        processToStop.kill('SIGTERM');
       }
     });
   }

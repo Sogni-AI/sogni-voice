@@ -86,7 +86,7 @@ const gracefulShutdown = async (signal) => {
     settle('Temp file cleanup', () => tempFileManager.cleanupAll()),
     settle('Transcription daemon shutdown', () => transcriptionService.shutdown()),
     settle('Kokoro TTS daemon shutdown', () => ttsService.shutdown()),
-    settle('Qwen TTS Base daemon shutdown', () => qwenTtsBaseService.shutdown()),
+    settle('Qwen TTS CustomVoice daemon shutdown', () => qwenTtsCustomVoiceService.shutdown()),
   ]);
 
   process.exit(failed ? 1 : 0);

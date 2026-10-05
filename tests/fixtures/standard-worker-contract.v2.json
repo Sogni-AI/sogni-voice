@@ -1,0 +1,42 @@
+{
+  "description": "Frozen wire contract between this worker and sogni-socket's STANDARD render-worker lane (sogni-socket#51 design). Field names here are pinned against sogni-socket master; a change on either side must update this fixture consciously.",
+  "upgradeHeaders": {
+    "required": ["api-key", "nft-token-id", "app-id", "client-type", "user-agent"],
+    "forbidden": ["authorization", "worker-subtype"],
+    "clientType": "worker",
+    "userAgent": "Sogni/4.0.0 (macOS) [sogni-voice-speech-worker/2.0.0]"
+  },
+  "authFailureCloseCode": 4021,
+  "workerInfo": {
+    "requiredFields": ["hardwareRating", "hardwareInfo", "workerModels", "loadedModelID"],
+    "hardwareInfoRequired": ["cpuBrand", "gpuBrand", "ram", "vram"],
+    "fastNetworkGates": { "hardwareRating": 70, "ram": 31, "vram": 16 },
+    "workerModelsAreCatalogIdStrings": true,
+    "catalogIds": ["kokoro_82m", "parakeet_tdt_0.6b_v3", "qwen3_tts_1.7b"]
+  },
+  "jobRequest": {
+    "topLevel": ["jobID", "jobType", "numberOfImages", "outputFormat", "keyFrames"],
+    "jobType": "audio",
+    "keyFrameFieldsConsumed": [
+      "modelID", "positivePrompt", "voice", "speed", "language",
+      "duration", "steps", "seed", "outputFormat", "hasReferenceAudio", "timestamps"
+    ]
+  },
+  "workerFrames": {
+    "happyPathOrder": ["jobState:jobStarted", "jobResult", "jobState:jobCompleted"],
+    "jobStateRequires": ["type", "jobID", "imgID"],
+    "jobResultRequires": ["jobID", "imgID", "lastSeed", "userCanceled", "triggeredNSFWFilter", "performedStepCount"],
+    "jobErrorRequires": ["jobID", "imgID", "isFromWorker", "error", "error_message"],
+    "cancellationEcho": { "error": "workerCancelled", "thenSend": "readyToAcceptJobs" },
+    "brokerErrorCodes": ["modelInitFailure", "imgUploadFailure", "imgDownloadFailure", "workerCancelled"]
+  },
+  "mediaApi": {
+    "uploadUrlPath": "/v1/media/uploadUrl",
+    "uploadUrlParams": ["jobId", "type", "id", "contentType"],
+    "downloadUrlPath": "/v1/media/downloadUrl",
+    "downloadUrlParams": ["jobId", "type"],
+    "uploadType": "complete",
+    "inputType": "referenceAudio",
+    "contentTypes": { "mp3": "audio/mpeg", "wav": "audio/wav", "json": "application/json" }
+  }
+}

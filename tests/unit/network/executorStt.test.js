@@ -1,235 +1,200 @@
 import { describe, it, expect, vi } from 'vitest';
-import { SpeechExecutor } from '../../../src/network/executor.js';
+import { SpeechExecutor, STT_DURATION_SLACK_RATIO } from '../../../src/network/executor.js';
 
-const MODELS = [{ id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' }];
+const MODELS = [
+  { id: 'parakeet_tdt_0.6b_v3', task: 'stt', engine: 'parakeet' },
+];
 
-const job = (overrides = {}) => ({
-  jobID: 'job-stt-1',
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'stt',
-  modelID: 'parakeet-tdt-0.6b-v3',
-  params: {},
-  input: { url: 'https://s3.test/in/clip.mp3?sig=1' },
-  output: null,
-  timeoutMs: 60000,
-  ...overrides,
+const job = (kfOverrides = {}) => ({
+  jobID: 'A0000000-0000-4000-8000-000000000011',
+  jobType: 'audio',
+  outputFormat: 'json',
+  keyFrames: [{
+    modelID: 'parakeet_tdt_0.6b_v3',
+    positivePrompt: '',
+    hasReferenceAudio: true,
+    duration: 60,
+    timestamps: 'sentence',
+    steps: 1,
+    seed: -1,
+    outputFormat: 'json',
+    ...kfOverrides,
+  }],
 });
+
+const IMG_ID = 'B0000000-0000-4000-8000-000000000012';
+
+const TRANSCRIPT = {
+  text: 'hello world',
+  timestamps: [{ text: 'hello world', start: 0.0, end: 1.4 }],
+};
 
 const setup = (overrides = {}) => {
   const transcriptionService = {
-    transcribe: vi.fn(async () => ({
-      text: 'hello world',
-      rawOutput: '',
-      timestamps: [{ start: 0, end: 2.5, text: 'hello world' }],
-    })),
-  };
-  const tempFiles = {
-    createTempDir: vi.fn(async () => '/tmp/sogni-speech-job-abc'),
-    cleanup: vi.fn(async () => {}),
+    transcribe: vi.fn(async () => ({ ...TRANSCRIPT })),
   };
   const artifacts = {
-    downloadToFile: vi.fn(async (url, destPath) => ({ path: destPath, bytes: 1024 })),
-    uploadFile: vi.fn(),
+    downloadToFile: vi.fn(async (url, dest) => ({ path: dest, bytes: 32000 })),
+    uploadFile: vi.fn(async () => ({ uploadedKey: 'video/2026-07-31/A.../complete-B....json', bytes: 512 })),
   };
-  let clock = 1000;
+  const api = {
+    requestMediaDownloadUrl: vi.fn(async () => 'https://r2.test/presigned-get?sig=1'),
+    requestMediaUploadUrl: vi.fn(async () => 'https://r2.test/presigned-put?sig=2'),
+  };
+  const tools = {
+    probeDurationSeconds: vi.fn(async () => 58.2),
+    synthesizeTestClip: vi.fn(async (path) => path),
+    transcodeWavToMp3: vi.fn(),
+  };
+  const tempFiles = {
+    createTempDir: vi.fn(async () => '/tmp/sogni-speech-job-stt'),
+    cleanup: vi.fn(async () => {}),
+  };
+  const writeArtifact = vi.fn(async () => {});
   const executor = new SpeechExecutor({
     speechModels: MODELS,
-    maxConcurrentJobs: 2,
+    apiUrl: 'https://api-staging.sogni.ai',
+    maxConcurrentJobs: 1,
     transcriptionService,
     ttsService: { generate: vi.fn() },
     tempFiles,
     artifacts,
-    now: () => {
-      clock += 250;
-      return clock;
-    },
+    api,
+    tools,
+    writeArtifact,
     ...overrides,
   });
-  return { executor, transcriptionService, tempFiles, artifacts };
+  return { executor, transcriptionService, artifacts, api, tools, tempFiles, writeArtifact };
 };
 
-describe('SpeechExecutor STT', () => {
-  it('downloads the input, transcribes it, and returns transcript plus meta', async () => {
-    const { executor, transcriptionService, artifacts, tempFiles } = setup();
-    const request = job();
-    executor.accept(request);
+const run = async (harness, theJob) => {
+  harness.executor.accept(theJob);
+  return harness.executor.execute(theJob, { imgID: IMG_ID });
+};
 
-    const result = await executor.execute(request);
+describe('SpeechExecutor STT (standard contract)', () => {
+  it('redeems the reference-audio input, transcribes, and uploads the JSON transcript', async () => {
+    const harness = setup();
+    const result = await run(harness, job());
 
-    expect(artifacts.downloadToFile)
-      .toHaveBeenCalledWith('https://s3.test/in/clip.mp3?sig=1', '/tmp/sogni-speech-job-abc/input.mp3');
-    expect(transcriptionService.transcribe)
-      .toHaveBeenCalledWith('/tmp/sogni-speech-job-abc/input.mp3', { timestamps: true });
-    expect(result).toEqual({
-      jobID: 'job-stt-1',
-      transcript: 'hello world',
-      transcriptDetails: {
-        text: 'hello world',
-        rawOutput: '',
-        timestamps: [{ start: 0, end: 2.5, text: 'hello world' }],
-      },
-      meta: { audioSeconds: 2.5, durationMs: 250 },
+    expect(harness.api.requestMediaDownloadUrl).toHaveBeenCalledWith({
+      apiUrl: 'https://api-staging.sogni.ai',
+      jobId: 'A0000000-0000-4000-8000-000000000011',
+      type: 'referenceAudio',
     });
-    expect(tempFiles.cleanup).toHaveBeenCalledWith('/tmp/sogni-speech-job-abc');
-  });
-
-  it('frees the concurrency slot after a successful job', async () => {
-    const { executor } = setup();
-    const request = job();
-    executor.accept(request);
-    await executor.execute(request);
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  it('reports a null audioSeconds when the daemon returns no timestamps', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockResolvedValueOnce({ text: 'hi', rawOutput: '' });
-
-    const result = await executor.execute(request);
-    expect(result.meta.audioSeconds).toBeNull();
-  });
-
-  // The broker stores transcript as a string column, so a daemon result without a
-  // text field still has to leave the wire field a string.
-  it('keeps transcript a string when the daemon returns no text', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockResolvedValueOnce({ rawOutput: '' });
-
-    const result = await executor.execute(request);
-    expect(result.transcript).toBe('');
-    expect(result.transcriptDetails).toEqual({ rawOutput: '' });
-  });
-
-  it('maps a download failure to input_download_failed', async () => {
-    const { executor, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.downloadToFile.mockRejectedValueOnce(new Error('Input download failed with HTTP 403'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'input_download_failed',
-      message: 'Input download failed with HTTP 403',
-    });
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  // A failed download can still leave a zero-byte file behind, so the daemon must
-  // never be handed a path from a download that threw.
-  it('never transcribes when the download failed', async () => {
-    const { executor, transcriptionService, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.downloadToFile.mockRejectedValueOnce(new Error('Input download produced an empty file'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'input_download_failed' });
-    expect(transcriptionService.transcribe).not.toHaveBeenCalled();
-  });
-
-  it('maps a daemon failure to stt_failed', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockRejectedValueOnce(new Error('Transcription timed out'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'stt_failed',
-      message: 'Transcription timed out',
-    });
-  });
-
-  // The wire message is only the adapter's message string; without the cause, a
-  // daemon crash arrives with this file's stack instead of the one that matters.
-  it('keeps the original error as the cause of a mapped JobError', async () => {
-    const { executor, transcriptionService, artifacts } = setup();
-    const daemonCrash = new Error('Transcription daemon exited with code 1');
-
-    const sttRequest = job();
-    executor.accept(sttRequest);
-    transcriptionService.transcribe.mockRejectedValueOnce(daemonCrash);
-    await expect(executor.execute(sttRequest)).rejects.toHaveProperty('cause', daemonCrash);
-
-    const downloadFailure = new Error('Input download failed with HTTP 403');
-    const downloadRequest = job({ jobID: 'job-stt-2' });
-    executor.accept(downloadRequest);
-    artifacts.downloadToFile.mockRejectedValueOnce(downloadFailure);
-    await expect(executor.execute(downloadRequest))
-      .rejects.toHaveProperty('cause', downloadFailure);
-  });
-
-  it('rejects an STT job with no input url', async () => {
-    const { executor } = setup();
-    const request = job({ input: null });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'STT jobRequest requires input.url',
-    });
-  });
-
-  it('enforces the broker timeout even though transcribe() ignores it', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job({ timeoutMs: 20 });
-    executor.accept(request);
-    transcriptionService.transcribe.mockImplementationOnce(() => new Promise(() => {}));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'timeout' });
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  it('throws aborted when the broker cancelled mid-flight', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockImplementationOnce(async () => {
-      executor.abort('job-stt-1');
-      return { text: 'discarded', rawOutput: '' };
-    });
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'aborted' });
-  });
-
-  it('rejects execute for a job that was never accepted', async () => {
-    const { executor } = setup();
-    await expect(executor.execute(job({ jobID: 'ghost' }))).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'Job ghost was not accepted',
-    });
-  });
-
-  // abort() frees the slot while the uncancellable daemon call keeps running, so the
-  // broker can re-issue the same jobID before that first run settles. The abandoned
-  // run must recognise its own abort and must not release the replacement's slot,
-  // which is only possible if execute() holds the entry it captured at the start.
-  it('does not evict a re-accepted job when the abandoned run finally settles', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-
-    let finishTranscribe;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        finishTranscribe = () => resolve({ text: 'discarded', rawOutput: '' });
-      }),
+    expect(harness.artifacts.downloadToFile).toHaveBeenCalledWith(
+      'https://r2.test/presigned-get?sig=1',
+      '/tmp/sogni-speech-job-stt/input-audio',
+    );
+    expect(harness.transcriptionService.transcribe).toHaveBeenCalledWith(
+      '/tmp/sogni-speech-job-stt/input-audio',
+      { timestamps: true, wordTimestamps: false },
     );
 
-    const abandoned = executor.execute(request);
-    await vi.waitFor(() => expect(transcriptionService.transcribe).toHaveBeenCalled());
+    const [artifactPath, serialized] = harness.writeArtifact.mock.calls[0];
+    expect(artifactPath).toBe('/tmp/sogni-speech-job-stt/transcript.json');
+    const transcript = JSON.parse(serialized);
+    expect(transcript).toMatchObject({
+      text: 'hello world',
+      segments: [{ text: 'hello world', start: 0, end: 1.4 }],
+      durationSeconds: 58.2,
+      model: 'parakeet_tdt_0.6b_v3',
+    });
 
-    executor.abort('job-stt-1');
-    executor.accept(job());
-    const replacement = executor.activeJobs.get('job-stt-1');
+    expect(harness.api.requestMediaUploadUrl).toHaveBeenCalledWith({
+      apiUrl: 'https://api-staging.sogni.ai',
+      jobId: 'A0000000-0000-4000-8000-000000000011',
+      imgId: IMG_ID,
+      contentType: 'application/json',
+    });
+    expect(harness.artifacts.uploadFile).toHaveBeenCalledWith(
+      'https://r2.test/presigned-put?sig=2',
+      '/tmp/sogni-speech-job-stt/transcript.json',
+      { contentType: 'application/json' },
+    );
+    expect(result.performedStepCount).toBe(1);
+  });
 
-    finishTranscribe();
-    await expect(abandoned).rejects.toMatchObject({ code: 'aborted' });
+  // The declared duration is the billed quantity; the socket cannot measure
+  // the uploaded audio, so the worker is the enforcement point.
+  it('refuses audio that materially outruns the declared (billed) duration', async () => {
+    const harness = setup();
+    harness.tools.probeDurationSeconds.mockResolvedValueOnce(60 * STT_DURATION_SLACK_RATIO + 1);
+    await expect(run(harness, job({ duration: 60 }))).rejects.toMatchObject({
+      code: 'input_longer_than_declared',
+    });
+    expect(harness.transcriptionService.transcribe).not.toHaveBeenCalled();
+  });
 
-    expect(executor.activeJobs.get('job-stt-1')).toBe(replacement);
-    expect(executor.activeRequests).toBe(1);
-    expect(executor.modelCounts.get('parakeet-tdt-0.6b-v3')).toBe(1);
+  it('allows honest metadata drift inside the slack allowance', async () => {
+    const harness = setup();
+    harness.tools.probeDurationSeconds.mockResolvedValueOnce(64);
+    await expect(run(harness, job({ duration: 60 }))).resolves.toBeTruthy();
+  });
+
+  it('gives short clips the flat slack floor', async () => {
+    const harness = setup();
+    // 5s declared: ratio allows 5.75s but the 5s floor allows 10s.
+    harness.tools.probeDurationSeconds.mockResolvedValueOnce(9.5);
+    await expect(run(harness, job({ duration: 5 }))).resolves.toBeTruthy();
+  });
+
+  it('synthesizes a local test clip when no asset was uploaded (test jobs)', async () => {
+    const harness = setup();
+    await run(harness, job({ hasReferenceAudio: false }));
+
+    expect(harness.tools.synthesizeTestClip).toHaveBeenCalledWith('/tmp/sogni-speech-job-stt/test-clip.wav');
+    expect(harness.api.requestMediaDownloadUrl).not.toHaveBeenCalled();
+    expect(harness.artifacts.uploadFile).toHaveBeenCalled();
+  });
+
+  it('requests word timestamps only for word granularity', async () => {
+    const harness = setup();
+    await run(harness, job({ timestamps: 'word' }));
+    expect(harness.transcriptionService.transcribe).toHaveBeenCalledWith(
+      expect.any(String),
+      { timestamps: true, wordTimestamps: true },
+    );
+
+    const harness2 = setup();
+    await run(harness2, job({ timestamps: 'none' }));
+    expect(harness2.transcriptionService.transcribe).toHaveBeenCalledWith(
+      expect.any(String),
+      { timestamps: false, wordTimestamps: false },
+    );
+  });
+
+  it('maps input download failure to the broker imgDownloadFailure code', async () => {
+    const harness = setup();
+    harness.artifacts.downloadToFile.mockRejectedValueOnce(new Error('HTTP 404'));
+    await expect(run(harness, job())).rejects.toMatchObject({ code: 'imgDownloadFailure' });
+    expect(harness.transcriptionService.transcribe).not.toHaveBeenCalled();
+  });
+
+  it('maps daemon failure to stt_failed with the cause preserved', async () => {
+    const harness = setup();
+    harness.transcriptionService.transcribe.mockRejectedValueOnce(new Error('daemon died'));
+    const failure = await run(harness, job()).catch((e) => e);
+    expect(failure.code).toBe('stt_failed');
+    expect(failure.cause?.message).toBe('daemon died');
+  });
+
+  it('maps transcript upload failure to imgUploadFailure', async () => {
+    const harness = setup();
+    harness.artifacts.uploadFile.mockRejectedValueOnce(new Error('HTTP 500'));
+    await expect(run(harness, job())).rejects.toMatchObject({ code: 'imgUploadFailure' });
+  });
+
+  it('reports an aborted job as aborted even when work finished', async () => {
+    const harness = setup();
+    const theJob = job();
+    harness.executor.accept(theJob);
+    harness.transcriptionService.transcribe.mockImplementationOnce(async () => {
+      harness.executor.abort(theJob.jobID);
+      return { ...TRANSCRIPT };
+    });
+    await expect(harness.executor.execute(theJob, { imgID: IMG_ID })).rejects.toMatchObject({
+      code: 'aborted',
+    });
   });
 });

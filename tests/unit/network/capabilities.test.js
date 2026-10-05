@@ -1,61 +1,84 @@
 import { describe, it, expect } from 'vitest';
 import {
+  SPEECH_MODEL_CATALOG,
   buildSpeechModels,
   buildWorkerInfo,
+  detectHardwareInfo,
   findSpeechModel,
 } from '../../../src/network/capabilities.js';
 
-const cfg = (overrides = {}) => ({
+const cfgWith = (overrides = {}) => ({
   transcription: { enabled: true },
   tts: { enabled: true },
   qwenTts: { enabled: false },
   ...overrides,
 });
 
-describe('capabilities', () => {
-  it('advertises Parakeet and Kokoro when both are enabled', () => {
-    expect(buildSpeechModels(cfg())).toEqual([
-      { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-      { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
+const fakeOs = {
+  cpus: () => Array.from({ length: 24 }, () => ({ model: 'Apple M2 Ultra' })),
+  totalmem: () => 192 * 1024 ** 3,
+};
+
+describe('speech model capabilities', () => {
+  // The ids are the standard catalog model ids in sogni-socket
+  // data/modelTiers.json — a mismatch means the broker never routes us a job.
+  it('advertises the frozen standard catalog model ids', () => {
+    expect(SPEECH_MODEL_CATALOG.map((m) => m.id)).toEqual([
+      'kokoro_82m',
+      'parakeet_tdt_0.6b_v3',
+      'qwen3_tts_1.7b',
     ]);
   });
 
-  it('adds the Qwen preset model only when its env flag is on', () => {
-    const models = buildSpeechModels(cfg({ qwenTts: { enabled: true } }));
-    expect(models.map((model) => model.id))
-      .toEqual(['parakeet-tdt-0.6b-v3', 'kokoro-82m', 'qwen3-tts-preset']);
+  it('only offers models whose engines are enabled', () => {
+    const models = buildSpeechModels(cfgWith());
+    expect(models.map((m) => m.id)).toEqual(['kokoro_82m', 'parakeet_tdt_0.6b_v3']);
+
+    const all = buildSpeechModels(cfgWith({ qwenTts: { enabled: true } }));
+    expect(all).toHaveLength(3);
+
+    const none = buildSpeechModels({ transcription: {}, tts: {}, qwenTts: {} });
+    expect(none).toEqual([]);
   });
 
-  it('omits disabled engines', () => {
-    const models = buildSpeechModels(cfg({ transcription: { enabled: false } }));
-    expect(models.map((model) => model.id)).toEqual(['kokoro-82m']);
-  });
-
-  it('returns an empty list when nothing is enabled', () => {
-    const models = buildSpeechModels({
-      transcription: { enabled: false },
-      tts: { enabled: false },
-      qwenTts: { enabled: false },
+  it('reports unified memory as both ram and vram', () => {
+    const hw = detectHardwareInfo({ osImpl: fakeOs });
+    expect(hw).toEqual({
+      cpuBrand: 'Apple M2 Ultra',
+      gpuBrand: 'Apple M2 Ultra',
+      ram: 192,
+      vram: 192,
+      hasANE: true,
+      numberOfPhysicalCores: 24,
+      numberOfLogicalCores: 24,
     });
-    expect(models).toEqual([]);
   });
 
-  it('builds the frozen workerInfo payload without internal engine keys', () => {
-    expect(buildWorkerInfo({ speechModels: buildSpeechModels(cfg()), maxConcurrentJobs: 2 }))
-      .toEqual({
-        speechModels: [
-          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-          { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-        ],
-        loadedModelIDs: [],
-        maxConcurrentJobs: 2,
-      });
+  // Registration gates that make this shape load-bearing: audio models are
+  // fast-network-only, fast requires hardwareRating >= 70, ram >= 31,
+  // a truthy non-blocklisted gpuBrand, and vram >= 16.
+  it('builds the standard workerInfo registration shape', () => {
+    const models = buildSpeechModels(cfgWith({ qwenTts: { enabled: true } }));
+    const info = buildWorkerInfo({
+      speechModels: models,
+      hardwareRating: 70,
+      hardwareInfo: detectHardwareInfo({ osImpl: fakeOs }),
+    });
+
+    expect(info.hardwareRating).toBeGreaterThanOrEqual(70);
+    expect(info.hardwareInfo.ram).toBeGreaterThanOrEqual(31);
+    expect(info.hardwareInfo.vram).toBeGreaterThanOrEqual(16);
+    expect(info.hardwareInfo.gpuBrand).toBeTruthy();
+    expect(info.hardwareInfo.gpuBrand.toLowerCase()).not.toContain('unknown');
+    // workerModels entries are plain catalog-id strings, not objects.
+    expect(info.workerModels).toEqual(['kokoro_82m', 'parakeet_tdt_0.6b_v3', 'qwen3_tts_1.7b']);
+    expect(info.loadedModelID).toBe('kokoro_82m');
   });
 
-  it('matches a model by id and task, and rejects a task mismatch', () => {
-    const models = buildSpeechModels(cfg());
-    expect(findSpeechModel(models, 'kokoro-82m', 'tts').engine).toBe('kokoro');
-    expect(findSpeechModel(models, 'kokoro-82m', 'stt')).toBeNull();
-    expect(findSpeechModel(models, 'whisper-large', 'stt')).toBeNull();
+  it('finds models by catalog id alone', () => {
+    const models = buildSpeechModels(cfgWith());
+    expect(findSpeechModel(models, 'parakeet_tdt_0.6b_v3')?.engine).toBe('parakeet');
+    expect(findSpeechModel(models, 'qwen3_tts_1.7b')).toBeNull();
+    expect(findSpeechModel(models, 'nope')).toBeNull();
   });
 });

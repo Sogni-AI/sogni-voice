@@ -162,8 +162,13 @@ export const config = {
     enabled: parseEnvBool(process.env.SOGNI_NETWORK_WORKER, false),
     sogniEnv: process.env.SOGNI_ENV || 'staging',
     apiKey: process.env.SOGNI_WORKER_API_KEY || null,
-    maxConcurrentJobs: parseInt(process.env.SPEECH_WORKER_MAX_CONCURRENT, 10) || 2,
-    capacityIntervalMs: parseInt(process.env.SPEECH_WORKER_CAPACITY_INTERVAL_MS, 10) || 30000,
+    nftTokenId: process.env.SOGNI_WORKER_NFT_TOKEN_ID || null,
+    apiUrl: process.env.SOGNI_API_URL || null,
+    // Audio models are fast-network-only; fast requires >= 70. Self-declared.
+    hardwareRating: parseInt(process.env.SOGNI_WORKER_HARDWARE_RATING, 10) || 70,
+    // The broker assigns at most one job per render worker; this is a local
+    // backstop, not a wire-advertised capacity.
+    maxConcurrentJobs: parseInt(process.env.SPEECH_WORKER_MAX_CONCURRENT, 10) || 1,
     reconnectInitialDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_DELAY_MS, 10) || 5000,
     reconnectMaxDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_MAX_DELAY_MS, 10) || 60000,
     defaultJobTimeoutMs: parseInt(process.env.SPEECH_WORKER_JOB_TIMEOUT_MS, 10) || 300000,

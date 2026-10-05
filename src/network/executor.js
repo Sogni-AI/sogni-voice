@@ -1,11 +1,13 @@
+import { writeFile } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { tempFileManager } from '../utils/tempFile.js';
+import { requestMediaDownloadUrl, requestMediaUploadUrl } from './apiClient.js';
 import { downloadToFile, uploadFile } from './artifacts.js';
+import { probeDurationSeconds, synthesizeTestClip, transcodeWavToMp3 } from './audioTools.js';
 import { findSpeechModel } from './capabilities.js';
 
 // `options` is the standard Error options bag, so `{ cause }` on a mapped error
-// keeps the underlying adapter/daemon stack reachable. The (code, message) call
-// shape is unchanged for every other throw site.
+// keeps the underlying adapter/daemon stack reachable.
 export class JobError extends Error {
   constructor(code, message, options = undefined) {
     super(message, options);
@@ -14,27 +16,39 @@ export class JobError extends Error {
   }
 }
 
+// Broker jobError codes the artist-facing path knows how to classify. Anything
+// else is relayed as-is but rendered generically to the artist.
+export const WORKER_ERROR_CODES = {
+  modelInit: 'modelInitFailure',
+  upload: 'imgUploadFailure',
+  download: 'imgDownloadFailure',
+  cancelled: 'workerCancelled',
+};
+
 // setTimeout stores its delay in a signed 32-bit int and silently reruns anything
-// larger as 1ms, so an oversized broker deadline would fire the timeout race
-// instantly and fail every job it touched.
+// larger as 1ms, so an oversized deadline would fire the timeout race instantly.
 export const MAX_TIMER_DELAY_MS = 2147483647;
 
-// Mirrors computeGenerationTimeout() in src/services/qwenTts.js:17 — long TTS
-// input costs wall time roughly linearly in characters. Used only when the
-// broker omits timeoutMs.
-export function computeJobTimeout(job, fallbackMs = config.networkWorker.defaultJobTimeoutMs) {
-  const requested = Number(job?.timeoutMs);
-  if (Number.isFinite(requested) && requested > 0) {
-    return Math.min(requested, MAX_TIMER_DELAY_MS);
-  }
+// STT declared-vs-decoded enforcement: the declared keyFrame duration is the
+// billed quantity and the socket cannot measure the uploaded audio, so the
+// worker refuses to transcribe audio that materially outruns its bill. Slack
+// covers honest container-metadata drift, not under-declaration.
+export const STT_DURATION_SLACK_RATIO = 1.15;
+export const STT_DURATION_SLACK_FLOOR_SEC = 5;
 
-  const text = typeof job?.params?.text === 'string' ? job.params.text : '';
-  const scaled = fallbackMs + text.length * 40;
-  return Math.min(900000, Math.max(fallbackMs, scaled));
+// The wall-clock budget scales with the workload the tier billed: text length
+// for TTS (mirrors computeGenerationTimeout in src/services/qwenTts.js), the
+// declared input duration for STT (Parakeet runs >120x realtime, so even the
+// 0.5x factor is generous).
+export function computeJobTimeout(job, fallbackMs = config.networkWorker.defaultJobTimeoutMs) {
+  const kf = job?.keyFrames?.[0] || {};
+  const text = typeof kf.positivePrompt === 'string' ? kf.positivePrompt : '';
+  const declaredSec = Number(kf.duration) || 0;
+  const scaled = fallbackMs + text.length * 40 + declaredSec * 500;
+  return Math.min(900000, Math.max(fallbackMs, Math.min(scaled, MAX_TIMER_DELAY_MS)));
 }
 
-// The service adapters take no per-call timeout (src/services/transcription.js:190,
-// src/services/tts.js:193), so the broker's deadline is enforced out here.
+// The service adapters take no per-call timeout, so the deadline is enforced here.
 export function withTimeout(promise, timeoutMs, label) {
   let timer = null;
   const deadline = new Promise((_, reject) => {
@@ -49,50 +63,41 @@ export function withTimeout(promise, timeoutMs, label) {
   });
 }
 
-export function extensionFromUrl(url, fallback = 'wav') {
-  try {
-    const name = new URL(url).pathname.split('/').pop() || '';
-    const dot = name.lastIndexOf('.');
-    if (dot > 0 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase();
-  } catch {
-    return fallback;
-  }
-  return fallback;
-}
-
-// Batch Parakeet returns text plus optional segments and no duration
-// (scripts/parakeet_daemon.py:140), so billable audio length comes from the end
-// of the last sentence segment.
-export function deriveAudioSeconds(result) {
-  const segments = Array.isArray(result?.timestamps) ? result.timestamps : [];
-  if (segments.length === 0) return null;
-
-  const last = segments[segments.length - 1];
-  return typeof last?.end === 'number' ? Number(last.end.toFixed(3)) : null;
-}
+const OUTPUT_CONTENT_TYPES = {
+  mp3: 'audio/mpeg',
+  wav: 'audio/wav',
+  json: 'application/json',
+};
 
 export class SpeechExecutor {
   constructor({
     speechModels,
+    apiUrl,
     maxConcurrentJobs = config.networkWorker.maxConcurrentJobs,
     transcriptionService,
     ttsService,
     qwenTtsService = null,
     tempFiles = tempFileManager,
     artifacts = { downloadToFile, uploadFile },
+    api = { requestMediaDownloadUrl, requestMediaUploadUrl },
+    tools = { probeDurationSeconds, synthesizeTestClip, transcodeWavToMp3 },
+    writeArtifact = writeFile,
     now = () => Date.now(),
   }) {
     this.speechModels = speechModels;
+    this.apiUrl = apiUrl;
     this.maxConcurrentJobs = maxConcurrentJobs;
     this.transcriptionService = transcriptionService;
     this.ttsService = ttsService;
     this.qwenTtsService = qwenTtsService;
     this.tempFiles = tempFiles;
     this.artifacts = artifacts;
+    this.api = api;
+    this.tools = tools;
+    this.writeArtifact = writeArtifact;
     this.now = now;
     this.draining = false;
     this.activeJobs = new Map();
-    this.modelCounts = new Map();
   }
 
   get activeRequests() {
@@ -106,44 +111,34 @@ export class SpeechExecutor {
     if (!job || typeof job.jobID !== 'string' || job.jobID.length === 0) {
       throw new JobError('invalid_request', 'jobRequest is missing jobID');
     }
-    if (job.jobType !== 'speech') {
+    if (job.jobType !== 'audio') {
       throw new JobError('invalid_request', `Unsupported jobType "${job.jobType}"`);
+    }
+    const kf = job.keyFrames?.[0];
+    if (!kf) {
+      throw new JobError('invalid_request', 'jobRequest is missing keyFrames[0]');
+    }
+
+    const model = findSpeechModel(this.speechModels, kf.modelID);
+    if (!model) {
+      throw new JobError('unsupported_model', `No enabled engine for modelID "${kf.modelID}"`);
     }
     if (this.activeJobs.has(job.jobID)) {
       throw new JobError('invalid_request', `Job ${job.jobID} is already running`);
     }
-
-    const model = findSpeechModel(this.speechModels, job.modelID, job.task);
-    if (!model) {
-      throw new JobError(
-        'unsupported_model',
-        `No enabled engine for modelID "${job.modelID}" task "${job.task}"`,
-      );
-    }
+    // The broker assigns one job per render worker; more than one in flight
+    // means broker or worker state has diverged, so refuse rather than queue.
     if (this.activeJobs.size >= this.maxConcurrentJobs) {
-      throw new JobError(
-        'capacity_exceeded',
-        `Worker is at capacity (${this.maxConcurrentJobs} concurrent jobs)`,
-      );
-    }
-
-    const modelCount = this.modelCounts.get(model.id) || 0;
-    if (modelCount >= model.maxConcurrent) {
-      throw new JobError(
-        'capacity_exceeded',
-        `Model ${model.id} is at capacity (${model.maxConcurrent} concurrent jobs)`,
-      );
+      throw new JobError('capacity_exceeded', `Worker is at capacity (${this.maxConcurrentJobs} concurrent jobs)`);
     }
 
     this.activeJobs.set(job.jobID, { model, aborted: false });
-    this.modelCounts.set(model.id, modelCount + 1);
     return model;
   }
 
-  // `entry` is captured once here and never re-read from activeJobs: abort() deletes
-  // the map entry, so a by-ID lookup later in the run would miss the abort flag and
-  // report a cancelled job as a success.
-  async execute(job) {
+  // `entry` is captured once and never re-read from activeJobs: abort() deletes
+  // the map entry, so a by-ID lookup later in the run would miss the abort flag.
+  async execute(job, { imgID }) {
     const entry = this.activeJobs.get(job.jobID);
     if (!entry) {
       throw new JobError('invalid_request', `Job ${job.jobID} was not accepted`);
@@ -157,18 +152,19 @@ export class SpeechExecutor {
       tempDir = await this.tempFiles.createTempDir('sogni-speech-job-');
 
       const work = entry.model.task === 'stt'
-        ? this._runStt(job, entry, tempDir)
-        : this._runTts(job, entry, tempDir);
+        ? this._runStt(job, entry, tempDir, imgID)
+        : this._runTts(job, entry, tempDir, imgID);
 
       const outcome = await withTimeout(work, timeoutMs, `Job ${job.jobID}`);
       if (entry.aborted) {
         throw new JobError('aborted', `Job ${job.jobID} was aborted`);
       }
 
+      const seed = Number(job.keyFrames[0].seed);
       return {
-        jobID: job.jobID,
-        ...outcome.payload,
-        meta: { ...outcome.meta, durationMs: this.now() - startedAt },
+        lastSeed: Number.isFinite(seed) && seed >= 0 ? seed : 0,
+        performedStepCount: 1,
+        timings: { ...outcome.timings, total: (this.now() - startedAt) / 1000 },
       };
     } finally {
       this._release(job.jobID, entry);
@@ -176,130 +172,175 @@ export class SpeechExecutor {
     }
   }
 
-  async _runStt(job, entry, tempDir) {
-    if (!job.input || typeof job.input.url !== 'string') {
-      throw new JobError('invalid_request', 'STT jobRequest requires input.url');
-    }
-
-    const inputPath = `${tempDir}/input.${extensionFromUrl(job.input.url)}`;
-    // A failed download can still leave a zero-byte file at inputPath, so the daemon
-    // is only handed the path once downloadToFile has resolved.
+  async _upload(job, imgID, filePath, contentType) {
+    let uploadUrl;
     try {
-      await this.artifacts.downloadToFile(job.input.url, inputPath);
+      uploadUrl = await this.api.requestMediaUploadUrl({
+        apiUrl: this.apiUrl,
+        jobId: job.jobID,
+        imgId: imgID,
+        contentType,
+      });
+      const uploaded = await this.artifacts.uploadFile(uploadUrl, filePath, { contentType });
+      if (uploaded.bytes === 0) {
+        throw new Error('artifact file was empty');
+      }
+      return uploaded;
     } catch (error) {
-      throw new JobError('input_download_failed', error.message, { cause: error });
+      throw new JobError(WORKER_ERROR_CODES.upload, error.message, { cause: error });
+    }
+  }
+
+  async _runStt(job, entry, tempDir, imgID) {
+    const kf = job.keyFrames[0];
+    const timings = {};
+    let inputPath;
+    let decodedSeconds;
+
+    if (kf.hasReferenceAudio) {
+      const downloadStart = this.now();
+      inputPath = `${tempDir}/input-audio`;
+      try {
+        const downloadUrl = await this.api.requestMediaDownloadUrl({
+          apiUrl: this.apiUrl,
+          jobId: job.jobID,
+          type: 'referenceAudio',
+        });
+        await this.artifacts.downloadToFile(downloadUrl, inputPath);
+      } catch (error) {
+        throw new JobError(WORKER_ERROR_CODES.download, error.message, { cause: error });
+      }
+      timings.assetDownload = (this.now() - downloadStart) / 1000;
+
+      decodedSeconds = await this.tools.probeDurationSeconds(inputPath);
+      // Billing enforcement: the declared duration is what the artist was
+      // billed. Audio that outruns it (plus honest-metadata slack) is refused
+      // BEFORE transcription so no work settles against an under-declared bill.
+      const declared = Number(kf.duration) > 0 ? Number(kf.duration) : 60;
+      const allowance = Math.max(declared * STT_DURATION_SLACK_RATIO, declared + STT_DURATION_SLACK_FLOOR_SEC);
+      if (decodedSeconds > allowance) {
+        throw new JobError(
+          'input_longer_than_declared',
+          `Input audio is ${decodedSeconds.toFixed(1)}s but the billed duration is ${declared}s`,
+        );
+      }
+    } else {
+      // Only test jobs pass server validation without an uploaded asset; prove
+      // the full pipeline (transcribe + upload) against a generated clip.
+      inputPath = `${tempDir}/test-clip.wav`;
+      await this.tools.synthesizeTestClip(inputPath);
+      decodedSeconds = 2;
     }
 
     if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
 
+    const granularity = kf.timestamps || 'sentence';
+    const inferenceStart = this.now();
     let result;
     try {
-      result = await this.transcriptionService.transcribe(inputPath, { timestamps: true });
+      result = await this.transcriptionService.transcribe(inputPath, {
+        timestamps: granularity !== 'none',
+        wordTimestamps: granularity === 'word',
+      });
     } catch (error) {
       throw new JobError('stt_failed', error.message, { cause: error });
     }
+    timings.inference = (this.now() - inferenceStart) / 1000;
 
-    // The broker persists `transcript` as a string, so the wire field is the text
-    // alone. Segments and raw daemon output ride along under `transcriptDetails`,
-    // which the broker ignores today — it keeps the structured data one schema
-    // change away from being usable rather than dropping it here.
-    return {
-      payload: {
-        transcript: typeof result?.text === 'string' ? result.text : '',
-        transcriptDetails: result,
-      },
-      meta: { audioSeconds: deriveAudioSeconds(result) },
+    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
+
+    // The JSON transcript artifact (#51: text + segments/timestamps).
+    const transcript = {
+      text: typeof result?.text === 'string' ? result.text : '',
+      segments: Array.isArray(result?.timestamps) ? result.timestamps : [],
+      ...(Array.isArray(result?.wordTimestamps) ? { words: result.wordTimestamps } : {}),
+      durationSeconds: Number(decodedSeconds.toFixed(3)),
+      model: entry.model.id,
     };
+    const artifactPath = `${tempDir}/transcript.json`;
+    await this.writeArtifact(artifactPath, JSON.stringify(transcript));
+
+    const uploadStart = this.now();
+    await this._upload(job, imgID, artifactPath, OUTPUT_CONTENT_TYPES.json);
+    timings.assetUpload = (this.now() - uploadStart) / 1000;
+
+    return { timings };
   }
 
-  async _runTts(job, entry, tempDir) {
-    // Synthesized verbatim, not trimmed: the broker meters params.text exactly as it
-    // arrived, so trimming would bill for characters that were never spoken. Only the
-    // emptiness check looks at the trimmed form — whitespace alone is still no text.
-    const text = typeof job.params?.text === 'string' ? job.params.text : '';
+  async _runTts(job, entry, tempDir, imgID) {
+    const kf = job.keyFrames[0];
+    // Synthesized verbatim, not trimmed: the broker derived the bill from this
+    // exact text, so trimming would bill characters that were never spoken.
+    const text = typeof kf.positivePrompt === 'string' ? kf.positivePrompt : '';
     if (!text.trim()) {
-      throw new JobError('invalid_request', 'TTS jobRequest requires params.text');
-    }
-    if (!job.output || typeof job.output.uploadUrl !== 'string') {
-      throw new JobError('invalid_request', 'TTS jobRequest requires output.uploadUrl');
+      throw new JobError('invalid_request', 'TTS jobRequest requires keyFrames[0].positivePrompt');
     }
 
-    // Only Kokoro has a rate control, and the broker applies no bounds of its own.
-    // The HTTP route gates the same range at the edge (Joi .min(0.5).max(2.0),
-    // src/routes/tts.js:35), so an out-of-range job has to fail here — before
-    // synthesis, since a rejected request must not be billed.
-    const hasSpeed = job.params.speed !== undefined
-      && job.params.speed !== null
-      && job.params.speed !== '';
+    // The broker clamps speed to the tier range before dispatch; this re-guard
+    // only catches a broker/worker contract drift, not routine input.
     let speed = config.tts.defaultSpeed;
+    const hasSpeed = kf.speed !== undefined && kf.speed !== null && kf.speed !== '';
     if (entry.model.engine === 'kokoro' && hasSpeed) {
-      speed = Number(job.params.speed);
+      speed = Number(kf.speed);
       if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
         throw new JobError('invalid_request', 'speed must be between 0.5 and 2.0');
       }
     }
 
-    const outputPath = `${tempDir}/output.wav`;
+    const timings = {};
+    const wavPath = `${tempDir}/output.wav`;
+    const inferenceStart = this.now();
     try {
       if (entry.model.engine === 'kokoro') {
         await this.ttsService.generate(text, {
-          voice: job.params.voice || config.tts.defaultVoice,
+          voice: kf.voice || config.tts.defaultVoice,
           speed,
-          outputPath,
+          outputPath: wavPath,
         });
       } else {
         if (!this.qwenTtsService) {
           throw new Error('Qwen preset TTS engine is not configured');
         }
         await this.qwenTtsService.generate(text, {
-          voice: job.params.voice || config.qwenTts.defaultVoice,
-          language: job.params.language || config.qwenTts.defaultLanguage,
-          outputPath,
+          voice: kf.voice || config.qwenTts.defaultVoice,
+          language: kf.language || config.qwenTts.defaultLanguage,
+          outputPath: wavPath,
         });
       }
     } catch (error) {
       throw new JobError('tts_failed', error.message, { cause: error });
     }
+    timings.inference = (this.now() - inferenceStart) / 1000;
 
     if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
 
-    let uploaded;
-    try {
-      uploaded = await this.artifacts.uploadFile(job.output.uploadUrl, outputPath);
-    } catch (error) {
-      throw new JobError('upload_failed', error.message, { cause: error });
+    // The catalog stamps audio jobs mp3; wav is honored if a future tier asks.
+    const format = OUTPUT_CONTENT_TYPES[kf.outputFormat || job.outputFormat] ? (kf.outputFormat || job.outputFormat) : 'mp3';
+    let artifactPath = wavPath;
+    if (format === 'mp3') {
+      artifactPath = `${tempDir}/output.mp3`;
+      try {
+        await this.tools.transcodeWavToMp3(wavPath, artifactPath);
+      } catch (error) {
+        throw new JobError('tts_failed', error.message, { cause: error });
+      }
     }
 
-    // Catches an adapter that resolved having written nothing at all — an empty
-    // file, not silence: a 44-byte header-only WAV has bytes > 0 and passes.
-    // Checked outside the catch above so it reports as a synthesis fault rather
-    // than an upload one, and so no result — and no charge — settles for nothing.
-    if (uploaded.bytes === 0) {
-      throw new JobError('tts_failed', 'Synthesis produced empty audio');
-    }
+    const uploadStart = this.now();
+    await this._upload(job, imgID, artifactPath, OUTPUT_CONTENT_TYPES[format]);
+    timings.assetUpload = (this.now() - uploadStart) / 1000;
 
-    // The broker meters NFC code points. text.length counts UTF-16 units, which
-    // over-reports astral characters and decomposed accents — every such job would
-    // trip the billing drift warning on a count the worker itself got wrong.
-    return {
-      payload: { uploadedKey: uploaded.uploadedKey },
-      meta: { charCount: Array.from(text.normalize('NFC')).length },
-    };
+    return { timings };
   }
 
-  // `expectedEntry` guards against a stale release: abort() frees the slot while the
-  // uncancellable adapter call is still running, so the broker can re-issue the same
-  // jobID before that first run settles. Releasing by ID alone would then evict the
-  // replacement job and let the worker over-admit past the model's maxConcurrent.
+  // `expectedEntry` guards against a stale release: abort() frees the slot while
+  // the uncancellable adapter call is still running, so the broker can re-issue
+  // the same jobID before that first run settles.
   _release(jobID, expectedEntry = null) {
     const entry = this.activeJobs.get(jobID);
     if (!entry) return;
     if (expectedEntry && entry !== expectedEntry) return;
-
     this.activeJobs.delete(jobID);
-    const remaining = (this.modelCounts.get(entry.model.id) || 1) - 1;
-    if (remaining <= 0) this.modelCounts.delete(entry.model.id);
-    else this.modelCounts.set(entry.model.id, remaining);
   }
 
   abort(jobID) {

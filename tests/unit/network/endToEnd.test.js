@@ -5,13 +5,15 @@ import { SpeechWorkerSupervisor } from '../../../src/network/supervisor.js';
 import { startMockSogniSocket, waitFor } from '../../utils/mockSogniSocket.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
+  { id: 'kokoro_82m', task: 'tts', engine: 'kokoro' },
+  { id: 'parakeet_tdt_0.6b_v3', task: 'stt', engine: 'parakeet' },
 ];
 
 const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
 
-describe('speech worker end to end', () => {
+// End-to-end over a real WebSocket: real client, real supervisor, real
+// executor; only the ML daemons, sogni-api, and ffmpeg are faked.
+describe('speech worker end to end (standard contract)', () => {
   let server;
   let supervisor;
   let client;
@@ -19,6 +21,8 @@ describe('speech worker end to end', () => {
   let transcriptionService;
   let ttsService;
   let artifacts;
+  let api;
+  let tools;
 
   beforeEach(async () => {
     server = await startMockSogniSocket();
@@ -26,20 +30,29 @@ describe('speech worker end to end', () => {
     transcriptionService = {
       transcribe: vi.fn(async () => ({
         text: 'network transcript',
-        rawOutput: '',
         timestamps: [{ start: 0, end: 3.5, text: 'network transcript' }],
       })),
     };
     ttsService = {
-      generate: vi.fn(async (text, options) => ({ outputPath: options.outputPath, duration: 1 })),
+      generate: vi.fn(async (text, options) => ({ outputPath: options.outputPath })),
     };
     artifacts = {
       downloadToFile: vi.fn(async (url, destPath) => ({ path: destPath, bytes: 2048 })),
-      uploadFile: vi.fn(async () => ({ uploadedKey: 'speech/out/e2e.wav', bytes: 4096 })),
+      uploadFile: vi.fn(async () => ({ uploadedKey: 'video/2026-07-31/x/complete-y.mp3', bytes: 4096 })),
+    };
+    api = {
+      requestMediaUploadUrl: vi.fn(async () => 'https://r2.test/put?sig=1'),
+      requestMediaDownloadUrl: vi.fn(async () => 'https://r2.test/get?sig=2'),
+    };
+    tools = {
+      transcodeWavToMp3: vi.fn(async (input, output) => output),
+      probeDurationSeconds: vi.fn(async () => 3.6),
+      synthesizeTestClip: vi.fn(async (path) => path),
     };
 
     executor = new SpeechExecutor({
       speechModels: MODELS,
+      apiUrl: 'https://api-staging.sogni.ai',
       maxConcurrentJobs: 1,
       transcriptionService,
       ttsService,
@@ -48,13 +61,17 @@ describe('speech worker end to end', () => {
         cleanup: vi.fn(async () => {}),
       },
       artifacts,
+      api,
+      tools,
+      writeArtifact: vi.fn(async () => {}),
     });
 
     client = new SogniSocketClient({
       url: server.url,
       apiKey: 'e2e-key',
+      nftTokenId: '777',
       workerId: 'E2E-WORKER',
-      userAgent: 'Sogni/3.0.118 (Darwin) | Speech:MLX | speech-worker/1.0.0',
+      userAgent: 'Sogni/4.0.0 (macOS) [sogni-voice-speech-worker/2.0.0]',
       reconnectInitialDelayMs: 50,
       reconnectMaxDelayMs: 100,
       logger: silentLogger,
@@ -64,156 +81,157 @@ describe('speech worker end to end', () => {
       client,
       executor,
       speechModels: MODELS,
-      maxConcurrentJobs: 1,
-      capacityIntervalMs: 30,
       drainTimeoutMs: 3000,
+      progressIntervalMs: 60000,
       logger: silentLogger,
     });
   });
 
   afterEach(async () => {
-    supervisor.stopCapacityLoop();
     client.close();
     await server.close();
   });
 
   const framesOfType = (type) => server.received.filter((frame) => frame.type === type);
 
-  it('registers, runs an STT job, and reports capacity', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
-
-    expect(framesOfType('workerInfo')[0].data).toEqual({
-      speechModels: [
-        { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-        { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-      ],
-      loadedModelIDs: [],
-      maxConcurrentJobs: 1,
-    });
-
-    server.send('jobRequest', {
-      jobID: 'e2e-stt',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
-    });
-
-    await waitFor(() => framesOfType('jobResult').length === 1);
-    const result = framesOfType('jobResult')[0].data;
-    expect(result.jobID).toBe('e2e-stt');
-    expect(result.transcript).toBe('network transcript');
-    expect(result.transcriptDetails.timestamps).toEqual([
-      { start: 0, end: 3.5, text: 'network transcript' },
-    ]);
-    expect(result.meta.audioSeconds).toBe(3.5);
-    expect(typeof result.meta.durationMs).toBe('number');
-
-    expect(framesOfType('jobState').map((frame) => frame.data.type))
-      .toEqual(['accepted', 'started']);
-
-    await waitFor(
-      () => framesOfType('speechCapacityUpdate').some((frame) => frame.data.activeRequests === 0),
-    );
+  const ttsJob = () => ({
+    jobID: 'E2E00000-0000-4000-8000-000000000001',
+    jobType: 'audio',
+    numberOfImages: 1,
+    outputFormat: 'mp3',
+    keyFrames: [{
+      modelID: 'kokoro_82m',
+      positivePrompt: 'Hello from the network.',
+      voice: 'af_heart',
+      speed: 1,
+      duration: 2,
+      steps: 1,
+      seed: -1,
+      outputFormat: 'mp3',
+    }],
   });
 
-  it('runs a TTS job and reports the uploaded key', async () => {
+  it('authenticates, registers, and completes a TTS job through the full frame sequence', async () => {
     supervisor.start();
+    await waitFor(() => server.sockets.length === 1);
+
+    // Standard auth headers on the upgrade.
+    expect(server.headers['api-key']).toBe('e2e-key');
+    expect(server.headers['nft-token-id']).toBe('777');
+    expect(server.headers['client-type']).toBe('worker');
+    expect(server.headers['worker-subtype']).toBeUndefined();
+
+    // Registration waits for the authenticated frame.
+    expect(framesOfType('workerInfo')).toHaveLength(0);
+    server.send('authenticated', { username: 'universal' });
     await waitFor(() => framesOfType('workerInfo').length === 1);
+    const [info] = framesOfType('workerInfo');
+    expect(info.data.workerModels).toEqual(['kokoro_82m', 'parakeet_tdt_0.6b_v3']);
+    expect(info.data.hardwareRating).toBeGreaterThanOrEqual(70);
 
-    server.send('jobRequest', {
-      jobID: 'e2e-tts',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'tts',
-      modelID: 'kokoro-82m',
-      params: { text: 'Twelve chars', voice: 'af_heart' },
-      input: null,
-      output: { uploadUrl: 'https://bucket.s3.test/speech/out/e2e.wav?sig=1' },
-      timeoutMs: 30000,
-    });
-
-    await waitFor(() => framesOfType('jobResult').length === 1);
-    expect(framesOfType('jobResult')[0].data).toMatchObject({
-      jobID: 'e2e-tts',
-      uploadedKey: 'speech/out/e2e.wav',
-      meta: { charCount: 12 },
-    });
-    expect(artifacts.uploadFile).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a second concurrent job with capacity_exceeded', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
-
-    let releaseFirst;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => { releaseFirst = () => resolve({ text: 'slow', rawOutput: '' }); }),
-    );
-
-    const request = (jobID) => ({
-      jobID,
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
-    });
-
-    server.send('jobRequest', request('busy-1'));
+    server.send('jobRequest', ttsJob());
     await waitFor(() => framesOfType('jobState').length === 2);
 
-    server.send('jobRequest', request('busy-2'));
+    const states = framesOfType('jobState');
+    expect(states[0].data.type).toBe('jobStarted');
+    expect(states[1].data.type).toBe('jobCompleted');
+    const [result] = framesOfType('jobResult');
+    expect(result.data).toMatchObject({
+      jobID: 'E2E00000-0000-4000-8000-000000000001',
+      imgID: states[0].data.imgID,
+      userCanceled: false,
+      performedStepCount: 1,
+    });
+
+    // jobResult hit the wire before jobCompleted.
+    const order = server.received.map((f) => f.type);
+    expect(order.indexOf('jobResult')).toBeLessThan(order.lastIndexOf('jobState'));
+
+    // The artifact went through the media lane as mp3.
+    expect(api.requestMediaUploadUrl).toHaveBeenCalledWith(expect.objectContaining({
+      contentType: 'audio/mpeg',
+      jobId: 'E2E00000-0000-4000-8000-000000000001',
+    }));
+    expect(ttsService.generate).toHaveBeenCalledWith('Hello from the network.', expect.objectContaining({
+      voice: 'af_heart',
+    }));
+  });
+
+  it('completes an STT job: redeems the input, uploads the JSON transcript', async () => {
+    supervisor.start();
+    await waitFor(() => server.sockets.length === 1);
+    server.send('authenticated', {});
+    await waitFor(() => framesOfType('workerInfo').length === 1);
+
+    server.send('jobRequest', {
+      jobID: 'E2E00000-0000-4000-8000-000000000002',
+      jobType: 'audio',
+      outputFormat: 'json',
+      keyFrames: [{
+        modelID: 'parakeet_tdt_0.6b_v3',
+        positivePrompt: '',
+        hasReferenceAudio: true,
+        duration: 5,
+        timestamps: 'sentence',
+        steps: 1,
+        seed: -1,
+        outputFormat: 'json',
+      }],
+    });
+    await waitFor(() => framesOfType('jobState').length === 2);
+
+    expect(api.requestMediaDownloadUrl).toHaveBeenCalledWith(expect.objectContaining({
+      type: 'referenceAudio',
+      jobId: 'E2E00000-0000-4000-8000-000000000002',
+    }));
+    expect(transcriptionService.transcribe).toHaveBeenCalled();
+    expect(api.requestMediaUploadUrl).toHaveBeenCalledWith(expect.objectContaining({
+      contentType: 'application/json',
+    }));
+    expect(framesOfType('jobResult')).toHaveLength(1);
+  });
+
+  it('echoes a cancellation and signals readiness again', async () => {
+    let releaseGenerate;
+    ttsService.generate.mockImplementationOnce(() => new Promise((resolve) => {
+      releaseGenerate = resolve;
+    }));
+
+    supervisor.start();
+    await waitFor(() => server.sockets.length === 1);
+    server.send('authenticated', {});
+    await waitFor(() => framesOfType('workerInfo').length === 1);
+
+    server.send('jobRequest', ttsJob());
+    await waitFor(() => framesOfType('jobState').length === 1);
+
+    server.send('jobError', {
+      jobID: 'E2E00000-0000-4000-8000-000000000001',
+      isFromWorker: false,
+      error: 'artistCanceled',
+    });
     await waitFor(() => framesOfType('jobError').length === 1);
 
     expect(framesOfType('jobError')[0].data).toMatchObject({
-      jobID: 'busy-2',
-      code: 'capacity_exceeded',
+      isFromWorker: true,
+      error: 'workerCancelled',
     });
+    expect(framesOfType('readyToAcceptJobs')[0].data).toEqual({ ready: true });
 
-    releaseFirst();
-    await waitFor(() => framesOfType('jobResult').length === 1);
+    releaseGenerate({});
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(framesOfType('jobResult')).toHaveLength(0);
   });
 
-  it('drains an in-flight job on shutdown before closing the socket', async () => {
+  it('reconnects after a broker restart and re-registers on the new socket', async () => {
     supervisor.start();
+    await waitFor(() => server.sockets.length === 1);
+    server.send('authenticated', {});
     await waitFor(() => framesOfType('workerInfo').length === 1);
 
-    let releaseJob;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        releaseJob = () => resolve({ text: 'drained', rawOutput: '' });
-      }),
-    );
-
-    server.send('jobRequest', {
-      jobID: 'drain-1',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
-    });
-    await waitFor(() => framesOfType('jobState').length === 2);
-
-    const draining = supervisor.shutdown();
-    expect(executor.draining).toBe(true);
-
-    releaseJob();
-    await draining;
-
-    await waitFor(() => framesOfType('jobResult').length === 1);
-    expect(framesOfType('jobResult')[0].data.transcript).toBe('drained');
+    server.closeClients(1012, 'restarting');
+    await waitFor(() => server.sockets.length === 2);
+    server.send('authenticated', {});
+    await waitFor(() => framesOfType('workerInfo').length >= 2);
   });
 });

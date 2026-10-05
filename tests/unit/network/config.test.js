@@ -34,9 +34,19 @@ describe('network config', () => {
     expect(() => resolveSocketUrl('moon')).toThrow(/Unknown SOGNI_ENV/);
   });
 
+  // The broker parses this exactly: 'Sogni' passes the bot gate, ' (macOS)'
+  // selects the mac agent type, the segment after the last '/' before '[' must
+  // version-compare >= 4.0.0, and the bracketed suffix is stripped first.
   it('builds the frozen user-agent string', async () => {
     const { buildUserAgent } = await import('../../../src/network/config.js');
-    expect(buildUserAgent()).toBe('Sogni/3.0.118 (Darwin) | Speech:MLX | speech-worker/1.0.0');
+    expect(buildUserAgent()).toBe('Sogni/4.0.0 (macOS) [sogni-voice-speech-worker/2.0.0]');
+  });
+
+  it('resolves the sogni-api base URL per environment, with env override', async () => {
+    const { resolveApiUrl } = await import('../../../src/network/config.js');
+    expect(resolveApiUrl('staging')).toBe('https://api-staging.sogni.ai');
+    expect(resolveApiUrl('production')).toBe('https://api.sogni.ai');
+    expect(() => resolveApiUrl('moon')).toThrow(/Unknown SOGNI_ENV/);
   });
 
   it('persists a stable worker id to disk', async () => {
@@ -54,8 +64,9 @@ describe('network config', () => {
   it('exposes networkWorker defaults on the shared config', async () => {
     const { config } = await import('../../../src/config/index.js');
     expect(config.networkWorker.enabled).toBe(false);
-    expect(config.networkWorker.maxConcurrentJobs).toBe(2);
-    expect(config.networkWorker.capacityIntervalMs).toBe(30000);
+    expect(config.networkWorker.maxConcurrentJobs).toBe(1);
+    expect(config.networkWorker.hardwareRating).toBe(70);
+    expect(config.networkWorker.nftTokenId).toBeNull();
     expect(config.networkWorker.reconnectInitialDelayMs).toBe(5000);
     expect(config.networkWorker.reconnectMaxDelayMs).toBe(60000);
   });

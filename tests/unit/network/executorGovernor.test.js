@@ -3,227 +3,194 @@ import {
   JobError,
   SpeechExecutor,
   computeJobTimeout,
-  deriveAudioSeconds,
-  extensionFromUrl,
   withTimeout,
 } from '../../../src/network/executor.js';
+import { config } from '../../../src/config/index.js';
 
 const MODELS = [
-  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
+  { id: 'kokoro_82m', task: 'tts', engine: 'kokoro' },
 ];
 
-const sttJob = (jobID = 'job-1') => ({
-  jobID,
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'stt',
-  modelID: 'parakeet-tdt-0.6b-v3',
-  params: {},
-  input: { url: 'https://s3.test/in/clip.wav' },
-  output: null,
-  timeoutMs: 60000,
-});
-
-const ttsJob = (jobID = 'job-t') => ({
-  jobID,
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'tts',
-  modelID: 'kokoro-82m',
-  params: { text: 'hello' },
-  input: null,
-  output: { uploadUrl: 'https://s3.test/out/a.wav' },
-  timeoutMs: 60000,
-});
-
-const makeExecutor = (overrides = {}) => new SpeechExecutor({
-  speechModels: MODELS,
-  maxConcurrentJobs: 2,
-  transcriptionService: { transcribe: vi.fn() },
-  ttsService: { generate: vi.fn() },
-  tempFiles: { createTempDir: vi.fn(async () => '/tmp/job'), cleanup: vi.fn(async () => {}) },
-  artifacts: { downloadToFile: vi.fn(), uploadFile: vi.fn() },
+const job = (overrides = {}, kfOverrides = {}) => ({
+  jobID: 'A0000000-0000-4000-8000-000000000021',
+  jobType: 'audio',
+  keyFrames: [{
+    modelID: 'kokoro_82m',
+    positivePrompt: 'Hello.',
+    duration: 1,
+    steps: 1,
+    seed: -1,
+    ...kfOverrides,
+  }],
   ...overrides,
 });
 
-// `toThrow` compares messages, not error codes, so assert on the code directly.
-const expectJobError = (fn, code, message = null) => {
-  try {
-    fn();
-  } catch (error) {
-    expect(error).toBeInstanceOf(JobError);
-    expect(error.code).toBe(code);
-    if (message) expect(error.message).toBe(message);
-    return;
-  }
-  throw new Error(`Expected a JobError with code "${code}" but nothing was thrown`);
+const IMG_ID = 'B0000000-0000-4000-8000-000000000022';
+
+const setup = (overrides = {}) => {
+  let resolveGenerate;
+  const generateGate = new Promise((resolve) => { resolveGenerate = resolve; });
+  const ttsService = {
+    generate: vi.fn(async () => generateGate),
+  };
+  const executor = new SpeechExecutor({
+    speechModels: MODELS,
+    apiUrl: 'https://api-staging.sogni.ai',
+    maxConcurrentJobs: 1,
+    transcriptionService: { transcribe: vi.fn() },
+    ttsService,
+    tempFiles: {
+      createTempDir: vi.fn(async () => '/tmp/sogni-speech-gov'),
+      cleanup: vi.fn(async () => {}),
+    },
+    artifacts: {
+      downloadToFile: vi.fn(),
+      uploadFile: vi.fn(async () => ({ uploadedKey: 'k', bytes: 10 })),
+    },
+    api: {
+      requestMediaUploadUrl: vi.fn(async () => 'https://r2.test/put'),
+      requestMediaDownloadUrl: vi.fn(),
+    },
+    tools: {
+      transcodeWavToMp3: vi.fn(async (i, o) => o),
+      probeDurationSeconds: vi.fn(),
+      synthesizeTestClip: vi.fn(),
+    },
+    writeArtifact: vi.fn(async () => {}),
+    ...overrides,
+  });
+  return { executor, ttsService, finishGenerate: () => resolveGenerate({}) };
 };
 
-describe('helpers', () => {
-  it('prefers the broker timeout when present', () => {
-    expect(computeJobTimeout({ timeoutMs: 45000 })).toBe(45000);
+describe('SpeechExecutor governor (standard contract)', () => {
+  it('rejects jobs without a jobID, with the wrong jobType, or without keyFrames', () => {
+    const { executor } = setup();
+    expect(() => executor.accept(job({ jobID: undefined }))).toThrow(/jobID/);
+    expect(() => executor.accept(job({ jobType: 'speech' }))).toThrow(/jobType/);
+    expect(() => executor.accept(job({ keyFrames: [] }))).toThrow(/keyFrames/);
   });
 
-  it('scales the fallback timeout by TTS text length', () => {
-    expect(computeJobTimeout({ params: { text: 'x'.repeat(1000) } }, 10000)).toBe(50000);
+  it('rejects models no enabled engine serves', () => {
+    const { executor } = setup();
+    expect(() => executor.accept(job({}, { modelID: 'ace_step_1.5_sft' }))).toThrow(/No enabled engine/);
   });
 
-  it('never returns less than the fallback', () => {
-    expect(computeJobTimeout({ timeoutMs: 0, params: {} }, 10000)).toBe(10000);
+  it('rejects a duplicate jobID while the first is running', () => {
+    const { executor } = setup();
+    executor.accept(job());
+    expect(() => executor.accept(job())).toThrow(/already running/);
   });
 
-  // Unclamped, setTimeout would rerun this delay as 1ms and fail the job instantly.
-  it('clamps an oversized broker timeout to the setTimeout ceiling', () => {
-    expect(computeJobTimeout({ timeoutMs: 10_000_000_000 })).toBe(2147483647);
-    expect(computeJobTimeout({ timeoutMs: 2147483648 })).toBe(2147483647);
-    expect(computeJobTimeout({ timeoutMs: 2147483647 })).toBe(2147483647);
+  // The broker assigns one job per render worker; a second concurrent request
+  // means state divergence, and the worker refuses rather than queues.
+  it('refuses work past maxConcurrentJobs', () => {
+    const { executor } = setup();
+    executor.accept(job());
+    expect(() => executor.accept(job({ jobID: 'A0000000-0000-4000-8000-000000000099' })))
+      .toThrow(/at capacity/);
   });
 
-  it('rejects with a timeout JobError once the deadline passes', async () => {
-    const never = new Promise(() => {});
-    await expect(withTimeout(never, 10, 'Job job-1')).rejects.toMatchObject({
-      code: 'timeout',
-      message: 'Job job-1 exceeded 10ms',
+  it('refuses new work while draining', () => {
+    const { executor } = setup();
+    executor.startDrain();
+    expect(() => executor.accept(job())).toThrow(/draining/);
+  });
+
+  it('frees the slot when a job completes', async () => {
+    const harness = setup();
+    const first = job();
+    harness.executor.accept(first);
+    const running = harness.executor.execute(first, { imgID: IMG_ID });
+    harness.finishGenerate();
+    await running;
+
+    expect(harness.executor.activeRequests).toBe(0);
+    expect(() => harness.executor.accept(job({ jobID: 'A0000000-0000-4000-8000-000000000098' })))
+      .not.toThrow();
+  });
+
+  it('abort marks the entry, frees the slot, and reports the job as aborted', async () => {
+    const harness = setup();
+    const first = job();
+    harness.executor.accept(first);
+    const running = harness.executor.execute(first, { imgID: IMG_ID });
+
+    expect(harness.executor.abort(first.jobID)).toBe(true);
+    expect(harness.executor.activeRequests).toBe(0);
+
+    harness.finishGenerate();
+    await expect(running).rejects.toMatchObject({ code: 'aborted' });
+  });
+
+  it('abort of an unknown job is a no-op', () => {
+    const { executor } = setup();
+    expect(executor.abort('nope')).toBe(false);
+  });
+
+  // abort() frees the slot while the uncancellable adapter call is still
+  // running, so the broker can re-issue the same jobID. The stale first run's
+  // release must not evict the replacement.
+  it('a stale release never evicts a re-issued job with the same jobID', async () => {
+    const harness = setup();
+    const first = job();
+    harness.executor.accept(first);
+    const firstRun = harness.executor.execute(first, { imgID: IMG_ID });
+    harness.executor.abort(first.jobID);
+
+    const replacement = job();
+    harness.executor.accept(replacement);
+    expect(harness.executor.activeRequests).toBe(1);
+
+    harness.finishGenerate();
+    await firstRun.catch(() => {});
+    // The stale run's finally must not have released the replacement's slot.
+    expect(harness.executor.activeRequests).toBe(1);
+  });
+
+  it('execute without accept is rejected', async () => {
+    const { executor } = setup();
+    await expect(executor.execute(job(), { imgID: IMG_ID })).rejects.toMatchObject({
+      code: 'invalid_request',
     });
-  });
-
-  it('passes through a value that resolves in time', async () => {
-    await expect(withTimeout(Promise.resolve('ok'), 500, 'Job job-1')).resolves.toBe('ok');
-  });
-
-  it('reads the file extension out of a presigned URL', () => {
-    expect(extensionFromUrl('https://s3.test/in/clip.MP3?sig=1')).toBe('mp3');
-    expect(extensionFromUrl('https://s3.test/in/clip')).toBe('wav');
-    expect(extensionFromUrl('not-a-url')).toBe('wav');
-  });
-
-  it('derives audioSeconds from the last sentence timestamp', () => {
-    expect(deriveAudioSeconds({ timestamps: [{ start: 0, end: 1.5 }, { start: 1.5, end: 4.25 }] }))
-      .toBe(4.25);
-    expect(deriveAudioSeconds({ text: 'no timestamps' })).toBeNull();
-    expect(deriveAudioSeconds({ timestamps: [] })).toBeNull();
   });
 });
 
-describe('SpeechExecutor governor', () => {
-  it('accepts a job and counts it as active', () => {
-    const executor = makeExecutor();
-    expect(executor.accept(sttJob()).engine).toBe('parakeet');
-    expect(executor.activeRequests).toBe(1);
+describe('computeJobTimeout', () => {
+  const base = config.networkWorker.defaultJobTimeoutMs;
+
+  it('adds the workload scale to the fallback floor', () => {
+    // 'Hello.' = 6 chars, declared duration 1s
+    expect(computeJobTimeout(job())).toBe(base + 6 * 40 + 1 * 500);
   });
 
-  it('rejects a non-speech jobType', () => {
-    const executor = makeExecutor();
-    expectJobError(
-      () => executor.accept({ ...sttJob(), jobType: 'image' }),
-      'invalid_request',
-      'Unsupported jobType "image"',
-    );
+  it('scales with TTS text length', () => {
+    const long = job({}, { positivePrompt: 'a'.repeat(10000) });
+    expect(computeJobTimeout(long)).toBe(Math.min(900000, base + 10000 * 40 + 1 * 500));
   });
 
-  it('rejects a job with no jobID', () => {
-    const executor = makeExecutor();
-    expectJobError(
-      () => executor.accept({ ...sttJob(), jobID: '' }),
-      'invalid_request',
-      'jobRequest is missing jobID',
-    );
+  it('scales with declared STT duration and caps at 15 minutes', () => {
+    const longAudio = job({}, { positivePrompt: '', duration: 7200 });
+    expect(computeJobTimeout(longAudio)).toBe(900000);
+  });
+});
+
+describe('withTimeout', () => {
+  it('rejects with a JobError once the deadline passes', async () => {
+    vi.useFakeTimers();
+    try {
+      const never = new Promise(() => {});
+      const raced = withTimeout(never, 5000, 'Job X');
+      const outcome = raced.catch((e) => e);
+      await vi.advanceTimersByTimeAsync(5001);
+      const error = await outcome;
+      expect(error).toBeInstanceOf(JobError);
+      expect(error.code).toBe('timeout');
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
-  it('rejects a model we do not advertise', () => {
-    const executor = makeExecutor();
-    expectJobError(
-      () => executor.accept({ ...sttJob(), modelID: 'whisper-large' }),
-      'unsupported_model',
-      'No enabled engine for modelID "whisper-large" task "stt"',
-    );
-  });
-
-  it('rejects a duplicate jobID', () => {
-    const executor = makeExecutor();
-    executor.accept(sttJob('dup'));
-    expectJobError(
-      () => executor.accept(sttJob('dup')),
-      'invalid_request',
-      'Job dup is already running',
-    );
-  });
-
-  it('rejects beyond maxConcurrentJobs instead of queueing', () => {
-    const executor = makeExecutor({ maxConcurrentJobs: 1 });
-    executor.accept(ttsJob('t1'));
-    expectJobError(
-      () => executor.accept(ttsJob('t2')),
-      'capacity_exceeded',
-      'Worker is at capacity (1 concurrent jobs)',
-    );
-  });
-
-  it('enforces the per-model concurrency cap', () => {
-    const executor = makeExecutor({ maxConcurrentJobs: 4 });
-    executor.accept(sttJob('s1'));
-    expectJobError(
-      () => executor.accept(sttJob('s2')),
-      'capacity_exceeded',
-      'Model parakeet-tdt-0.6b-v3 is at capacity (1 concurrent jobs)',
-    );
-  });
-
-  it('frees the slot when a job is aborted', () => {
-    const executor = makeExecutor();
-    executor.accept(sttJob('s1'));
-    expect(executor.abort('s1')).toBe(true);
-    expect(executor.activeRequests).toBe(0);
-    expect(() => executor.accept(sttJob('s2'))).not.toThrow();
-  });
-
-  it('ignores an abort for an unknown jobID', () => {
-    expect(makeExecutor().abort('never-seen')).toBe(false);
-  });
-
-  // Aborting frees the slot while the uncancellable adapter call keeps running, so
-  // the broker can re-issue the same jobID before that first run settles. When it
-  // finally does, its release must not evict the replacement job's slot.
-  it('ignores a stale release from a run whose jobID was aborted and re-accepted', () => {
-    const executor = makeExecutor({ maxConcurrentJobs: 4 });
-    executor.accept(sttJob('j1'));
-    const originalEntry = executor.activeJobs.get('j1');
-
-    executor.abort('j1');
-    executor.accept(sttJob('j1'));
-    const replacementEntry = executor.activeJobs.get('j1');
-    expect(replacementEntry).not.toBe(originalEntry);
-
-    executor._release('j1', originalEntry);
-
-    expect(executor.activeRequests).toBe(1);
-    expect(executor.modelCounts.get('parakeet-tdt-0.6b-v3')).toBe(1);
-    expectJobError(
-      () => executor.accept(sttJob('j2')),
-      'capacity_exceeded',
-      'Model parakeet-tdt-0.6b-v3 is at capacity (1 concurrent jobs)',
-    );
-  });
-
-  it('still releases when the caller passes the entry that is actually current', () => {
-    const executor = makeExecutor();
-    executor.accept(sttJob('j1'));
-    const entry = executor.activeJobs.get('j1');
-
-    executor._release('j1', entry);
-
-    expect(executor.activeRequests).toBe(0);
-    expect(executor.modelCounts.has('parakeet-tdt-0.6b-v3')).toBe(false);
-  });
-
-  it('refuses new jobs while draining', () => {
-    const executor = makeExecutor();
-    executor.startDrain();
-    expectJobError(
-      () => executor.accept(sttJob()),
-      'draining',
-      'Worker is draining and not accepting new jobs',
-    );
+  it('resolves and clears the timer when work finishes first', async () => {
+    await expect(withTimeout(Promise.resolve('ok'), 5000, 'Job Y')).resolves.toBe('ok');
   });
 });

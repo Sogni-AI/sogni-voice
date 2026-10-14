@@ -17,7 +17,7 @@ vi.mock('../../src/config/index.js', () => ({
       excludePaths: ['/health', '/auth/status'],
     },
     tts: {
-      enabled: process.env.TTS_ENABLED === '1',
+      enabled: true,
       modelId: process.env.TTS_MODEL_ID || 'test-model',
       defaultVoice: process.env.TTS_DEFAULT_VOICE || 'af_heart',
       defaultSpeed: parseFloat(process.env.TTS_DEFAULT_SPEED) || 1.0,
@@ -26,14 +26,14 @@ vi.mock('../../src/config/index.js', () => ({
       preWarmDaemon: false,
     },
     transcription: {
-      enabled: process.env.TRANSCRIPTION_ENABLED === '1',
+      enabled: true,
       timeout: 300000,
       daemonStartupTimeout: 120000,
       preWarmDaemon: false,
     },
     upload: { maxFileSizeBytes: 100 * 1024 * 1024 },
     pocketTts: {
-      enabled: process.env.POCKET_TTS_ENABLED === '1',
+      enabled: true,
       defaultVoice: process.env.POCKET_TTS_DEFAULT_VOICE || 'alba',
       timeout: 60000,
       daemonStartupTimeout: 60000,
@@ -41,7 +41,7 @@ vi.mock('../../src/config/index.js', () => ({
       voiceClonesDir: process.env.POCKET_TTS_VOICE_CLONES_DIR || './pocket_voice_clones',
     },
     qwenTts: {
-      enabled: process.env.QWEN_TTS_ENABLED === '1',
+      enabled: true,
       modelVariant: process.env.QWEN_TTS_MODEL_VARIANT || 'base-0.6b',
       baseModelVariant: 'base-0.6b',
       customVoiceModelVariant: 'custom-voice',

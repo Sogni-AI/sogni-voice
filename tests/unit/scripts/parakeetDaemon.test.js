@@ -5,10 +5,16 @@ import { describe, expect, it } from 'vitest';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(__dirname, '../../..');
+const canImport = (candidate, modules) => (
+  spawnSync(candidate, ['-c', `import ${modules}`], { encoding: 'utf8' }).status === 0
+);
 const python = [join(repoRoot, '.venv/bin/python'), 'python3', 'python'].find((candidate) => (
-  spawnSync(candidate, ['-c', 'import sys'], { encoding: 'utf8' }).status === 0
+  canImport(candidate, 'sys')
 ));
 const itWithPython = python ? it : it.skip;
+// The daemon imports mlx and numpy only to decode PCM, so only those tests need
+// the Parakeet venv; a fresh clone without .venv skips them instead of failing.
+const itWithMlx = python && canImport(python, 'mlx.core, numpy') ? it : it.skip;
 
 const runPython = (body) => {
   const script = `
@@ -65,7 +71,7 @@ class Model:
 `;
 
 describe('parakeet daemon realtime protocol', () => {
-  itWithPython('streams float32 PCM and returns interim plus final word timings', () => {
+  itWithMlx('streams float32 PCM and returns interim plus final word timings', () => {
     const result = runPython(`
 ${fakeStreamingModel}
 import base64
@@ -136,7 +142,7 @@ print(json.dumps({
     expect(result.closed).toBe(true);
   });
 
-  itWithPython('rejects malformed and non-finite PCM payloads', () => {
+  itWithMlx('rejects malformed and non-finite PCM payloads', () => {
     const result = runPython(`
 ${fakeStreamingModel}
 import base64

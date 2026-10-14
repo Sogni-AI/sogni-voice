@@ -76,11 +76,35 @@
       text-decoration: underline;
     }
     .how-it-works {
-      text-align: center;
+      display: flex;
+      justify-content: center;
+      flex-wrap: wrap;
+      gap: 8px 20px;
+      margin-bottom: 20px;
       font-size: 14px;
       color: var(--text-muted);
-      margin-bottom: 20px;
-      line-height: 1.6;
+    }
+    .how-step {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+    }
+    .step-num {
+      width: 22px;
+      height: 22px;
+      border-radius: 50%;
+      background: var(--primary);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 600;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      flex-shrink: 0;
+    }
+    .step-sep {
+      color: var(--border);
+      font-weight: 600;
     }
     details.section summary {
       cursor: pointer;
@@ -427,7 +451,8 @@
     .model-unavailable {
       opacity: 0.5;
     }
-    .model-unavailable .model-name::after {
+    .model-unavailable .model-name::after,
+    .model-unavailable .clone-model-label::after {
       content: '(not available)';
       font-size: 11px;
       color: #999;
@@ -896,7 +921,11 @@
     <strong>Demo Console:</strong> This is a live demo for testing the API. Voice clones may be cleared periodically. For production use, <a href="https://github.com/Sogni-AI/sogni-voice" target="_blank">clone the repo</a> and run on your own Mac hardware. <a href="https://github.com/Sogni-AI/sogni-voice/blob/main/llm.txt" target="_blank">For OpenClaw follow these steps.</a>
   </div>
 
-  <div class="how-it-works">Record voice &rarr; get text &nbsp;&middot;&nbsp; Type text &rarr; hear it spoken &nbsp;&middot;&nbsp; Clone a voice &rarr; speak as anyone</div>
+  <div class="how-it-works" role="list">
+    <span class="how-step" role="listitem"><span class="step-num">1</span> Voice to Text <span class="step-sep">&middot;</span> record, upload, or stream live</span>
+    <span class="how-step" role="listitem"><span class="step-num">2</span> Text to Speech <span class="step-sep">&middot;</span> type, pick a voice, listen</span>
+    <span class="how-step" role="listitem"><span class="step-num">3</span> Voice Cloning <span class="step-sep">&middot;</span> sample in, clone out</span>
+  </div>
 
   <!-- Authentication Section -->
   <div class="auth-section" id="authSection">
@@ -1195,20 +1224,20 @@
 
     <div class="model-selector">
       <label>
-        <input type="radio" name="cloneModel" value="pocket" checked>
-        Pocket TTS <span class="badge" style="background:#28a745">Fast</span>
+        <input type="radio" name="cloneModel" value="pocket" id="pocketCloneRadio" checked>
+        <span class="clone-model-label">Pocket TTS</span> <span class="badge" style="background:#28a745">Fast</span>
       </label>
       <label>
-        <input type="radio" name="cloneModel" value="qwen">
-        Qwen3 TTS <span class="badge warning">Advanced</span>
+        <input type="radio" name="cloneModel" value="qwen" id="qwenCloneRadio">
+        <span class="clone-model-label">Qwen3 TTS</span> <span class="badge warning">Advanced</span>
       </label>
       <label>
-        <input type="radio" name="cloneModel" value="moss">
-        MOSS-TTS-Nano <span class="badge" style="background:#6f42c1">Multilingual</span>
+        <input type="radio" name="cloneModel" value="moss" id="mossCloneRadio">
+        <span class="clone-model-label">MOSS-TTS-Nano</span> <span class="badge" style="background:#6f42c1">Multilingual</span>
       </label>
       <label>
-        <input type="radio" name="cloneModel" value="fish">
-        Fish S2 Pro <span class="badge" style="background:#e83e8c">Expressive</span>
+        <input type="radio" name="cloneModel" value="fish" id="fishCloneRadio">
+        <span class="clone-model-label">Fish S2 Pro</span> <span class="badge" style="background:#e83e8c">Expressive</span>
       </label>
     </div>
 
@@ -3108,6 +3137,17 @@
         label.classList.toggle('model-unavailable', !enabled);
         label.setAttribute('title', enabled ? '' : reason);
       }
+      // If the currently checked clone engine just became unavailable,
+      // jump to the first enabled one so the visible tab matches.
+      if (!enabled && radio.name === 'cloneModel' && radio.checked) {
+        const fallback = ['pocketCloneRadio', 'qwenCloneRadio', 'mossCloneRadio', 'fishCloneRadio']
+          .map((id) => document.getElementById(id))
+          .find((r) => r && !r.disabled && r.id !== radioId);
+        if (fallback) {
+          fallback.checked = true;
+          fallback.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+      }
     }
 
     function updateMossAvailability() {
@@ -3143,6 +3183,8 @@
         generateBtn.disabled = unavailable || mossVoices.length === 0;
       }
       setEngineAvailability('mossRadio', mossEnabled,
+        'MOSS-TTS-Nano is not enabled on this server (set MOSS_TTS_ENABLED=1).');
+      setEngineAvailability('mossCloneRadio', mossEnabled,
         'MOSS-TTS-Nano is not enabled on this server (set MOSS_TTS_ENABLED=1).');
     }
 
@@ -3191,6 +3233,8 @@
         if (pocketContent) pocketContent.classList.remove('hidden');
       }
       setEngineAvailability('pocketRadio', pocketEnabled,
+        'Pocket TTS is not enabled on this server (set POCKET_TTS_ENABLED=1).');
+      setEngineAvailability('pocketCloneRadio', pocketEnabled,
         'Pocket TTS is not enabled on this server (set POCKET_TTS_ENABLED=1).');
     }
 
@@ -3319,6 +3363,8 @@
         updateVoiceCloningUI();
       }
       setEngineAvailability('qwenRadio', qwenEnabled,
+        'Qwen3-TTS is not enabled on this server (set QWEN_TTS_ENABLED=1).');
+      setEngineAvailability('qwenCloneRadio', qwenEnabled,
         'Qwen3-TTS is not enabled on this server (set QWEN_TTS_ENABLED=1).');
     }
 
@@ -4599,6 +4645,8 @@
       }
       setEngineAvailability('fishRadio', enabled,
         'Fish S2 Pro is not enabled on this server (set FISH_TTS_ENABLED=1).');
+      setEngineAvailability('fishCloneRadio', enabled,
+        'Fish S2 Pro is not enabled on this server (set FISH_TTS_ENABLED=1).');
     }
 
     function updateFishVoiceList() {
@@ -4802,6 +4850,15 @@
       // Load Pocket voices first (default) - use silent mode for init
       await loadPocketVoices(false);
       await loadMossVoices(false);
+
+      // Fast path: /auth/status tells us whether Fish S2 is enabled, so the
+      // Fish engine + clone radios grey out immediately on page load. When the
+      // status is unknown, fall back to probing /fish-tts/voices.
+      if (serviceStatus.fishTts) {
+        updateFishAvailability(Boolean(serviceStatus.fishTts.enabled));
+      } else {
+        await loadFishVoices(false);
+      }
 
       // Check if Qwen is available and load voice clones list
       try {

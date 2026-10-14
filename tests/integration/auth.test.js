@@ -86,6 +86,7 @@ describe('Authentication Integration Tests', () => {
         pocketTts: { enabled: false },
         qwenTts: { enabled: false },
         mossTts: { enabled: false },
+        fishTts: { enabled: false },
       });
     });
 
@@ -193,6 +194,7 @@ describe('Authentication Integration Tests', () => {
         pocketTts: { enabled: true },
         qwenTts: { enabled: true },
         mossTts: { enabled: false },
+        fishTts: { enabled: false },
       });
     });
 

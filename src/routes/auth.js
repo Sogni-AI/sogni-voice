@@ -44,6 +44,7 @@ const getServiceStatus = () => ({
   pocketTts: { enabled: Boolean(config.pocketTts?.enabled) },
   qwenTts: { enabled: Boolean(config.qwenTts?.enabled) },
   mossTts: { enabled: Boolean(config.mossTts?.enabled) },
+  fishTts: { enabled: Boolean(config.fishTts?.enabled) },
 });
 
 export const authRoutes = [

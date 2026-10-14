@@ -186,6 +186,11 @@ def prepare_text_chunks(
 
 
 class FishTTSDaemon:
+    # Engine hooks; scripts/drama3_tts_daemon.py overrides them.
+    ENGINE_LABEL = "Fish S2"
+    FEATURES = ["tts", "emotion_tags", "voice_cloning"]
+    MODEL_ID = MODEL_ID
+
     def __init__(self):
         self.server = None          # vendored FishMLXServer (lifecycle + default path)
         self.model = None           # underlying mlx_audio model (cloning path)
@@ -536,14 +541,7 @@ class FishTTSDaemon:
         if not transcript or not transcript.strip():
             return {"success": False, "error": "A transcript of the reference audio is required"}
         try:
-            # Validate the reference is loadable and encodable before saving.
-            ref_audio = self._load_audio(audio_path, self.sample_rate)
-            probe = ref_audio
-            if probe.ndim == 1:
-                probe = probe[None, None, :]
-            elif probe.ndim == 2:
-                probe = probe[None, :, :]
-            self.model.codec.encode(probe)  # raises if the reference is unusable
+            self._validate_reference(audio_path)
 
             clone_dir = os.path.join(VOICE_CLONES_DIR, clone_id)
             os.makedirs(clone_dir, exist_ok=True)
@@ -563,6 +561,15 @@ class FishTTSDaemon:
             _log(f"create_voice_clone error: {e}")
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e)}
+
+    def _validate_reference(self, audio_path) -> None:
+        """Raise unless the reference is loadable and encodable."""
+        probe = self._load_audio(audio_path, self.sample_rate)
+        if probe.ndim == 1:
+            probe = probe[None, None, :]
+        elif probe.ndim == 2:
+            probe = probe[None, :, :]
+        self.model.codec.encode(probe)
 
     def delete_voice_clone(self, clone_id) -> dict:
         if not self._validate_clone_id(clone_id):
@@ -694,16 +701,18 @@ class FishTTSDaemon:
         signal.signal(signal.SIGINT, handle_signal)
 
         if not self.load_model():
-            self.send_response({"status": "error", "error": "Failed to load Fish S2 model"})
+            self.send_response(
+                {"status": "error", "error": f"Failed to load {self.ENGINE_LABEL} model"}
+            )
             sys.exit(1)
 
         self.send_response({
             "status": "ready",
             "voices": [DEFAULT_VOICE],
             "clones": self.list_voices()["clones"],
-            "features": ["tts", "emotion_tags", "voice_cloning"],
+            "features": self.FEATURES,
             "sample_rate": self.sample_rate,
-            "model": MODEL_ID,
+            "model": self.MODEL_ID,
         })
 
         while self.running:
@@ -721,7 +730,7 @@ class FishTTSDaemon:
                 traceback.print_exc(file=sys.stderr)
                 self.send_response({"success": False, "error": f"Daemon error: {e}"})
 
-        _log("Fish S2 daemon shutdown complete")
+        _log(f"{self.ENGINE_LABEL} daemon shutdown complete")
 
 
 if __name__ == "__main__":

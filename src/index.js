@@ -12,6 +12,7 @@ import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
 import { mossTtsService } from './services/mossTts.js';
 import { fishTtsService } from './services/fishTts.js';
+import { drama3TtsService } from './services/drama3Tts.js';
 import { mossTranscribeDiarizeService } from './services/mossTranscribeDiarize.js';
 import { config } from './config/index.js';
 
@@ -31,6 +32,7 @@ const gracefulShutdown = async (signal) => {
     qwenAsrService.shutdown(),
     mossTtsService.shutdown(),
     fishTtsService.shutdown(),
+    drama3TtsService.shutdown(),
     mossTranscribeDiarizeService.shutdown(),
   ]);
   process.exit(0);
@@ -110,6 +112,13 @@ startServer()
     if (config.fishTts.enabled && config.fishTts.preWarmDaemon) {
       console.log('Pre-warming Fish S2 Pro TTS daemon...');
       preWarmPromises.push(preWarmDaemon('Fish S2 TTS daemon', () => fishTtsService.initialize()));
+    }
+
+    if (config.drama3Tts.enabled && config.drama3Tts.preWarmDaemon) {
+      console.log('Pre-warming Fish Drama 3 TTS daemon...');
+      preWarmPromises.push(
+        preWarmDaemon('Fish Drama 3 TTS daemon', () => drama3TtsService.initialize()),
+      );
     }
 
     if (config.mossTranscribeDiarize.enabled && config.mossTranscribeDiarize.preWarmDaemon) {

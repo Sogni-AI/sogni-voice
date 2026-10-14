@@ -16,10 +16,10 @@ const resolveFromRoot = (p) => (isAbsolute(p) ? p : resolvePath(projectRoot, p))
  * Per-request timeout that scales with text length. Fish S2 on Apple Silicon
  * runs slower than realtime, so longer input needs a larger ceiling.
  */
-function computeGenerationTimeout(text = '') {
-  const base = config.fishTts.timeout || 300000;
-  const perChar = config.fishTts.timeoutPerChar || 400;
-  const ceiling = config.fishTts.timeoutMax || 900000;
+function computeGenerationTimeout(engineConfig, text = '') {
+  const base = engineConfig.timeout || 300000;
+  const perChar = engineConfig.timeoutPerChar || 400;
+  const ceiling = engineConfig.timeoutMax || 900000;
   const scaled = base + (text.length || 0) * perChar;
   return Math.min(ceiling, Math.max(base, scaled));
 }
@@ -30,6 +30,8 @@ function computeGenerationTimeout(text = '') {
  * The daemon drives the 8-bit MLX model (default-voice generation with inline
  * emotion tags, plus zero-shot voice cloning from a reference clip + transcript).
  */
+export const resolveFromProjectRoot = resolveFromRoot;
+
 export class FishTTSService {
   constructor() {
     this.daemonProcess = null;
@@ -45,13 +47,41 @@ export class FishTTSService {
     this.readlineInterface = null;
     this.startupTimeoutId = null;
     this.modelInfo = {
-      model: config.fishTts?.modelId || 'fish-audio-s2-pro-8bit-mlx',
-      backend: 'fish-s2-pro-mlx',
+      model: this.cfg?.modelId || this.defaultModelId,
+      backend: this.backend,
       voices: ['default'],
       clones: [],
       features: [],
       sampleRate: 44100,
       streaming: false,
+    };
+  }
+
+  // Engine hooks; Drama3TTSService (services/drama3Tts.js) overrides them.
+  get cfg() { return config.fishTts; }
+
+  get label() { return 'Fish S2 Pro'; }
+
+  get logTag() { return 'fish-tts'; }
+
+  get backend() { return 'fish-s2-pro-mlx'; }
+
+  get defaultModelId() { return 'fish-audio-s2-pro-8bit-mlx'; }
+
+  /** Daemon script, environment, and the paths that must exist before spawning. */
+  daemonSpec() {
+    const modelPath = resolveFromRoot(this.cfg.modelPath);
+    return {
+      script: 'fish_tts_daemon.py',
+      setupHint: 'Run the Fish S2 setup (see docs/fish-s2-eval.md).',
+      requiredPaths: [['model checkpoint', modelPath]],
+      env: {
+        PYTHONPATH: resolveFromRoot(this.cfg.serverDir),
+        FISH_TTS_MODEL_PATH: modelPath,
+        FISH_TTS_MODEL_ID: this.cfg.modelId,
+        FISH_TTS_VOICE_CLONES_DIR: resolveFromRoot(this.cfg.voiceClonesDir),
+        FISH_TTS_MAX_TOKENS: String(this.cfg.maxTokens),
+      },
     };
   }
 
@@ -69,47 +99,35 @@ export class FishTTSService {
   }
 
   async _startDaemon() {
-    const daemonPath = join(projectRoot, 'scripts', 'fish_tts_daemon.py');
-    const pythonPath = resolveFromRoot(config.fishTts.pythonPath);
-    const serverDir = resolveFromRoot(config.fishTts.serverDir);
-    const modelPath = resolveFromRoot(config.fishTts.modelPath);
-    const voiceClonesDir = resolveFromRoot(config.fishTts.voiceClonesDir);
+    const spec = this.daemonSpec();
+    const daemonPath = join(projectRoot, 'scripts', spec.script);
+    const pythonPath = resolveFromRoot(this.cfg.pythonPath);
 
-    for (const [label, p] of [['python', pythonPath], ['model checkpoint', modelPath]]) {
+    for (const [label, p] of [['python', pythonPath], ...spec.requiredPaths]) {
       try {
         await access(p);
       } catch {
-        throw new FishTTSError(
-          `Fish S2 ${label} not found at ${p}. Run the Fish S2 setup (see docs/fish-s2-eval.md).`,
-        );
+        throw new FishTTSError(`${this.label} ${label} not found at ${p}. ${spec.setupHint}`);
       }
     }
 
     return new Promise((resolveReady, reject) => {
-      console.log('Starting Fish S2 Pro TTS daemon...');
+      console.log(`Starting ${this.label} TTS daemon...`);
 
       this.daemonProcess = spawn(pythonPath, [daemonPath], {
         stdio: ['pipe', 'pipe', 'pipe'],
-        env: {
-          ...process.env,
-          PYTHONUNBUFFERED: '1',
-          PYTHONPATH: serverDir,
-          FISH_TTS_MODEL_PATH: modelPath,
-          FISH_TTS_MODEL_ID: config.fishTts.modelId,
-          FISH_TTS_VOICE_CLONES_DIR: voiceClonesDir,
-          FISH_TTS_MAX_TOKENS: String(config.fishTts.maxTokens),
-        },
+        env: { ...process.env, PYTHONUNBUFFERED: '1', ...spec.env },
       });
 
       this.daemonProcess.stderr.on('data', (data) => {
-        console.log(`[fish-tts] ${data.toString().trim()}`);
+        console.log(`[${this.logTag}] ${data.toString().trim()}`);
       });
 
       this.readlineInterface = createInterface({ input: this.daemonProcess.stdout });
       this.readlineInterface.on('line', (line) => {
         if (!line.trim()) return;
         if (!line.startsWith('{')) {
-          console.log(`[fish-tts] ${line}`);
+          console.log(`[${this.logTag}] ${line}`);
           return;
         }
 
@@ -117,15 +135,15 @@ export class FishTTSService {
         try {
           response = JSON.parse(line);
         } catch (e) {
-          console.error('Failed to parse Fish TTS daemon JSON response:', line, e);
+          console.error(`Failed to parse ${this.label} daemon JSON response:`, line, e);
           return;
         }
 
         if (response.status === 'ready') {
-          console.log('Fish S2 Pro TTS daemon ready');
+          console.log(`${this.label} TTS daemon ready`);
           this.modelInfo = {
-            model: response.model || config.fishTts.modelId,
-            backend: 'fish-s2-pro-mlx',
+            model: response.model || this.cfg.modelId,
+            backend: this.backend,
             voices: response.voices || ['default'],
             clones: response.clones || [],
             features: response.features || [],
@@ -157,7 +175,7 @@ export class FishTTSService {
       this.daemonProcess.on('close', (code) => {
         clearTimeout(this.startupTimeoutId);
         this.startupTimeoutId = null;
-        console.log(`Fish TTS daemon exited with code ${code}`);
+        console.log(`${this.label} daemon exited with code ${code}`);
         this.daemonReady = false;
         this.daemonProcess = null;
         this.initPromise = null;
@@ -166,11 +184,11 @@ export class FishTTSService {
           this.readlineInterface = null;
         }
         for (const [id, pending] of this.pendingRequests) {
-          pending.reject(new FishTTSError('Fish TTS daemon process terminated'));
+          pending.reject(new FishTTSError(`${this.label} daemon process terminated`));
           this.pendingRequests.delete(id);
         }
         if (!this.daemonReady) {
-          reject(new FishTTSError(`Fish TTS daemon exited unexpectedly with code ${code}`));
+          reject(new FishTTSError(`${this.label} daemon exited unexpectedly with code ${code}`));
         }
       });
 
@@ -178,14 +196,14 @@ export class FishTTSService {
         clearTimeout(this.startupTimeoutId);
         this.startupTimeoutId = null;
         this.initPromise = null;
-        reject(new FishTTSError(`Failed to spawn Fish TTS daemon: ${error.message}`, error));
+        reject(new FishTTSError(`Failed to spawn ${this.label} daemon: ${error.message}`, error));
       });
 
-      const startupTimeout = config.fishTts.daemonStartupTimeout || 240000;
+      const startupTimeout = this.cfg.daemonStartupTimeout || 240000;
       this.startupTimeoutId = setTimeout(() => {
         if (!this.daemonReady) {
           this.shutdown();
-          reject(new FishTTSError('Fish TTS daemon initialization timed out'));
+          reject(new FishTTSError(`${this.label} daemon initialization timed out`));
         }
       }, startupTimeout);
     });
@@ -193,7 +211,7 @@ export class FishTTSService {
 
   async _ensureDaemon() {
     if (!this.daemonReady || !this.daemonProcess) {
-      console.log('Fish TTS daemon not available, attempting to start...');
+      console.log(`${this.label} daemon not available, attempting to start...`);
       await this.initialize();
     }
   }
@@ -201,7 +219,7 @@ export class FishTTSService {
   async _sendRequest(request, { timeout: customTimeout, signal } = {}) {
     return this.requestQueue.request(request, {
       signal,
-      timeout: customTimeout || config.fishTts.timeout || 300000,
+      timeout: customTimeout || this.cfg.timeout || 300000,
       interruptOnTimeout: request.type.startsWith('generate'),
     });
   }
@@ -216,7 +234,7 @@ export class FishTTSService {
 
     const result = await this._sendRequest(
       { type: 'generate', text, output_path: outputPath, max_tokens: maxTokens, temperature },
-      { timeout: computeGenerationTimeout(text), signal: options.signal },
+      { timeout: computeGenerationTimeout(this.cfg, text), signal: options.signal },
     );
     return {
       outputPath: result.output_path,
@@ -241,7 +259,7 @@ export class FishTTSService {
         max_tokens: maxTokens,
         temperature,
       },
-      { timeout: computeGenerationTimeout(text), signal: options.signal },
+      { timeout: computeGenerationTimeout(this.cfg, text), signal: options.signal },
     );
     return { outputPath: result.output_path, duration: result.duration, cloneId };
   }
@@ -254,7 +272,7 @@ export class FishTTSService {
 
     const result = await this._sendRequest(
       { type: 'create_voice_clone', audio_path: audioPath, transcript, clone_id: cloneId },
-      { timeout: config.fishTts.timeout || 300000 },
+      { timeout: this.cfg.timeout || 300000 },
     );
     return { cloneId: result.clone_id };
   }
@@ -283,7 +301,7 @@ export class FishTTSService {
   }
 
   getVoiceClonePath(cloneId) {
-    return join(resolveFromRoot(config.fishTts.voiceClonesDir), cloneId);
+    return join(resolveFromRoot(this.cfg.voiceClonesDir), cloneId);
   }
 
   async voiceCloneExists(cloneId) {
@@ -318,7 +336,7 @@ export class FishTTSService {
   }
 
   isEnabled() {
-    return config.fishTts.enabled;
+    return Boolean(this.cfg?.enabled);
   }
 
   getModelInfo() {

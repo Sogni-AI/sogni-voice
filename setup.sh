@@ -419,6 +419,7 @@ select_tts_engines() {
         ENABLE_QWEN=0
         ENABLE_MOSS=0
         ENABLE_FISH=0
+        ENABLE_DRAMA3=0
         ENABLE_PARAKEET=1
         ENABLE_QWEN_ASR=0
         ENABLE_MOSS_TD=0
@@ -446,10 +447,11 @@ select_tts_engines() {
         "Qwen3-TTS (MLX, 10 languages, cloning, style control, voice design)"
         "MOSS-TTS-Nano (100M, multilingual reference voices, MLX, 48 kHz)"
         "Fish S2 Pro (8-bit MLX, expressive inline emotion + voice cloning) - Non-commercial, ~6.7GB"
+        "Fish Drama 3 (35B MoE via drama3-mlx, directed multi-character + cloning) - 64GB+ Mac, ~41.5GB"
     )
 
     # Get selections via global MENU_RESULT (Pocket=yes; others disabled by default)
-    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0 0 0" "${tts_options[@]}"
+    show_checkbox_menu "Select TTS Engines to Enable" "1 0 0 0 0 0" "${tts_options[@]}"
     IFS=' ' read -ra tts_selected <<< "$MENU_RESULT"
 
     ENABLE_POCKET=${tts_selected[0]}
@@ -457,6 +459,7 @@ select_tts_engines() {
     ENABLE_QWEN=${tts_selected[2]}
     ENABLE_MOSS=${tts_selected[3]}
     ENABLE_FISH=${tts_selected[4]}
+    ENABLE_DRAMA3=${tts_selected[5]}
 
     # Qwen uses separate daemons for cloning, styled voices, and voice design.
     # Select a paired Base/CustomVoice profile; VoiceDesign remains a lazy model.
@@ -560,6 +563,11 @@ select_tts_engines() {
     else
         echo -e "  ${CROSS} Fish S2 Pro (disabled)"
     fi
+    if [ "$ENABLE_DRAMA3" = "1" ]; then
+        echo -e "  ${CHECK} Fish Drama 3 (drama3-mlx, directed multi-character + cloning)"
+    else
+        echo -e "  ${CROSS} Fish Drama 3 (disabled)"
+    fi
     echo ""
     echo "Transcription:"
     if [ "$ENABLE_PARAKEET" = "1" ]; then
@@ -659,6 +667,21 @@ configure_environment() {
         upsert_env_key "FISH_TTS_MAX_TOKENS" "1024"
     else
         upsert_env_key "FISH_TTS_ENABLED" "0"
+    fi
+
+    if [ "$ENABLE_DRAMA3" = "1" ]; then
+        upsert_env_key "DRAMA3_TTS_ENABLED" "1"
+        upsert_env_key "DRAMA3_TTS_PYTHON_PATH" "./.venv-drama3/bin/python3"
+        upsert_env_key "DRAMA3_TTS_MODEL_PATH" "./checkpoints/drama-3"
+        # 8-bit experts peak near 52 GB; below 96 GB of memory use 4-bit (~32 GB).
+        local memory_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
+        if [ "$memory_gb" -ge 96 ]; then
+            upsert_env_key "DRAMA3_TTS_EXPERTS" "q8"
+        else
+            upsert_env_key "DRAMA3_TTS_EXPERTS" "q4"
+        fi
+    else
+        upsert_env_key "DRAMA3_TTS_ENABLED" "0"
     fi
 
     if [ "$ENABLE_PARAKEET" = "1" ]; then
@@ -997,6 +1020,28 @@ install_dependencies() {
                 checkpoints/fish-audio-s2-pro-8bit-mlx-normalized
         fi
         print_success "Fish S2 Pro environment is ready (non-commercial — evaluation only)"
+    fi
+
+    # Fish Drama 3 through drama3-mlx (our MLX port). Fish Audio Community License:
+    # no hosted service; commercial use only under USD 500k annual revenue. The
+    # release's FP8 experts are re-quantized in memory at load (DRAMA3_TTS_EXPERTS).
+    if [ "$ENABLE_DRAMA3" = "1" ]; then
+        if [ ! -d .venv-drama3 ]; then
+            print_info "Creating isolated Fish Drama 3 environment at .venv-drama3/..."
+            uv venv --python 3.12 .venv-drama3
+        fi
+        print_info "Installing drama3-mlx..."
+        uv pip install --python .venv-drama3/bin/python \
+            "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.0"
+
+        if [ ! -f checkpoints/drama-3/model-00008-of-00008.safetensors ]; then
+            print_warning "Downloading Fish Drama 3 (~41.5 GB) — this can take a while."
+            mkdir -p checkpoints
+            .venv-drama3/bin/hf download fishaudio/drama-3 \
+                --revision dd64a85cd82e9521f7202610ede97b367fc83946 \
+                --local-dir checkpoints/drama-3
+        fi
+        print_success "Fish Drama 3 environment is ready (Fish Audio Community License)"
     fi
 
     # MOSS Transcribe-Diarize depends on Transformers 5.x and PyTorch. Keep it
@@ -1590,6 +1635,11 @@ print_summary() {
         printf '%b\n' "  ${CHECK} Fish S2 Pro (8-bit MLX, expressive + cloning)"
     else
         printf '%b\n' "  ${CROSS} Fish S2 Pro (disabled)"
+    fi
+    if [ "$ENABLE_DRAMA3" = "1" ]; then
+        printf '%b\n' "  ${CHECK} Fish Drama 3 (drama3-mlx)"
+    else
+        printf '%b\n' "  ${CROSS} Fish Drama 3 (disabled)"
     fi
     echo ""
 

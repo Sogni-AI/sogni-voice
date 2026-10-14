@@ -9,6 +9,11 @@ const fishMocks = vi.hoisted(() => ({
   renameVoiceClone: vi.fn(),
   listVoiceClones: vi.fn(),
 }));
+const drama3Mocks = vi.hoisted(() => ({
+  generate: vi.fn(),
+  generateVoiceClone: vi.fn(),
+  listVoiceClones: vi.fn(),
+}));
 const processMocks = vi.hoisted(() => ({ ffprobeDuration: '5.0\n' }));
 
 const createFakeWavBuffer = () => {
@@ -86,6 +91,13 @@ vi.mock('../../src/config/index.js', () => ({
       maxTokens: 1024, timeout: 300000, timeoutPerChar: 400, timeoutMax: 900000,
       daemonStartupTimeout: 240000, preWarmDaemon: false,
     },
+    drama3Tts: {
+      enabled: true, modelId: 'fish-drama-3',
+      pythonPath: './.venv-drama3/bin/python3', modelPath: './checkpoints/drama-3', experts: 'q8',
+      voiceClonesDir: './fish_voice_clones', maxNewTokens: 0,
+      timeout: 300000, timeoutPerChar: 400, timeoutMax: 900000,
+      daemonStartupTimeout: 600000, preWarmDaemon: false,
+    },
     upload: { maxFileSizeBytes: 100 * 1024 * 1024, transcribeMaxBytes: 25 * 1024 * 1024 },
   },
 }));
@@ -106,6 +118,23 @@ vi.mock('../../src/services/fishTts.js', () => ({
       backend: 'fish-s2-pro-mlx',
       voices: ['default'],
       features: ['tts', 'emotion_tags', 'voice_cloning'],
+      sampleRate: 44100,
+      streaming: false,
+    }),
+  },
+}));
+
+vi.mock('../../src/services/drama3Tts.js', () => ({
+  drama3TtsService: {
+    generate: drama3Mocks.generate,
+    generateVoiceClone: drama3Mocks.generateVoiceClone,
+    listVoiceClones: drama3Mocks.listVoiceClones,
+    isReady: vi.fn().mockReturnValue(false),
+    getModelInfo: vi.fn().mockReturnValue({
+      model: 'fish-drama-3',
+      backend: 'fish-drama3-mlx',
+      voices: ['default'],
+      features: ['tts', 'direction_tags', 'speaker_tags', 'voice_cloning'],
       sampleRate: 44100,
       streaming: false,
     }),
@@ -248,5 +277,78 @@ describe('Fish S2 Pro routes', () => {
     expect(fishMocks.generateVoiceClone).toHaveBeenCalledWith(
       '[whispers] cloned voice.', expect.objectContaining({ cloneId: 'demo_clone' }),
     );
+  });
+});
+
+describe('Fish Drama 3 routes', () => {
+  let server;
+
+  beforeAll(async () => {
+    drama3Mocks.generate.mockImplementation(async (text, options) => {
+      if (text.includes('<|speaker:16|>')) {
+        throw new Error('invalid input: text: speaker tags must be <|speaker:0|> to <|speaker:15|>');
+      }
+      writeFileSync(options.outputPath, createFakeWavBuffer());
+      return { outputPath: options.outputPath, duration: 2.0, rtf: 1.1, model: 'fish-drama-3' };
+    });
+    drama3Mocks.generateVoiceClone.mockImplementation(async (text, options) => {
+      writeFileSync(options.outputPath, createFakeWavBuffer());
+      return { outputPath: options.outputPath, duration: 2.0, cloneId: options.cloneId };
+    });
+    drama3Mocks.listVoiceClones.mockResolvedValue({ voices: ['default'], clones: ['demo_clone'] });
+    server = await initServer();
+  });
+
+  afterAll(async () => {
+    await server.stop();
+  });
+
+  it('reports Drama 3 capabilities and licence terms', async () => {
+    const response = await server.inject({ method: 'GET', url: '/drama3-tts/status' });
+    expect(response.statusCode).toBe(200);
+    const payload = JSON.parse(response.payload);
+    expect(payload.model).toBe('fish-drama-3');
+    expect(payload.features).toContain('speaker_tags');
+    expect(payload.speakerTags).toContain('<|speaker:15|>');
+    expect(payload.note).toContain('Community License');
+  });
+
+  it('generates multi-speaker text with directions', async () => {
+    const text = '<|speaker:0|> [nervous] Did you hear that? <|speaker:1|> <whisper>Quiet.</whisper>';
+    const response = await server.inject({ method: 'POST', url: '/drama3-tts', payload: { text } });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('audio/wav');
+    expect(response.headers['content-disposition']).toContain('fish-drama3-output.wav');
+    expect(drama3Mocks.generate).toHaveBeenCalledWith(text, expect.objectContaining({}));
+    expect(fishMocks.generate).not.toHaveBeenCalledWith(text, expect.anything());
+  });
+
+  it('answers text the model cannot prompt with 400', async () => {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/drama3-tts',
+      payload: { text: '<|speaker:16|> one too many' },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.payload).message).toContain('speaker tags');
+  });
+
+  it('generates with a clone from the shared Fish clone store', async () => {
+    const response = await server.inject({
+      method: 'POST',
+      url: '/drama3-tts/voices/clone/demo_clone/generate',
+      payload: { text: '[warmly] Same voice, new model.', format: 'buffer' },
+    });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.payload).success).toBe(true);
+    expect(drama3Mocks.generateVoiceClone).toHaveBeenCalledWith(
+      '[warmly] Same voice, new model.', expect.objectContaining({ cloneId: 'demo_clone' }),
+    );
+  });
+
+  it('lists the shared clones', async () => {
+    const response = await server.inject({ method: 'GET', url: '/drama3-tts/voices' });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.payload).clones).toEqual(['demo_clone']);
   });
 });

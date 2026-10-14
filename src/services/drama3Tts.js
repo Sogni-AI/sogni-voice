@@ -1,0 +1,38 @@
+import { config } from '../config/index.js';
+import { FishTTSService, resolveFromProjectRoot } from './fishTts.js';
+
+/**
+ * Fish Audio Drama 3 through the drama3-mlx port (scripts/drama3_tts_daemon.py).
+ * Same JSON-line protocol and voice-clone store as Fish S2 Pro: a clone is a
+ * reference clip + transcript, which both models consume as-is.
+ */
+export class Drama3TTSService extends FishTTSService {
+  get cfg() { return config.drama3Tts; }
+
+  get label() { return 'Fish Drama 3'; }
+
+  get logTag() { return 'drama3-tts'; }
+
+  get backend() { return 'fish-drama3-mlx'; }
+
+  get defaultModelId() { return 'fish-drama-3'; }
+
+  daemonSpec() {
+    const modelPath = resolveFromProjectRoot(this.cfg.modelPath);
+    return {
+      script: 'drama3_tts_daemon.py',
+      setupHint: 'Run the Fish Drama 3 setup (see docs/fish-drama3.md).',
+      requiredPaths: [['model checkpoint', modelPath]],
+      env: {
+        DRAMA3_TTS_MODEL_PATH: modelPath,
+        DRAMA3_TTS_MODEL_ID: this.cfg.modelId,
+        DRAMA3_TTS_EXPERTS: this.cfg.experts,
+        DRAMA3_TTS_MAX_NEW_TOKENS: String(this.cfg.maxNewTokens),
+        // The S2 daemon base class reads the clone store from this variable.
+        FISH_TTS_VOICE_CLONES_DIR: resolveFromProjectRoot(this.cfg.voiceClonesDir),
+      },
+    };
+  }
+}
+
+export const drama3TtsService = new Drama3TTSService();

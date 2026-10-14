@@ -1114,6 +1114,13 @@
           <span class="model-desc">Word-level emotion via inline [tags]. 8-bit MLX, HQ offline (~1.5-4x realtime). Non-commercial license.</span>
         </span>
       </label>
+      <label>
+        <input type="radio" name="ttsModel" value="drama3" id="drama3Radio">
+        <span class="model-label-content">
+          <span class="model-name">Fish Drama 3 <span class="badge" style="background:#7c3aed">Directed · Eval</span></span>
+          <span class="model-desc">35B model directed in plain language: [directions], &lt;whisper&gt;, up to 16 speakers; uses Fish S2 clones. Built with Fish Audio (Community License).</span>
+        </span>
+      </label>
     </div>
 
     <div class="form-group">
@@ -1180,6 +1187,21 @@
         <button type="button" class="fish-chip" data-tag="[laughing] ">😂 laughing</button>
       </div>
       <div style="font-size:12px;color:#a05; margin-top:8px;">Free-form directions work too, e.g. <code>[laughing nervously]</code>. Tip: <code>(paren)</code> sound cues like <code>(laugh)</code> exist but can produce long non-speech — use sparingly. First run loads the model (~20s); generation is slower than realtime.</div>
+    </div>
+
+    <!-- Fish Drama 3 options: direction, whisper and speaker tag inserter -->
+    <div id="drama3Options" class="hidden" style="margin-bottom: 16px; padding: 12px; border: 1px solid #ddd0f5; border-radius: 6px; background: #f8f5fe;">
+      <label style="display:block; margin-bottom: 6px;">Direct the read <span style="font-weight:normal;color:#666;font-size:12px;">— click to insert at the cursor. Any plain-language <code>[direction]</code> works; <code>&lt;|speaker:N|&gt;</code> switches character.</span></label>
+      <div id="drama3TagChips" style="display:flex; flex-wrap:wrap; gap:6px;">
+        <button type="button" class="fish-chip" data-tag="[nervous, barely holding it together] ">😰 nervous</button>
+        <button type="button" class="fish-chip" data-tag="[warmly] ">🙂 warm</button>
+        <button type="button" class="fish-chip" data-tag="[sighs] ">😮‍💨 sigh</button>
+        <button type="button" class="fish-chip" data-tag="[laughs] ">😂 laugh</button>
+        <button type="button" class="fish-chip" data-tag="&lt;whisper&gt;" data-close="&lt;/whisper&gt;">🤫 whisper…</button>
+        <button type="button" class="fish-chip" data-tag="&lt;|speaker:0|&gt; ">🎭 speaker 0</button>
+        <button type="button" class="fish-chip" data-tag="&lt;|speaker:1|&gt; ">🎭 speaker 1</button>
+      </div>
+      <div style="font-size:12px;color:#6b46c1; margin-top:8px;">Voice clones made in the Fish S2 voice-cloning tab appear in the voice list. The first request after a restart loads the model.</div>
     </div>
 
     <!-- Style Instructions - always visible but faded when not available -->
@@ -1809,6 +1831,7 @@
     const modelRadios = document.querySelectorAll('input[name="ttsModel"]');
     const qwenOptions = document.getElementById('qwenOptions');
     const fishOptions = document.getElementById('fishOptions');
+    const drama3Options = document.getElementById('drama3Options');
     const speedControl = document.getElementById('speedControl');
     const voiceCloningSection = document.getElementById('voiceCloningSection');
     const voiceCloningContent = document.getElementById('voiceCloningContent');
@@ -1827,6 +1850,7 @@
     let pocketVoices = [];
     let pocketClones = [];
     let mossVoices = [];
+    let drama3Clones = [];
     let pocketAvailabilityMessage = '';
     let mossAvailabilityMessage = '';
 
@@ -1840,6 +1864,7 @@
     function updateModelUI() {
       if (canMakeAuthenticatedCalls()) generateBtn.disabled = false;
       fishOptions.classList.add('hidden');
+      drama3Options.classList.add('hidden');
       if (currentModel === 'qwen') {
         qwenOptions.classList.remove('hidden');
         speedControl.classList.add('hidden');
@@ -1861,6 +1886,12 @@
         // Fish S2: default voice + any saved clones; expression via inline tags.
         voiceSelect.innerHTML = '<option value="default">S2 default voice</option>';
         loadFishVoices(false);
+      } else if (currentModel === 'drama3') {
+        qwenOptions.classList.add('hidden');
+        speedControl.classList.add('hidden');
+        drama3Options.classList.remove('hidden');
+        voiceSelect.innerHTML = '<option value="default">Drama 3 default voice</option>';
+        loadDrama3Voices(false);
       } else {
         qwenOptions.classList.add('hidden');
         speedControl.classList.remove('hidden');
@@ -1869,18 +1900,23 @@
       updateStyleInstructUI();
     }
 
-    // Insert an expression tag at the cursor in the TTS text box.
-    document.getElementById('fishTagChips')?.addEventListener('click', (e) => {
+    // Insert a tag at the cursor in the TTS text box; a paired tag (data-close)
+    // wraps the selection and leaves the cursor inside it.
+    function insertTextTag(e) {
       const btn = e.target.closest('.fish-chip');
       if (!btn) return;
       const tag = btn.dataset.tag;
+      const close = btn.dataset.close || '';
       const start = ttsText.selectionStart ?? ttsText.value.length;
       const end = ttsText.selectionEnd ?? ttsText.value.length;
-      ttsText.value = ttsText.value.slice(0, start) + tag + ttsText.value.slice(end);
-      const caret = start + tag.length;
+      const selected = ttsText.value.slice(start, end);
+      ttsText.value = ttsText.value.slice(0, start) + tag + selected + close + ttsText.value.slice(end);
+      const caret = start + tag.length + selected.length;
       ttsText.focus();
       ttsText.setSelectionRange(caret, caret);
-    });
+    }
+    document.getElementById('fishTagChips')?.addEventListener('click', insertTextTag);
+    document.getElementById('drama3TagChips')?.addEventListener('click', insertTextTag);
 
     // ==================== Try Another Example ====================
     const sampleTexts = [
@@ -3445,6 +3481,16 @@
               body: JSON.stringify({ text: text }),
             });
           }
+        } else if (currentModel === 'drama3') {
+          ttsStatus.textContent = 'Generating with Fish Drama 3 (the first request after a restart loads the model)...';
+          const path = selectedVoice.startsWith('drama3-clone:')
+            ? `/drama3-tts/voices/clone/${encodeURIComponent(selectedVoice.replace('drama3-clone:', ''))}/generate`
+            : '/drama3-tts';
+          response = await authFetch(`${API_BASE}${path}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text: text }),
+          });
         } else if (selectedVoice.startsWith('pocket-clone:')) {
           const cloneId = selectedVoice.replace('pocket-clone:', '');
           response = await authFetch(`${API_BASE}/pocket-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`, {
@@ -3545,9 +3591,14 @@
         const isPocketClone = selectedVoice.startsWith('pocket-clone:');
         const isMossVoice = selectedVoice.startsWith('moss:');
         const isFish = currentModel === 'fish';
+        const isDrama3 = currentModel === 'drama3';
         const usedVoiceDesign = currentModel === 'qwen' && qwenModeSelect.value === 'design';
         const isClone = isQwenClone || isPocketClone;
-        const voiceInfo = isFish
+        const voiceInfo = isDrama3
+          ? (selectedVoice.startsWith('drama3-clone:')
+            ? `Clone: ${selectedVoice.replace('drama3-clone:', '')}`
+            : 'Voice: Drama 3 default (directed via inline tags)')
+          : isFish
           ? (selectedVoice.startsWith('fish-clone:')
             ? `Clone: ${selectedVoice.replace('fish-clone:', '')}`
             : 'Voice: S2 default (expression via inline tags)')
@@ -3558,7 +3609,9 @@
           : isClone
           ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
-        const modelUsed = isFish
+        const modelUsed = isDrama3
+          ? 'Fish Audio Drama 3 (drama3-mlx)'
+          : isFish
           ? 'Fish Audio S2 Pro (8-bit MLX)'
           : isMossVoice
           ? 'MOSS-TTS-Nano (Reference)'
@@ -4649,6 +4702,43 @@
         'Fish S2 Pro is not enabled on this server (set FISH_TTS_ENABLED=1).');
     }
 
+    // Fish Drama 3 shares Fish S2's clone store, listed by its own endpoint.
+    async function loadDrama3Voices(showAuthError = true) {
+      try {
+        const response = await authFetch(`${API_BASE}/drama3-tts/voices`, {}, showAuthError);
+        if (!response.ok) {
+          drama3Clones = [];
+          updateDrama3Availability(response.status !== 404);
+          return;
+        }
+        const data = await response.json();
+        drama3Clones = (data.clones || []).sort((a, b) => a.localeCompare(b));
+        if (currentModel === 'drama3') {
+          const previous = voiceSelect.value;
+          voiceSelect.innerHTML = '<option value="default">Drama 3 default voice</option>';
+          drama3Clones.forEach(clone => {
+            const option = document.createElement('option');
+            option.value = `drama3-clone:${clone}`;
+            option.textContent = `Clone: ${clone}`;
+            voiceSelect.appendChild(option);
+          });
+          if (previous && [...voiceSelect.options].some(o => o.value === previous)) {
+            voiceSelect.value = previous;
+          }
+        }
+        updateDrama3Availability(true);
+      } catch (error) {
+        console.error('Failed to load Fish Drama 3 voices:', error);
+        drama3Clones = [];
+        updateDrama3Availability(false);
+      }
+    }
+
+    function updateDrama3Availability(enabled) {
+      setEngineAvailability('drama3Radio', enabled,
+        'Fish Drama 3 is not enabled on this server (set DRAMA3_TTS_ENABLED=1).');
+    }
+
     function updateFishVoiceList() {
       const listContainer = document.getElementById('fishVoiceCloneList');
       if (!listContainer) return;
@@ -4858,6 +4948,11 @@
         updateFishAvailability(Boolean(serviceStatus.fishTts.enabled));
       } else {
         await loadFishVoices(false);
+      }
+      if (serviceStatus.drama3Tts) {
+        updateDrama3Availability(Boolean(serviceStatus.drama3Tts.enabled));
+      } else {
+        await loadDrama3Voices(false);
       }
 
       // Check if Qwen is available and load voice clones list

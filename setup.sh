@@ -1032,7 +1032,7 @@ install_dependencies() {
         fi
         print_info "Installing drama3-mlx..."
         uv pip install --python .venv-drama3/bin/python \
-            "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.0"
+            "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.1"
 
         if [ ! -f checkpoints/drama-3/model-00008-of-00008.safetensors ]; then
             print_warning "Downloading Fish Drama 3 (~41.5 GB) — this can take a while."

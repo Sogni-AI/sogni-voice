@@ -88,7 +88,7 @@ Mac's memory. Manually:
 
 ```bash
 uv venv --python 3.12 .venv-drama3
-uv pip install --python .venv-drama3/bin/python "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.0"
+uv pip install --python .venv-drama3/bin/python "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.1"
 .venv-drama3/bin/hf download fishaudio/drama-3 --revision dd64a85cd82e9521f7202610ede97b367fc83946 \
   --local-dir checkpoints/drama-3
 ```

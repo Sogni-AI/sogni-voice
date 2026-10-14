@@ -87,6 +87,7 @@ describe('Authentication Integration Tests', () => {
         qwenTts: { enabled: false },
         mossTts: { enabled: false },
         fishTts: { enabled: false },
+        drama3Tts: { enabled: false },
       });
     });
 
@@ -195,6 +196,7 @@ describe('Authentication Integration Tests', () => {
         qwenTts: { enabled: true },
         mossTts: { enabled: false },
         fishTts: { enabled: false },
+        drama3Tts: { enabled: false },
       });
     });
 

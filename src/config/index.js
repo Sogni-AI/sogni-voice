@@ -156,6 +156,31 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10) || 240000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_FISH_TTS, false),
   },
+  // Experimental: Fish Audio Drama 3 through the drama3-mlx port
+  // (scripts/drama3_tts_daemon.py). Directions in [brackets], multi-speaker
+  // <|speaker:N|> tags, and zero-shot cloning from the Fish S2 clone store.
+  // NOTE: Fish Audio Community License — no hosted service, and commercial use
+  // only under USD 500k annual revenue. Off by default.
+  drama3Tts: {
+    enabled: parseEnvBool(process.env.DRAMA3_TTS_ENABLED, false),
+    pythonPath: process.env.DRAMA3_TTS_PYTHON_PATH || './.venv-drama3/bin/python3',
+    // Fish's release (or a `drama3-mlx convert` copy, which keeps its own format).
+    modelPath: process.env.DRAMA3_TTS_MODEL_PATH || './checkpoints/drama-3',
+    // How the release's experts sit in memory: q8 (default; 42 GB, ~1.7x realtime on
+    // an M5 Max), q4 (28 GB), fp8 (exact, ~3x slower than realtime) or bf16.
+    experts: process.env.DRAMA3_TTS_EXPERTS || 'q8',
+    modelId: process.env.DRAMA3_TTS_MODEL_ID || 'fish-drama-3',
+    voiceClonesDir: process.env.DRAMA3_TTS_VOICE_CLONES_DIR
+      || process.env.FISH_TTS_VOICE_CLONES_DIR || './fish_voice_clones',
+    // Frames per text chunk (~21.5 per second of audio); 0 = Fish's default of 600.
+    maxNewTokens: parseInt(process.env.DRAMA3_TTS_MAX_NEW_TOKENS, 10) || 0,
+    timeout: parseInt(process.env.DRAMA3_TTS_TIMEOUT, 10) || 300000,
+    timeoutPerChar: parseInt(process.env.DRAMA3_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
+    timeoutMax: parseInt(process.env.DRAMA3_TTS_TIMEOUT_MAX, 10) || 900000,
+    // Startup reads ~40 GB of weights (5 s from a warm file cache, minutes cold).
+    daemonStartupTimeout: parseInt(process.env.DRAMA3_TTS_STARTUP_TIMEOUT, 10) || 600000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_DRAMA3_TTS, false),
+  },
   // Outbound Sogni network worker (src/network/). Runs as its own process; the
   // local REST API is unaffected when this is disabled.
   networkWorker: {

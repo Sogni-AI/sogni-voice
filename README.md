@@ -17,6 +17,7 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 | Qwen3-TTS | Jan 21-22, 2026 | ~8 days after Pocket |
 | MOSS-TTS-Nano | Apr 10, 2026 | 100M multilingual reference-voice model |
 | MOSS Transcribe-Diarize | Jul 9, 2026 | 0.9B one-pass ASR + diarization model |
+| Fish Drama 3 | Oct 13, 2026 | 35B MoE (3B active); runs here through our MLX port, [drama3-mlx](https://github.com/Sogni-AI/drama3-mlx) |
 
 ### Licensing
 
@@ -29,20 +30,21 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 | Parakeet TDT v3 | Apache 2.0 (`parakeet-mlx`) | CC-BY-4.0 | ✅ Permitted with attribution |
 | MOSS-TTS-Nano | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | MOSS Transcribe-Diarize | Apache 2.0 | Apache 2.0 | ✅ Permitted |
+| Fish Drama 3 (via drama3-mlx) | Fish Audio Community License | Fish Audio Community License | ⚠️ Only under USD 500k annual revenue; no hosted TTS/cloning service without a Fish Audio license |
 
 ### Feature Comparison
 
-| Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS | MOSS-TTS-Nano |
-|---------|------------|------------|-----------|----------------|
-| Parameters | 100M | 82M | 0.6B / 1.7B | 100M |
-| Languages | English only | 4 (EN, JA, ZH) | 10 + auto detection | 20 languages |
-| Built-in Voices | 8 | 32 | 9 | None; reference voice required |
-| Output | 24 kHz mono | 24 kHz mono | 24 kHz mono | 48 kHz stereo |
-| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (1-30s audio) | ✅ (1-30s audio) |
-| Emotion Control | ❌ | ❌ | ✅ (CustomVoice) | ❌ |
-| Voice Design | ❌ | ❌ | ✅ (VoiceDesign) | ❌ |
-| Hardware | CPU (2-core) | MLX (Apple Silicon) | MLX (Apple Silicon) | MLX (Apple Silicon) |
-| Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality | Small multilingual cloned voices |
+| Feature | Pocket TTS | Kokoro TTS | Qwen3-TTS | MOSS-TTS-Nano | Fish Drama 3 |
+|---------|------------|------------|-----------|----------------|--------------|
+| Parameters | 100M | 82M | 0.6B / 1.7B | 100M | 35B MoE, 3B active |
+| Languages | English only | 4 (EN, JA, ZH) | 10 + auto detection | 20 languages | 80+ per Fish (tested here: English) |
+| Built-in Voices | 8 | 32 | 9 | None; reference voice required | Default voice; up to 16 speakers per request |
+| Output | 24 kHz mono | 24 kHz mono | 24 kHz mono | 48 kHz stereo | 44.1 kHz mono |
+| Voice Cloning | ✅ (5s audio) | ❌ | ✅ (1-30s audio) | ✅ (1-30s audio) | ✅ (1-30s audio + transcript) |
+| Emotion Control | ❌ | ❌ | ✅ (CustomVoice) | ❌ | ✅ (plain-language `[directions]`) |
+| Voice Design | ❌ | ❌ | ✅ (VoiceDesign) | ❌ | ❌ |
+| Hardware | CPU (2-core) | MLX (Apple Silicon) | MLX (Apple Silicon) | MLX (Apple Silicon) | MLX, 64 GB+ unified memory |
+| Best For | CPU-only setups, English | Multi-language, variety | Advanced features, quality | Small multilingual cloned voices | Directed, multi-character scenes |
 
 ## Features
 
@@ -1155,6 +1157,21 @@ curl -X PATCH http://localhost:3000/moss-tts/voices/clone/my_voice \
 curl -X DELETE http://localhost:3000/moss-tts/voices/clone/narrator \
   -H "X-API-Key: your_api_key_here"
 ```
+
+### Fish Drama 3 Endpoints (experimental)
+
+Enabled with `DRAMA3_TTS_ENABLED=1` (`./setup.sh` → **Fish Drama 3** installs it and downloads
+the 41.5 GB release). Same shape as the Fish S2 routes, under `/drama3-tts`, sharing Fish S2's
+voice clones. Full details: [docs/fish-drama3.md](docs/fish-drama3.md).
+
+```bash
+curl -X POST http://localhost:3000/drama3-tts -H "Content-Type: application/json" \
+  -d '{"text": "<|speaker:0|> [nervous] Did you hear that? <|speaker:1|> <whisper>Stay quiet.</whisper>"}' \
+  --output scene.wav
+```
+
+On an M5 Max it generates about 1.85× faster than real time with 8-bit experts (42 GB).
+Built with Fish Audio; Fish Audio Community License (see the Licensing table above).
 
 ## Testing
 

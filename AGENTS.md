@@ -64,6 +64,11 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `tts.js` → `scripts/tts_daemon.py`: Uses mlx-audio library with Kokoro model for TTS
   - Model stored locally at `models/kokoro-tts/`, auto-downloaded from HuggingFace on first run
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
+- `drama3Tts.js` → `scripts/drama3_tts_daemon.py`: Fish Audio Drama 3 through drama3-mlx (our MLX port), off by default
+  - Subclasses the Fish S2 service, daemon and routes (`/drama3-tts/*`); shares the `fish_voice_clones/` store
+  - Loads the 41.5 GB FP8 release from `checkpoints/drama-3`, experts re-quantized at load (`DRAMA3_TTS_EXPERTS`)
+  - Defaults to temperature 1.0 / top-p 0.9 and re-samples a chunk that stalls (2 s+ silence); see docs/fish-drama3.md
+  - Fish Audio Community License: no hosted service; commercial use only under USD 500k annual revenue
 - `qwenTts.js` → `scripts/qwen_tts_daemon.py`: Qwen3-TTS through pinned MLX-Audio 0.4.5 in `.venv-qwen-tts`
   - Separate Base, CustomVoice, and lazy VoiceDesign daemons; 8-bit models by default
   - Voice cloning from reference audio (Base models)
@@ -86,6 +91,9 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `GET /transcription/models` - List Parakeet/Qwen3-ASR availability and capabilities
 - `WS /v1/realtime/transcription` - Stream 16 kHz float32 PCM to native Parakeet realtime transcription
 - `POST /qwen-asr/align` - Align a known transcript to audio with Qwen3 ForcedAligner
+
+**Fish Drama 3** (when `DRAMA3_TTS_ENABLED=true`): same routes as Fish S2 under `/drama3-tts`
+- `POST /drama3-tts`, `POST /drama3-tts/voices/clone/{cloneId}/generate`, clone CRUD, `GET /drama3-tts/voices`, `GET /drama3-tts/status`
 
 **Kokoro TTS**:
 - `POST /tts` - Generate speech (params: text, voice, speed, format, timestamps)
@@ -129,6 +137,11 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - `DIARIZATION_ENABLED` (false), `DIARIZATION_MODEL_ID` (pyannote/speaker-diarization-community-1)
 - `DIARIZATION_TIMEOUT` (600000ms), `DIARIZATION_DAEMON_STARTUP_TIMEOUT` (180000ms)
 - `PREWARM_DIARIZATION` (false), optional `HF_TOKEN` or cached Hugging Face login
+
+**Fish Drama 3**:
+- `DRAMA3_TTS_ENABLED` (false), `DRAMA3_TTS_PYTHON_PATH` (./.venv-drama3/bin/python3)
+- `DRAMA3_TTS_MODEL_PATH` (./checkpoints/drama-3), `DRAMA3_TTS_EXPERTS` (q8; q4 for 64 GB Macs)
+- `DRAMA3_TTS_TEMPERATURE` (1.0), `DRAMA3_TTS_TOP_P` (0.9), `DRAMA3_TTS_ATTEMPTS` (3), `PREWARM_DRAMA3_TTS` (false)
 
 **Kokoro TTS**:
 - `TTS_MODEL_ID` (mlx-community/Kokoro-82M-bf16)

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-Sogni Transcribe is a REST and WebSocket API for audio transcription and text-to-speech synthesis, built specifically for **Apple Silicon Macs** using MLX for ML acceleration.
+Sogni Transcribe is a REST and WebSocket API for audio transcription and text-to-speech synthesis, built for **Apple Silicon Macs** using MLX for ML acceleration. On **Linux + NVIDIA** (docs/linux-nvidia.md, `docker/nvidia/`) the same API runs Fish S2 Pro and Drama 3 through vLLM-Omni servers (`scripts/fish_omni_daemon.py`) and Parakeet through transformers (`scripts/parakeet_transformers_daemon.py`); `PARAKEET_BACKEND`, `FISH_TTS_BACKEND` and `DRAMA3_TTS_BACKEND` default by platform.
 
 ## Commands
 

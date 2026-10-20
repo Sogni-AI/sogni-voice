@@ -4,7 +4,7 @@
 
 A REST + WebSocket API and configuration for running cutting-edge, open-source text-to-speech and speech-to-text models locally—no third-party API dependencies required. OpenClaw setup steps in [llm.txt](llm.txt)!
 
-> **Apple Silicon Only**: This project uses [MLX](https://github.com/ml-explore/mlx) for ML acceleration and is designed specifically for **Apple Silicon Macs** (M1/M2/M3/M4/M5). It will not work on Intel Macs or other platforms.
+> **Apple Silicon or Linux + NVIDIA**: On **Apple Silicon Macs** (M1/M2/M3/M4/M5) every engine runs through [MLX](https://github.com/ml-explore/mlx). On **Linux with an NVIDIA GPU** (verified on a DGX Spark), Fish S2 Pro, Fish Drama 3, Parakeet and Pocket TTS run in Docker with the same API; see [docs/linux-nvidia.md](docs/linux-nvidia.md). Intel Macs are not supported.
 
 ## Model Comparison
 
@@ -116,7 +116,7 @@ The server will be available at `http://localhost:3000`.
 
 ### System Requirements
 
-- **macOS** on Apple Silicon (M1/M2/M3/M4/M5)
+- **macOS** on Apple Silicon (M1/M2/M3/M4/M5), or Linux + NVIDIA through Docker ([docs/linux-nvidia.md](docs/linux-nvidia.md))
 - **uv** (Python environment and package installer)
 - **ffmpeg** for audio processing
 

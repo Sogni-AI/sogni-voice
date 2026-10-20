@@ -64,12 +64,19 @@ export class FishTTSService {
 
   get logTag() { return 'fish-tts'; }
 
-  get backend() { return 'fish-s2-pro-mlx'; }
+  get backend() { return this.cfg?.backend === 'vllm-omni' ? 'fish-s2-pro-vllm-omni' : 'fish-s2-pro-mlx'; }
 
   get defaultModelId() { return 'fish-audio-s2-pro-8bit-mlx'; }
 
   /** Daemon script, environment, and the paths that must exist before spawning. */
   daemonSpec() {
+    if (this.cfg.backend === 'vllm-omni') {
+      return this.omniDaemonSpec({
+        FISH_OMNI_ENGINE: 's2',
+        FISH_TTS_MODEL_ID: this.cfg.modelId,
+        FISH_TTS_MAX_TOKENS: String(this.cfg.maxTokens),
+      });
+    }
     const modelPath = resolveFromRoot(this.cfg.modelPath);
     return {
       script: 'fish_tts_daemon.py',
@@ -81,6 +88,25 @@ export class FishTTSService {
         FISH_TTS_MODEL_ID: this.cfg.modelId,
         FISH_TTS_VOICE_CLONES_DIR: resolveFromRoot(this.cfg.voiceClonesDir),
         FISH_TTS_MAX_TOKENS: String(this.cfg.maxTokens),
+      },
+    };
+  }
+
+  /**
+   * Linux + NVIDIA: the model runs in a vLLM-Omni server (docker/nvidia/) and
+   * scripts/fish_omni_daemon.py renders through it, keeping the protocol,
+   * chunking and clone store of the MLX daemons.
+   */
+  omniDaemonSpec(engineEnv) {
+    return {
+      script: 'fish_omni_daemon.py',
+      setupHint: 'Start the vLLM-Omni servers (see docs/linux-nvidia.md).',
+      requiredPaths: [],
+      env: {
+        FISH_OMNI_URL: this.cfg.omniUrl,
+        FISH_OMNI_MODEL: this.cfg.omniModel,
+        FISH_TTS_VOICE_CLONES_DIR: resolveFromRoot(this.cfg.voiceClonesDir),
+        ...engineEnv,
       },
     };
   }

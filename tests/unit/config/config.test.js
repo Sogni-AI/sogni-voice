@@ -3,9 +3,21 @@ import { localCorsOrigins } from '../../../src/utils/cors.js';
 
 describe('config', () => {
   const originalEnv = { ...process.env };
+  const originalPlatform = Object.getOwnPropertyDescriptor(process, 'platform');
+  const setPlatform = (value) => Object.defineProperty(process, 'platform', { value, configurable: true });
 
   beforeEach(() => {
     vi.resetModules();
+    // Engine backends default by platform; the MLX defaults are the baseline.
+    setPlatform('darwin');
+    process.env.PARAKEET_BACKEND = '';
+    process.env.FISH_TTS_BACKEND = '';
+    process.env.FISH_TTS_OMNI_URL = '';
+    process.env.FISH_TTS_OMNI_MODEL = '';
+    process.env.FISH_TTS_MODEL_ID = '';
+    process.env.DRAMA3_TTS_BACKEND = '';
+    process.env.DRAMA3_TTS_OMNI_URL = '';
+    process.env.DRAMA3_TTS_OMNI_MODEL = '';
     // Use empty strings so dotenv does not repopulate these from .env during import.
     process.env.PORT = '';
     process.env.HOST = '';
@@ -81,6 +93,7 @@ describe('config', () => {
 
   afterEach(() => {
     process.env = { ...originalEnv };
+    Object.defineProperty(process, 'platform', originalPlatform);
   });
 
   describe('server config', () => {
@@ -446,6 +459,52 @@ describe('config', () => {
       process.env.MAX_FILE_SIZE_MB = '50';
       const { config } = await import('../../../src/config/index.js');
       expect(config.upload.maxFileSizeBytes).toBe(50 * 1024 * 1024);
+    });
+  });
+
+  describe('engine backends', () => {
+    it('should run Parakeet, Fish S2 and Drama 3 through MLX on macOS', async () => {
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.transcription.backend).toBe('mlx');
+      expect(config.fishTts.backend).toBe('mlx');
+      expect(config.drama3Tts.backend).toBe('mlx');
+      expect(config.fishTts.modelId).toBe('fish-audio-s2-pro-8bit-mlx');
+    });
+
+    it('should use transformers and vLLM-Omni on Linux', async () => {
+      setPlatform('linux');
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.transcription).toMatchObject({
+        backend: 'transformers',
+        modelId: 'nvidia/parakeet-tdt-0.6b-v3',
+        modelRevision: '541d1f99c6b0c3cd0b11a95167540bb8edefd82b',
+        realtimeEnabled: false,
+      });
+      expect(config.fishTts).toMatchObject({
+        backend: 'vllm-omni',
+        omniUrl: 'http://127.0.0.1:8001',
+        omniModel: 'fishaudio/s2-pro',
+        modelId: 'fishaudio/s2-pro',
+      });
+      expect(config.drama3Tts).toMatchObject({
+        backend: 'vllm-omni',
+        omniUrl: 'http://127.0.0.1:8002',
+        omniModel: 'fishaudio/drama-3',
+      });
+    });
+
+    it('should let each *_BACKEND variable override the platform default', async () => {
+      setPlatform('linux');
+      process.env.PARAKEET_BACKEND = 'mlx';
+      process.env.FISH_TTS_BACKEND = 'mlx';
+      process.env.DRAMA3_TTS_OMNI_URL = 'http://gpu-box:9002';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.transcription.backend).toBe('mlx');
+      expect(config.transcription.modelId).toBe('mlx-community/parakeet-tdt-0.6b-v3');
+      expect(config.transcription.realtimeEnabled).toBe(true);
+      expect(config.fishTts.backend).toBe('mlx');
+      expect(config.drama3Tts.backend).toBe('vllm-omni');
+      expect(config.drama3Tts.omniUrl).toBe('http://gpu-box:9002');
     });
   });
 });

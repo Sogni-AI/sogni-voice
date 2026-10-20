@@ -300,7 +300,8 @@ check_system_requirements() {
 
     # Check macOS on Apple Silicon
     if [[ "$(uname)" != "Darwin" ]]; then
-        print_error "This project requires macOS"
+        print_error "setup.sh installs the macOS (MLX) stack"
+        print_info "On Linux with an NVIDIA GPU, use the Docker setup in docs/linux-nvidia.md"
         all_good=false
     else
         print_success "Running on macOS"

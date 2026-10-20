@@ -10,6 +10,14 @@ const parseEnvBool = (value, defaultValue = false) => {
   return defaultValue;
 };
 
+// Apple Silicon runs every engine through MLX. On Linux + NVIDIA, Fish S2 and
+// Drama 3 run in vLLM-Omni servers and Parakeet in transformers; see
+// docs/linux-nvidia.md. Each engine's *_BACKEND variable overrides the choice.
+const onMac = process.platform === 'darwin';
+const parakeetBackend = process.env.PARAKEET_BACKEND || (onMac ? 'mlx' : 'transformers');
+const fishBackend = process.env.FISH_TTS_BACKEND || (onMac ? 'mlx' : 'vllm-omni');
+const drama3Backend = process.env.DRAMA3_TTS_BACKEND || (onMac ? 'mlx' : 'vllm-omni');
+
 export const config = {
   server: {
     port: parseInt(process.env.PORT, 10) || 3000,
@@ -34,14 +42,20 @@ export const config = {
   },
   transcription: {
     enabled: parseEnvBool(process.env.TRANSCRIPTION_ENABLED, true),
-    modelId: process.env.PARAKEET_MODEL_ID || 'mlx-community/parakeet-tdt-0.6b-v3',
-    modelRevision: process.env.PARAKEET_MODEL_REVISION
-      || 'ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15',
+    // 'mlx' (parakeet-mlx) or 'transformers' (NVIDIA's checkpoint; batch only).
+    backend: parakeetBackend,
+    modelId: process.env.PARAKEET_MODEL_ID || (parakeetBackend === 'mlx'
+      ? 'mlx-community/parakeet-tdt-0.6b-v3'
+      : 'nvidia/parakeet-tdt-0.6b-v3'),
+    modelRevision: process.env.PARAKEET_MODEL_REVISION || (parakeetBackend === 'mlx'
+      ? 'ed2b7e8c15f9aaa0b5772e2efb986255eaef7e15'
+      : '541d1f99c6b0c3cd0b11a95167540bb8edefd82b'),
     pythonPath: process.env.PARAKEET_PYTHON_PATH || './.venv/bin/python3',
     timeout: parseInt(process.env.TRANSCRIBE_TIMEOUT, 10) || 300000,
     daemonStartupTimeout: parseInt(process.env.DAEMON_STARTUP_TIMEOUT, 10) || 120000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_TRANSCRIPTION, true),
-    realtimeEnabled: parseEnvBool(process.env.PARAKEET_REALTIME_ENABLED, true),
+    realtimeEnabled: parakeetBackend === 'mlx'
+      && parseEnvBool(process.env.PARAKEET_REALTIME_ENABLED, true),
     realtimeMaxSeconds: parseInt(process.env.PARAKEET_REALTIME_MAX_SECONDS, 10) || 300,
     realtimeIdleTimeout: parseInt(process.env.PARAKEET_REALTIME_IDLE_TIMEOUT_MS, 10) || 15000,
     realtimeChunkTimeout: parseInt(process.env.PARAKEET_REALTIME_CHUNK_TIMEOUT_MS, 10) || 30000,
@@ -137,12 +151,17 @@ export const config = {
   // local evaluation only. Off by default.
   fishTts: {
     enabled: parseEnvBool(process.env.FISH_TTS_ENABLED, false),
+    // 'mlx' or 'vllm-omni' (the model runs in a vLLM-Omni server at omniUrl).
+    backend: fishBackend,
+    omniUrl: process.env.FISH_TTS_OMNI_URL || 'http://127.0.0.1:8001',
+    omniModel: process.env.FISH_TTS_OMNI_MODEL || 'fishaudio/s2-pro',
     pythonPath: process.env.FISH_TTS_PYTHON_PATH || './.venv-fish-tts/bin/python3',
     // Vendored MLX inference repo; added to PYTHONPATH so `local_mlx` imports.
     serverDir: process.env.FISH_TTS_SERVER_DIR || './vendor/fish-s2-mlx',
     modelPath: process.env.FISH_TTS_MODEL_PATH
       || './checkpoints/fish-audio-s2-pro-8bit-mlx-normalized',
-    modelId: process.env.FISH_TTS_MODEL_ID || 'fish-audio-s2-pro-8bit-mlx',
+    modelId: process.env.FISH_TTS_MODEL_ID
+      || (fishBackend === 'mlx' ? 'fish-audio-s2-pro-8bit-mlx' : 'fishaudio/s2-pro'),
     defaultVoice: process.env.FISH_TTS_DEFAULT_VOICE || 'default',
     voiceClonesDir: process.env.FISH_TTS_VOICE_CLONES_DIR || './fish_voice_clones',
     // Token ceiling ~= max audio length (~21.5 semantic tokens/sec of audio).
@@ -153,7 +172,10 @@ export const config = {
     timeoutPerChar: parseInt(process.env.FISH_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
     timeoutMax: parseInt(process.env.FISH_TTS_TIMEOUT_MAX, 10) || 900000,
     // Startup eagerly loads ~7 GB of weights; allow time for the daemon to boot.
-    daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10) || 240000,
+    // On vLLM-Omni the daemon waits for its server instead (FISH_OMNI_READY_TIMEOUT,
+    // 30 min): after a reboot Drama 3 and then S2 start cold, ~15 min in all.
+    daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10)
+      || (fishBackend === 'mlx' ? 240000 : 1860000),
     preWarmDaemon: parseEnvBool(process.env.PREWARM_FISH_TTS, false),
   },
   // Experimental: Fish Audio Drama 3 through the drama3-mlx port
@@ -163,6 +185,10 @@ export const config = {
   // only under USD 500k annual revenue. Off by default.
   drama3Tts: {
     enabled: parseEnvBool(process.env.DRAMA3_TTS_ENABLED, false),
+    // 'mlx' or 'vllm-omni' (the model runs in a vLLM-Omni server at omniUrl).
+    backend: drama3Backend,
+    omniUrl: process.env.DRAMA3_TTS_OMNI_URL || 'http://127.0.0.1:8002',
+    omniModel: process.env.DRAMA3_TTS_OMNI_MODEL || 'fishaudio/drama-3',
     pythonPath: process.env.DRAMA3_TTS_PYTHON_PATH || './.venv-drama3/bin/python3',
     // Fish's release (or a `drama3-mlx convert` copy, which keeps its own format).
     modelPath: process.env.DRAMA3_TTS_MODEL_PATH || './checkpoints/drama-3',
@@ -178,7 +204,9 @@ export const config = {
     timeoutPerChar: parseInt(process.env.DRAMA3_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
     timeoutMax: parseInt(process.env.DRAMA3_TTS_TIMEOUT_MAX, 10) || 900000,
     // Startup reads ~40 GB of weights (5 s from a warm file cache, minutes cold).
-    daemonStartupTimeout: parseInt(process.env.DRAMA3_TTS_STARTUP_TIMEOUT, 10) || 600000,
+    // On vLLM-Omni the daemon waits up to 30 min for its server (see fishTts).
+    daemonStartupTimeout: parseInt(process.env.DRAMA3_TTS_STARTUP_TIMEOUT, 10)
+      || (drama3Backend === 'mlx' ? 600000 : 1860000),
     preWarmDaemon: parseEnvBool(process.env.PREWARM_DRAMA3_TTS, false),
   },
   // Outbound Sogni network worker (src/network/). Runs as its own process; the

@@ -1,0 +1,19 @@
+# Runtime data and local environments are mounted or rebuilt, never baked in.
+.git
+.env
+.env.*
+node_modules
+.venv
+.venv-*
+checkpoints
+models
+vendor/fish-s2-mlx
+fish_voice_clones
+pocket_voice_clones
+moss_voice_clones
+voice_clones
+coverage
+*.wav
+*.mp3
+*.log
+**/__pycache__

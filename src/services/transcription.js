@@ -34,12 +34,20 @@ export class TranscriptionService {
 
   async _startDaemon() {
     return new Promise((resolve, reject) => {
-      const daemonPath = join(projectRoot, 'scripts/parakeet_daemon.py');
+      // Linux + NVIDIA runs NVIDIA's checkpoint through transformers (batch only).
+      const transformers = config.transcription.backend === 'transformers';
+      const daemonPath = join(
+        projectRoot,
+        transformers ? 'scripts/parakeet_transformers_daemon.py' : 'scripts/parakeet_daemon.py',
+      );
       const pythonPath = resolveConfiguredPath(config.transcription.pythonPath);
       let startupSettled = false;
       let startupTimer = null;
 
-      console.log('Starting parakeet-mlx daemon (model loading may take a moment)...');
+      console.log(
+        `Starting Parakeet daemon (${transformers ? 'transformers' : 'parakeet-mlx'}; `
+        + 'model loading may take a moment)...',
+      );
 
       const spawnedProcess = spawn(pythonPath, [daemonPath], {
         cwd: projectRoot,
@@ -76,7 +84,7 @@ export class TranscriptionService {
 
           if (response.status === 'ready') {
             if (daemonProcess !== spawnedProcess) return;
-            console.log('Parakeet-mlx daemon ready');
+            console.log('Parakeet daemon ready');
             daemonReady = true;
             daemonModelInfo = {
               model: response.model || config.transcription.modelId,

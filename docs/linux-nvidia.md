@@ -29,6 +29,17 @@ server over HTTP on 127.0.0.1.
   process's CPU-side memory. That leaves ~19 GB available.
 - About 60 GB of disk for the weights and ~25 GB for the image
 
+On a DGX Spark (GB10), also keep 2 GiB of memory free. Once the page cache fills
+RAM (after the ~50 GB of weights are read), the NVIDIA driver can fail to allocate a
+new process's GPU context with `NV_ERR_NO_MEMORY`; it doesn't reclaim the cache.
+That shows up as `CUDA error: out of memory` when a vLLM stage or Parakeet starts,
+with plenty of memory "available":
+
+```bash
+echo 'vm.min_free_kbytes = 2097152' | sudo tee /etc/sysctl.d/90-gb10-cuda-free-memory.conf
+sudo sysctl -p /etc/sysctl.d/90-gb10-cuda-free-memory.conf
+```
+
 The image targets the DGX Spark's driver (`CUDA_DRIVER_VERSION` in
 `docker/nvidia/Dockerfile`). On another machine, pass yours with
 `--build-arg CUDA_DRIVER_VERSION=$(nvidia-smi --query-gpu=driver_version --format=csv,noheader)`.

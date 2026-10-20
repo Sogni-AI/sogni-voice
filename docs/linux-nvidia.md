@@ -57,7 +57,8 @@ Compose starts Drama 3 first, then S2 once Drama 3 is healthy (each server sizes
 its memory from what is free), then the API. Drama 3 takes about 10 minutes to
 become healthy and S2 about 3: both read their weights and capture CUDA graphs.
 Compilation results are cached in the `cache` volume. All services restart with
-Docker after a reboot.
+Docker after a reboot. S2 still waits for Drama 3, and the API's Fish daemons
+wait up to 30 minutes for their servers; Fish requests made in the meantime wait for them.
 
 ```bash
 docker compose -f docker/nvidia/compose.yaml ps

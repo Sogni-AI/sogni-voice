@@ -40,9 +40,10 @@ from fish_tts_daemon import DEFAULT_MAX_TOKENS, FishTTSDaemon, _log, prepare_tex
 ENGINE = os.environ.get("FISH_OMNI_ENGINE", "s2")
 OMNI_URL = os.environ.get("FISH_OMNI_URL", "http://127.0.0.1:8001").rstrip("/")
 OMNI_MODEL = os.environ.get("FISH_OMNI_MODEL", "fishaudio/s2-pro")
-# The daemon reports ready only once the server serves the model. A cold
-# Drama 3 start (load + compile + graph capture) takes several minutes.
-READY_TIMEOUT_SECONDS = float(os.environ.get("FISH_OMNI_READY_TIMEOUT", "900"))
+# The daemon reports ready only once the server serves the model. After a
+# reboot Drama 3 and then S2 start cold (load + compile + graph capture),
+# about 15 minutes in all.
+READY_TIMEOUT_SECONDS = float(os.environ.get("FISH_OMNI_READY_TIMEOUT", "1800"))
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("FISH_OMNI_REQUEST_TIMEOUT", "600"))
 SAMPLE_RATE = 44100
 # Both models emit 21.5 codec frames per second of audio. Speech runs at about

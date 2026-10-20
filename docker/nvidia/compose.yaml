@@ -47,16 +47,16 @@ services:
     depends_on:
       drama3:
         condition: service_healthy
+    # depends_on orders `compose up` only; Docker restarts every service at
+    # once after a reboot, so S2 also waits here for Drama 3 to be healthy.
     command:
-      - vllm
-      - serve
-      - /app/checkpoints/s2-pro
-      - --omni
-      - --host=127.0.0.1
-      - --port=8001
-      - --served-model-name=fishaudio/s2-pro
-      - --deploy-config=/app/docker/nvidia/fish_s2.yaml
-      - --stage-init-timeout=1800
+      - bash
+      - -c
+      - >-
+        until curl -fs http://127.0.0.1:8002/health >/dev/null; do sleep 10; done;
+        exec vllm serve /app/checkpoints/s2-pro --omni --host=127.0.0.1 --port=8001
+        --served-model-name=fishaudio/s2-pro --deploy-config=/app/docker/nvidia/fish_s2.yaml
+        --stage-init-timeout=1800
     volumes:
       - ../../checkpoints:/app/checkpoints:ro
       - cache:/root/.cache

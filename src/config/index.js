@@ -172,7 +172,10 @@ export const config = {
     timeoutPerChar: parseInt(process.env.FISH_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
     timeoutMax: parseInt(process.env.FISH_TTS_TIMEOUT_MAX, 10) || 900000,
     // Startup eagerly loads ~7 GB of weights; allow time for the daemon to boot.
-    daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10) || 240000,
+    // On vLLM-Omni the daemon waits for its server instead (FISH_OMNI_READY_TIMEOUT,
+    // 30 min): after a reboot Drama 3 and then S2 start cold, ~15 min in all.
+    daemonStartupTimeout: parseInt(process.env.FISH_TTS_STARTUP_TIMEOUT, 10)
+      || (fishBackend === 'mlx' ? 240000 : 1860000),
     preWarmDaemon: parseEnvBool(process.env.PREWARM_FISH_TTS, false),
   },
   // Experimental: Fish Audio Drama 3 through the drama3-mlx port
@@ -201,7 +204,9 @@ export const config = {
     timeoutPerChar: parseInt(process.env.DRAMA3_TTS_TIMEOUT_PER_CHAR_MS, 10) || 400,
     timeoutMax: parseInt(process.env.DRAMA3_TTS_TIMEOUT_MAX, 10) || 900000,
     // Startup reads ~40 GB of weights (5 s from a warm file cache, minutes cold).
-    daemonStartupTimeout: parseInt(process.env.DRAMA3_TTS_STARTUP_TIMEOUT, 10) || 600000,
+    // On vLLM-Omni the daemon waits up to 30 min for its server (see fishTts).
+    daemonStartupTimeout: parseInt(process.env.DRAMA3_TTS_STARTUP_TIMEOUT, 10)
+      || (drama3Backend === 'mlx' ? 600000 : 1860000),
     preWarmDaemon: parseEnvBool(process.env.PREWARM_DRAMA3_TTS, false),
   },
   // Outbound Sogni network worker (src/network/). Runs as its own process; the

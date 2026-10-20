@@ -412,6 +412,17 @@ class ParakeetDaemon:
     def send_response(response: dict):
         print(json.dumps(response, ensure_ascii=False), flush=True)
 
+    def ready_info(self) -> dict:
+        """The ready message; scripts/parakeet_transformers_daemon.py overrides it."""
+        return {
+            "status": "ready",
+            "model": MODEL_ID,
+            "revision": MODEL_REVISION,
+            "parakeet_mlx_version": EXPECTED_PARAKEET_MLX_VERSION,
+            "sample_rate": self.sample_rate,
+            "realtime": REALTIME_ENABLED,
+        }
+
     def handle_request(self, line: str) -> dict:
         try:
             request = json.loads(line)
@@ -469,16 +480,7 @@ class ParakeetDaemon:
         if not self.load_model():
             return
 
-        self.send_response(
-            {
-                "status": "ready",
-                "model": MODEL_ID,
-                "revision": MODEL_REVISION,
-                "parakeet_mlx_version": EXPECTED_PARAKEET_MLX_VERSION,
-                "sample_rate": self.sample_rate,
-                "realtime": REALTIME_ENABLED,
-            }
-        )
+        self.send_response(self.ready_info())
 
         while self.running:
             try:

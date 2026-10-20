@@ -125,6 +125,7 @@ describe('TranscriptionService', () => {
     it('should pass pinned model and realtime settings to the daemon', async () => {
       const { spawn: freshSpawn } = await import('node:child_process');
       const { config } = await import('../../../src/config/index.js');
+      config.transcription.backend = 'mlx';
       const initPromise = service.initialize();
       setTimeout(() => mockStdout.push('{"status":"ready","realtime":true}\n'), 10);
       await initPromise;
@@ -142,6 +143,20 @@ describe('TranscriptionService', () => {
             ),
           }),
         }),
+      );
+    });
+    it('should run the transformers daemon on the transformers backend', async () => {
+      const { spawn: freshSpawn } = await import('node:child_process');
+      const { config } = await import('../../../src/config/index.js');
+      config.transcription.backend = 'transformers';
+      const initPromise = service.initialize();
+      setTimeout(() => mockStdout.push('{"status":"ready","realtime":false}\n'), 10);
+      await initPromise;
+
+      expect(freshSpawn).toHaveBeenCalledWith(
+        expect.any(String),
+        [expect.stringContaining('scripts/parakeet_transformers_daemon.py')],
+        expect.any(Object),
       );
     });
   });

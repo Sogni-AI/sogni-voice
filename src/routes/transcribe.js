@@ -62,7 +62,9 @@ export const transcribeRoutes = [
             maxChunkBytes: config.transcription.realtimeMaxChunkBytes,
             concurrency: 1,
           },
-          description: 'Fast Apple Silicon transcription for 25 European languages.',
+          description: config.transcription.backend === 'mlx'
+            ? 'Fast Apple Silicon transcription for 25 European languages.'
+            : 'Fast NVIDIA GPU transcription for 25 European languages.',
         },
         {
           id: 'qwen3',

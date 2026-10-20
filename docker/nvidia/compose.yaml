@@ -1,0 +1,85 @@
+# sogni-voice on Linux + NVIDIA. From the repo root:
+#   docker compose -f docker/nvidia/compose.yaml up -d --build
+# Needs .env at the repo root (see docker/nvidia/env.example) and the weights in
+# ./checkpoints (see docs/linux-nvidia.md). The vLLM-Omni servers listen on
+# 127.0.0.1 only; the API listens on HOST:PORT from .env.
+name: sogni-voice
+
+x-service: &service
+  image: sogni-voice-nvidia:latest
+  network_mode: host
+  ipc: host
+  gpus: all
+  restart: unless-stopped
+  # Built once by the drama3 service below; never pulled from a registry.
+  pull_policy: never
+
+services:
+  # Started first: both servers size their memory from what is free at startup.
+  drama3:
+    <<: *service
+    pull_policy: build
+    build:
+      context: ../..
+      dockerfile: docker/nvidia/Dockerfile
+    command:
+      - vllm
+      - serve
+      - /app/checkpoints/drama-3
+      - --omni
+      - --host=127.0.0.1
+      - --port=8002
+      - --served-model-name=fishaudio/drama-3
+      - --deploy-config=/app/docker/nvidia/drama3.yaml
+      # A cold start reads ~40 GB of weights and compiles; the default is 300 s.
+      - --stage-init-timeout=1800
+      - --init-timeout=2400
+    volumes:
+      - ../../checkpoints:/app/checkpoints:ro
+      - cache:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8002/health"]
+      interval: 15s
+      start_period: 40m
+
+  fish-s2:
+    <<: *service
+    depends_on:
+      drama3:
+        condition: service_healthy
+    command:
+      - vllm
+      - serve
+      - /app/checkpoints/s2-pro
+      - --omni
+      - --host=127.0.0.1
+      - --port=8001
+      - --served-model-name=fishaudio/s2-pro
+      - --deploy-config=/app/docker/nvidia/fish_s2.yaml
+      - --stage-init-timeout=1800
+    volumes:
+      - ../../checkpoints:/app/checkpoints:ro
+      - cache:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8001/health"]
+      interval: 15s
+      start_period: 20m
+
+  api:
+    <<: *service
+    depends_on:
+      drama3:
+        condition: service_healthy
+      fish-s2:
+        condition: service_healthy
+    env_file: ../../.env
+    volumes:
+      - ../../checkpoints:/app/checkpoints:ro
+      - ../../fish_voice_clones:/app/fish_voice_clones
+      - ../../pocket_voice_clones:/app/pocket_voice_clones
+      - cache:/root/.cache
+
+volumes:
+  # Hugging Face downloads (Pocket TTS) and vLLM's compile cache, which makes
+  # restarts much faster than the first start.
+  cache:

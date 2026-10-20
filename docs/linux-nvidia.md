@@ -106,12 +106,15 @@ Judge the quality by ear before keeping it.
   timestamps. Sentences are grouped at sentence-ending punctuation, and long
   files are transcribed in `PARAKEET_CHUNK_DURATION` windows (default 120 s),
   each cut at a quiet point.
-- **Drama 3 chunks do not share context.** drama3-mlx passes earlier chunks'
-  audio as context so a long text keeps one delivery. vLLM-Omni takes one
-  reference per request, so each chunk sees only the clone's reference. Fish S2
-  works this way on both platforms.
-- **Sampling defaults come from the server** except where the daemons set them
-  (S2 temperature 0.7, Drama 3 temperature 1.0 / top-p 0.9).
+- **Drama 3 chunks do not share context.** Text is validated and split exactly as
+  drama3-mlx does it (`scripts/drama3_text.py`: chunks of about 300 bytes with at
+  most three speakers, joined without pauses). drama3-mlx also passes earlier
+  chunks' audio as context so a long text keeps one delivery. vLLM-Omni takes
+  one reference per request, so each chunk sees only the clone's reference.
+  Fish S2 works this way on both platforms.
+- **Sampling** matches the MLX daemons: S2 at temperature 0.7, Drama 3 at
+  temperature 1.0 / top-p 0.9; other settings come from the server's deploy
+  config.
 
 ## License
 

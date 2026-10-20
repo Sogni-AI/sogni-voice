@@ -175,8 +175,8 @@ describe('fish_omni_daemon.py', () => {
     expect(result.error).toMatch(/^invalid input: /);
   });
 
-  itWithPython('rejects tokens Drama 3 does not accept before calling the server', () => {
-    for (const text of ['<|speaker:16|> Who am I?', 'Done.<|im_end|>']) {
+  itWithPython('rejects text drama3-mlx rejects, before calling the server', () => {
+    for (const text of ['<|speaker:16|> Who am I?', 'Done.<|im_end|>', '<|speaker:03|> Hi.']) {
       const { result, requests } = runHarness({
         engine: 'drama3',
         model: 'fishaudio/drama-3',
@@ -184,9 +184,28 @@ describe('fish_omni_daemon.py', () => {
         text,
       });
       expect(result.success).toBe(false);
-      expect(result.error).toMatch(/^invalid input: <\|(speaker:16|im_end)\|> is not a token/);
+      expect(result.error).toMatch(/^invalid input: text: /);
       expect(requests).toHaveLength(0);
     }
+  });
+
+  itWithPython('splits a long Drama 3 scene by speaker like drama3-mlx and joins it without pauses', () => {
+    const line = 'This line is long enough that a few of them fill a chunk. ';
+    const text = [0, 1, 2, 3].map((speaker) => `<|speaker:${speaker}|> ${line.repeat(3)}`).join('\n');
+    const { result, requests, duration } = runHarness({
+      engine: 'drama3',
+      model: 'fishaudio/drama-3',
+      replies: Array.from({ length: 8 }, () => [200, 1.0, 0]),
+      text,
+    });
+    expect(result.success).toBe(true);
+    // 4 speakers × 177 bytes: at most 300 bytes and 3 speakers per chunk.
+    expect(requests).toHaveLength(4);
+    for (const request of requests) {
+      expect(Buffer.byteLength(request.input)).toBeLessThanOrEqual(300);
+      expect(request.max_new_tokens).toBe(600);
+    }
+    expect(duration).toBeCloseTo(4.0, 1);
   });
 });
 
@@ -219,5 +238,34 @@ print(json.dumps({"sentences": sentences, "cut_seconds": cut / rate}))
       { text: 'Fine', start: 1.2, end: 1.4 },
     ]);
     expect(cutSeconds).toBeCloseTo(25.05, 2);
+  });
+
+  itWithPython('keeps words apart at window boundaries and offsets each window', () => {
+    const script = `
+import json, sys
+from types import SimpleNamespace as T
+sys.path.insert(0, ${JSON.stringify(join(repoRoot, 'scripts'))})
+from parakeet_transformers_daemon import TranscriptionResult
+
+windows = {"w1": (["Hello there."], [{"token": "Hello", "start": 0.0, "end": 0.4}, {"token": " there.", "start": 0.4, "end": 0.9}]),
+           "w2": (["General Kenobi."], [{"token": "General", "start": 0.1, "end": 0.6}, {"token": " Kenobi.", "start": 0.6, "end": 1.1}])}
+
+class Processor:
+    def batch_decode(self, sequences, skip_special_tokens=True):
+        return windows[sequences][0]
+    def decode(self, sequences, durations=None, skip_special_tokens=True):
+        return windows[sequences][0], [windows[sequences][1]]
+
+result = TranscriptionResult(Processor(), [(T(sequences="w1", durations=None), 0.0),
+                                           (T(sequences="w2", durations=None), 120.0)])
+print(json.dumps({"text": result.text, "tokens": [vars(t) for t in result.tokens],
+                  "sentences": [vars(s) for s in result.sentences]}))
+`;
+    const run = spawnSync(python, ['-c', script], { encoding: 'utf8' });
+    if (run.status !== 0) throw new Error(run.stderr);
+    const { text, tokens, sentences } = JSON.parse(run.stdout);
+    expect(text).toBe('Hello there. General Kenobi.');
+    expect(tokens[2]).toEqual({ text: ' General', start: 120.1, end: 120.6 });
+    expect(sentences.map((sentence) => sentence.text)).toEqual(['Hello there.', 'General Kenobi.']);
   });
 });

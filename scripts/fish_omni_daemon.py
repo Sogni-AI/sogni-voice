@@ -12,15 +12,16 @@ becomes a local HTTP call.
 FISH_OMNI_ENGINE picks the engine ("s2" or "drama3"); FISH_OMNI_URL and
 FISH_OMNI_MODEL name the vLLM-Omni server and the model it serves.
 
-Known gap: vLLM-Omni takes one reference per request, so Drama 3 chunks do not
-carry the previous chunks' audio as context the way drama3-mlx does.
+Drama 3 text is validated and split exactly as drama3-mlx does it
+(scripts/drama3_text.py). Known gap: vLLM-Omni takes one reference per request,
+so Drama 3 chunks do not carry the previous chunks' audio as context the way
+drama3-mlx does.
 """
 
 import base64
 import io
 import json
 import os
-import re
 import time
 import traceback
 import urllib.error
@@ -35,7 +36,8 @@ from drama3_tts_daemon import (
     Drama3TTSDaemon,
     longest_silence,
 )
-from fish_tts_daemon import DEFAULT_MAX_TOKENS, FishTTSDaemon, _log, prepare_text_chunks
+from drama3_text import InvalidInputError, split_text, validate_text
+from fish_tts_daemon import DEFAULT_MAX_TOKENS, FishTTSDaemon, _log
 
 ENGINE = os.environ.get("FISH_OMNI_ENGINE", "s2")
 OMNI_URL = os.environ.get("FISH_OMNI_URL", "http://127.0.0.1:8001").rstrip("/")
@@ -46,24 +48,24 @@ OMNI_MODEL = os.environ.get("FISH_OMNI_MODEL", "fishaudio/s2-pro")
 READY_TIMEOUT_SECONDS = float(os.environ.get("FISH_OMNI_READY_TIMEOUT", "1800"))
 REQUEST_TIMEOUT_SECONDS = float(os.environ.get("FISH_OMNI_REQUEST_TIMEOUT", "600"))
 SAMPLE_RATE = 44100
-# Both models emit 21.5 codec frames per second of audio. Speech runs at about
-# 16 characters per second (~1.35 frames per UTF-8 byte), so 3 frames per byte
-# leaves room for slow delivery while bounding a runaway or a stall.
+# Both models' codec emits one frame per 2048 samples (~21.5 per second).
+SAMPLES_PER_FRAME = 2048
+# Speech runs at about 16 characters per second (~1.35 frames per UTF-8 byte),
+# so 3 frames per byte leaves room for slow delivery while bounding a runaway.
 FRAMES_PER_BYTE = 3
 MIN_FRAMES = 256
-# Drama 3 takes <|speaker:0|> … <|speaker:15|>; drama3-mlx rejects any other
-# <|…|> token as invalid input, and vLLM-Omni would speak it instead.
-UNSUPPORTED_TOKEN_RE = re.compile(r"<\|(?!speaker:(?:1[0-5]|[0-9])\|>)[^|>]*\|>")
+# vLLM-Omni rejects max_new_tokens above this.
+MAX_FRAMES = 4096
+# drama3-mlx's frames per chunk when the caller sets no limit (~27.9 s).
+DRAMA3_CHUNK_FRAMES = 600
+# The MLX S2 server's default temperature.
+S2_DEFAULT_TEMPERATURE = 0.7
 
 
-def frame_budget(text: str, requested: int, floor: int = MIN_FRAMES) -> int:
-    """Frames to allow for one chunk: scaled to its length, never above the request."""
-    scaled = max(floor, FRAMES_PER_BYTE * len(text.encode("utf-8")))
-    return min(int(requested), scaled) if requested else scaled
-
-
-class InvalidInputError(ValueError):
-    """The server rejected the request text (HTTP 400)."""
+def frame_budget(text: str, requested: int) -> int:
+    """Frames to allow for one S2 chunk: scaled to its length, never above the request."""
+    scaled = max(MIN_FRAMES, FRAMES_PER_BYTE * len(text.encode("utf-8")))
+    return min(int(requested) if requested else scaled, scaled, MAX_FRAMES)
 
 
 class OmniClient:
@@ -130,7 +132,7 @@ class OmniClient:
         wav = self.speech_wav(
             payload["input"],
             max_new_tokens=frame_budget(payload["input"], payload.get("max_tokens")),
-            sampling=_temperature(payload.get("temperature")),
+            sampling={"temperature": _s2_temperature(payload.get("temperature"))},
         )
         elapsed = time.perf_counter() - started
         info = self._sf.info(io.BytesIO(wav))
@@ -156,8 +158,8 @@ class OmniClient:
         return self.encode_reference(audio, sample_rate, transcript)
 
 
-def _temperature(value):
-    return None if value is None else {"temperature": float(value)}
+def _s2_temperature(value) -> float:
+    return S2_DEFAULT_TEMPERATURE if value is None else float(value)
 
 
 class OmniBackendMixin:
@@ -218,7 +220,7 @@ class OmniFishTTSDaemon(OmniBackendMixin, FishTTSDaemon):
         """
         cap = frame_budget(text, max_tokens or DEFAULT_MAX_TOKENS)
         reference = self.model.encode_reference(ref_audio, transcript=ref_text or "")
-        base_temp = float(temperature) if temperature is not None else 0.7
+        base_temp = _s2_temperature(temperature)
         attempts = [
             {"temperature": base_temp},
             {"temperature": min(base_temp, 0.5), "top_p": 0.6, "top_k": 20},
@@ -227,7 +229,7 @@ class OmniFishTTSDaemon(OmniBackendMixin, FishTTSDaemon):
         fallback = None
         for i, sampling in enumerate(attempts):
             audio = self.model.speech(text, reference, cap, sampling)
-            frames = audio.shape[0] / self.sample_rate * 21.5
+            frames = audio.shape[0] / SAMPLES_PER_FRAME
             if frames < cap - 2:
                 return audio
             if fallback is None:
@@ -237,32 +239,24 @@ class OmniFishTTSDaemon(OmniBackendMixin, FishTTSDaemon):
 
 
 class OmniDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
-    """Fish Drama 3: chunked like the S2 daemon, each chunk checked for stalls."""
+    """Fish Drama 3: drama3-mlx's validation and chunking, each chunk checked for stalls."""
 
     def _synthesize(self, text, output_path, references, max_tokens, temperature) -> dict:
-        unsupported = UNSUPPORTED_TOKEN_RE.search(text)
-        if unsupported:
-            return {
-                "success": False,
-                "error": f"invalid input: {unsupported.group(0)} is not a token Drama 3 accepts "
-                "(speaker tags run from <|speaker:0|> to <|speaker:15|>)",
-            }
-        chunks = prepare_text_chunks(text)
-        if not chunks:
-            return {"success": False, "error": "invalid input: text is empty"}
+        try:
+            validate_text(text)
+        except InvalidInputError as e:
+            return {"success": False, "error": f"invalid input: {e}"}
+        chunks = split_text(text)
         reference = references[0] if references else None
         sampling = {
             "temperature": DEFAULT_TEMPERATURE if temperature is None else float(temperature),
             "top_p": DEFAULT_TOP_P,
         }
-        requested = int(max_tokens or DEFAULT_MAX_NEW_TOKENS)
+        budget = min(int(max_tokens or DEFAULT_MAX_NEW_TOKENS) or DRAMA3_CHUNK_FRAMES, MAX_FRAMES)
         started = time.perf_counter()
         rendered = []
         try:
             for chunk in chunks:
-                # Fish's default of 600 frames per chunk, more for one long
-                # speaker-tagged scene (which is never split).
-                budget = requested or frame_budget(chunk, 0, floor=600)
                 for attempt in range(1, ATTEMPTS + 1):
                     audio = self.model.speech(chunk, reference, budget, sampling)
                     stall = longest_silence(audio, self.sample_rate)
@@ -275,7 +269,8 @@ class OmniDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
                 rendered.append(audio)
         except InvalidInputError as e:
             return {"success": False, "error": f"invalid input: {e}"}
-        audio = self._join_audio_chunks(rendered)
+        # drama3-mlx joins chunks back to back, without the S2 daemon's pause.
+        audio = self._np.concatenate(rendered)
         duration = self._write_wav(audio, output_path)
         elapsed = time.perf_counter() - started
         _log(f"{len(chunks)} chunk(s), {duration:.2f}s audio in {elapsed:.2f}s")

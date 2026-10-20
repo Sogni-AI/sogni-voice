@@ -139,14 +139,19 @@ class TranscriptionResult:
             _texts, timestamps = self._processor.decode(
                 output.sequences, durations=output.durations, skip_special_tokens=True
             )
-            tokens.extend(
+            window_tokens = [
                 SimpleNamespace(
                     text=entry["token"],
                     start=round(float(entry["start"]) + offset, 3),
                     end=round(float(entry["end"]) + offset, 3),
                 )
                 for entry in timestamps[0]
-            )
+            ]
+            # Each window decodes from a fresh stream, so its first token has no
+            # leading space; without one it would join the previous window's last word.
+            if tokens and window_tokens and not window_tokens[0].text.startswith(" "):
+                window_tokens[0].text = " " + window_tokens[0].text
+            tokens.extend(window_tokens)
         return tokens
 
     @cached_property

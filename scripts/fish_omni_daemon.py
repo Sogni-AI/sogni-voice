@@ -165,13 +165,15 @@ def _s2_temperature(value) -> float:
 class OmniBackendMixin:
     """Replaces MLX model loading with waiting for the vLLM-Omni server."""
 
+    client_class = OmniClient
+
     def load_model(self) -> bool:
         try:
             import numpy as np
             import soundfile as sf
 
             self._np, self._sf = np, sf
-            client = OmniClient(OMNI_URL, OMNI_MODEL, np, sf)
+            client = self.client_class(OMNI_URL, OMNI_MODEL, np, sf)
             _log(f"Waiting for {OMNI_MODEL} at {OMNI_URL} ...")
             started = time.perf_counter()
             while not client.served():

@@ -127,6 +127,89 @@ Judge the quality by ear before keeping it.
   temperature 1.0 / top-p 0.9; other settings come from the server's deploy
   config.
 
+## Drama 3 NVFP4 on DGX Spark
+
+Built with Fish Audio. The community
+[NVFP4 pruned checkpoint](https://huggingface.co/plotarmordev/drama-3-NVFP4-Pruned)
+uses 7,369 routed experts, compared with the original 10,240. It requires the
+author's TensorFold fork; selecting this checkpoint in vLLM-Omni will not load it.
+The [author's recipe](https://github.com/plotarmordev/drama-tensorfold) and
+[engine guide](https://github.com/plotarmordev/TensorFold/blob/b1f4b9b4830c9bd43bf7c432cffe7dea21313537/docs/drama-3-nvfp4.md)
+document the measured setup. This integration pins:
+
+| Component | Version |
+|---|---|
+| NVFP4 checkpoint | `494db08481db952f834b2241bce63fb3dfa72554` |
+| TensorFold `drama-nvfp4` | `b1f4b9b4830c9bd43bf7c432cffe7dea21313537` |
+| Zig | `0.17.0` (download SHA-256 checked in the Dockerfile) |
+| CUDA toolkit / GPU target | `13.0.1` / GB10 `sm_121` |
+| Guidance | gamma `1.5`, batched; active only with a reference voice |
+
+Keep the original model and capture reference outputs before changing servers.
+Download into its own directory; do not replace `checkpoints/drama-3`:
+
+```bash
+uvx --from 'huggingface_hub[hf_xet]' hf download plotarmordev/drama-3-NVFP4-Pruned \
+  --revision 494db08481db952f834b2241bce63fb3dfa72554 \
+  --local-dir checkpoints/drama-3-NVFP4-Pruned
+```
+
+Verify the files with the checkpoint's `MANIFEST.sha256` from that pinned revision.
+The original API image supplies Python and the other engines; the TensorFold image
+adds the native encoder/server without changing the S2 image. Build and start:
+
+```bash
+docker build -f docker/nvidia/Dockerfile -t sogni-voice-nvidia:latest .
+docker build -f docker/nvidia/Dockerfile.tensorfold -t sogni-voice-tensorfold:latest .
+docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml up -d --no-build --no-deps drama3
+docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml up -d --no-build --no-deps api
+```
+
+Wait for Drama 3's `http://127.0.0.1:8002/health` and `/v1/models` to report ready
+before restarting the API. The overlay preserves the existing S2 and Parakeet
+backends and uses the existing `/drama3-tts` routes. Restarting the model server
+temporarily interrupts Drama 3 requests. On a shared Spark, hold the host's GPU
+workload lease for the change and preserve the old image ID for rollback.
+
+For a separately managed TensorFold server, set `DRAMA3_TTS_BACKEND=tensorfold`,
+`DRAMA3_TTS_TENSORFOLD_URL=http://127.0.0.1:8002`,
+`DRAMA3_TTS_TENSORFOLD_NATIVE_PATH` to its pinned binary, and
+`DRAMA3_TTS_MODEL_PATH` to the NVFP4 checkpoint. The API's Python environment
+still needs numpy and soundfile. The native binary requires CUDA at runtime,
+including when encoding a clone's reference.
+
+The same Fish clone IDs work here. The daemon encodes the original reference WAV
+through `tensorfold-native voice encode`, keeps the resulting codec codes in
+memory, and sends those codes and the exact transcript with each request. The
+first use after an API restart includes reference-encoding time; later requests
+reuse the codes. Replacing a clone's audio or transcript causes fresh encoding.
+Clone uploads, renames and deletions retain the original store format.
+
+TensorFold's pinned HTTP contract has these differences:
+
+- Only speaker `0` is supported; multi-speaker requests are rejected.
+- Sampling is fixed in the engine at temperature `1.0`, top-p `0.9`, top-k `30`.
+  Other request temperatures and per-request `maxTokens` are rejected. The
+  overlay sets a maximum of 1,024 frames per chunk (about 47.55 seconds).
+- Seed salt is server-wide (`TENSORFOLD_SEED_SALT=0` in the overlay), with each
+  request's seed derived from its prompt. It is not a per-request API seed.
+- Long texts retain this API's existing approximately 300-byte chunks. Each
+  chunk receives the same original clone reference. No automatic client retry
+  is used: replaying the same prompt and salt would produce the same take.
+- The server's `X-Finish-Reason` is forwarded on WAV/Opus replies; buffer JSON
+  includes `finishReason` and `complete`. A capped or stalled take is preserved
+  with `complete: false`. The existing two-second silence check marks a stall
+  once, without retrying the same deterministic request. The author measured guidance with a reference;
+  built-in voice requests remain unguided even when the gamma header says 1.5.
+
+Qualify one author-example canary before comparing a larger set. Compare exact
+prompts and reference hashes, save the original and candidate WAVs, and judge
+clone fidelity by ear. Report the engine change and settings alongside the quant:
+this replaces vLLM-Omni with TensorFold as well as changing weights. The author's
+quant was derived from original revision `e0a9218aa48888270f06ef1ed9ea67622c0e17d2`,
+whose weights, codec, configuration and tokenizer match the original revision
+pinned above; the upstream revision difference is in the model card.
+
 ## License
 
 Fish S2 Pro is under the Fish Audio Research License (non-commercial). Drama 3

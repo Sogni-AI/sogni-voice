@@ -1,0 +1,26 @@
+# Build the author's NVFP4 engine for DGX Spark, then add it to the existing
+# API image. Build the base with docker/nvidia/Dockerfile first.
+FROM nvidia/cuda:13.0.1-devel-ubuntu24.04@sha256:7d2f6a8c2071d911524f95061a0db363e24d27aa51ec831fcccf9e76eb72bc92 AS tensorfold-build
+
+ARG TENSORFOLD_COMMIT=b1f4b9b4830c9bd43bf7c432cffe7dea21313537
+ARG BUILD_JOBS=2
+RUN apt-get update && apt-get install -y --no-install-recommends git curl ca-certificates xz-utils build-essential \
+    && rm -rf /var/lib/apt/lists/*
+RUN case "$(uname -m)" in \
+      aarch64) arch=aarch64; digest=9e8d11661d4ae3bd57702a3832781e23ad151dde5798e16a5ccd503f65234ff8 ;; \
+      x86_64) arch=x86_64; digest=1cbe9df9f27e6b78d14ccbca43b6703a404ef79ef1c463de901d7f088d4e2026 ;; \
+    esac \
+    && curl -fsSL "https://ziglang.org/download/0.17.0/zig-${arch}-linux-0.17.0.tar.xz" -o /tmp/zig.tar.xz \
+    && echo "$digest  /tmp/zig.tar.xz" | sha256sum -c - \
+    && mkdir /opt/zig && tar -xJf /tmp/zig.tar.xz -C /opt/zig --strip-components=1 \
+    && rm /tmp/zig.tar.xz
+RUN git clone --single-branch --branch drama-nvfp4 https://github.com/plotarmordev/TensorFold.git /opt/tensorfold \
+    && git -C /opt/tensorfold checkout --detach "$TENSORFOLD_COMMIT"
+WORKDIR /opt/tensorfold
+RUN /opt/zig/zig build native fatbins -Dnvcc=/usr/local/cuda/bin/nvcc -Dsm=121 -Dstrip=true -j${BUILD_JOBS}
+
+FROM sogni-voice-nvidia:latest
+COPY --from=tensorfold-build /opt/tensorfold/zig-out/native/bin/tensorfold-native /usr/local/bin/tensorfold-native
+WORKDIR /app
+COPY . .
+CMD ["node", "src/index.js"]

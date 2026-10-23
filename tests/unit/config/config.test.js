@@ -463,6 +463,19 @@ describe('config', () => {
   });
 
   describe('engine backends', () => {
+    it('selects the pruned checkpoint and encoder when TensorFold is requested', async () => {
+      setPlatform('linux');
+      process.env.DRAMA3_TTS_BACKEND = 'tensorfold';
+      const { config } = await import('../../../src/config/index.js');
+      expect(config.drama3Tts).toMatchObject({
+        backend: 'tensorfold',
+        modelPath: './checkpoints/drama-3-NVFP4-Pruned',
+        modelId: 'drama-3-nvfp4-pruned',
+        tensorfoldUrl: 'http://127.0.0.1:8002',
+        tensorfoldNativePath: '/usr/local/bin/tensorfold-native',
+      });
+    });
+
     it('should run Parakeet, Fish S2 and Drama 3 through MLX on macOS', async () => {
       const { config } = await import('../../../src/config/index.js');
       expect(config.transcription.backend).toBe('mlx');

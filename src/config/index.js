@@ -185,17 +185,21 @@ export const config = {
   // only under USD 500k annual revenue. Off by default.
   drama3Tts: {
     enabled: parseEnvBool(process.env.DRAMA3_TTS_ENABLED, false),
-    // 'mlx' or 'vllm-omni' (the model runs in a vLLM-Omni server at omniUrl).
+    // 'mlx', 'vllm-omni', or 'tensorfold' for the NVFP4 pruned checkpoint.
     backend: drama3Backend,
     omniUrl: process.env.DRAMA3_TTS_OMNI_URL || 'http://127.0.0.1:8002',
     omniModel: process.env.DRAMA3_TTS_OMNI_MODEL || 'fishaudio/drama-3',
+    tensorfoldUrl: process.env.DRAMA3_TTS_TENSORFOLD_URL || 'http://127.0.0.1:8002',
+    tensorfoldNativePath: process.env.DRAMA3_TTS_TENSORFOLD_NATIVE_PATH || '/usr/local/bin/tensorfold-native',
     pythonPath: process.env.DRAMA3_TTS_PYTHON_PATH || './.venv-drama3/bin/python3',
     // Fish's release (or a `drama3-mlx convert` copy, which keeps its own format).
-    modelPath: process.env.DRAMA3_TTS_MODEL_PATH || './checkpoints/drama-3',
+    modelPath: process.env.DRAMA3_TTS_MODEL_PATH
+      || (drama3Backend === 'tensorfold' ? './checkpoints/drama-3-NVFP4-Pruned' : './checkpoints/drama-3'),
     // How the release's experts sit in memory: q8 (default; 42 GB, ~1.7x realtime on
     // an M5 Max), q4 (28 GB), fp8 (exact, ~3x slower than realtime) or bf16.
     experts: process.env.DRAMA3_TTS_EXPERTS || 'q8',
-    modelId: process.env.DRAMA3_TTS_MODEL_ID || 'fish-drama-3',
+    modelId: process.env.DRAMA3_TTS_MODEL_ID
+      || (drama3Backend === 'tensorfold' ? 'drama-3-nvfp4-pruned' : 'fish-drama-3'),
     voiceClonesDir: process.env.DRAMA3_TTS_VOICE_CLONES_DIR
       || process.env.FISH_TTS_VOICE_CLONES_DIR || './fish_voice_clones',
     // Frames per text chunk (~21.5 per second of audio); 0 = Fish's default of 600.

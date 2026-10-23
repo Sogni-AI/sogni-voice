@@ -43,6 +43,7 @@ const setResponseHeader = (response, name, value) => {
 
 const applyCorsResponseHeaders = (response, origin, corsPolicy) => {
   setResponseHeader(response, 'access-control-allow-origin', getCorsAllowOrigin(origin, corsPolicy));
+  setResponseHeader(response, 'access-control-expose-headers', 'X-Finish-Reason, X-RTF');
 
   if (corsPolicy.allowAnyOrigin) {
     return;

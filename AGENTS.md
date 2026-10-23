@@ -66,7 +66,8 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
   - 32 voices across 4 languages (American English, British English, Japanese, Chinese)
 - `drama3Tts.js` → `scripts/drama3_tts_daemon.py`: Fish Audio Drama 3 through drama3-mlx (our MLX port), off by default
   - Subclasses the Fish S2 service, daemon and routes (`/drama3-tts/*`); shares the `fish_voice_clones/` store
-  - Loads the 41.5 GB FP8 release from `checkpoints/drama-3`, experts re-quantized at load (`DRAMA3_TTS_EXPERTS`)
+  - Loads the original FP8 release with experts re-quantized at load (`DRAMA3_TTS_EXPERTS`), or native packed pruned NVFP4 with automatic reference guidance 1.5
+  - On NVIDIA, `DRAMA3_TTS_BACKEND=tensorfold` uses `scripts/drama3_tensorfold_daemon.py` and `docker/nvidia/compose.tensorfold.yaml` for the pinned NVFP4 engine; only speaker 0 and fixed sampling are supported
   - Defaults to temperature 1.0 / top-p 0.9 and re-samples a chunk that stalls (2 s+ silence); see docs/fish-drama3.md
   - Fish Audio Community License: no hosted service; commercial use only under USD 500k annual revenue
 - `qwenTts.js` → `scripts/qwen_tts_daemon.py`: Qwen3-TTS through pinned MLX-Audio 0.4.5 in `.venv-qwen-tts`

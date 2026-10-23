@@ -351,4 +351,53 @@ describe('Fish Drama 3 routes', () => {
     expect(response.statusCode).toBe(200);
     expect(JSON.parse(response.payload).clones).toEqual(['demo_clone']);
   });
+
+  it('exposes complete and capped TensorFold replies in binary headers and JSON', async () => {
+    for (const finishReason of ['stop', 'length', 'silence']) {
+      for (const format of ['wav', 'opus', 'buffer']) {
+        drama3Mocks.generateVoiceClone.mockImplementationOnce(async (text, options) => {
+          writeFileSync(options.outputPath, createFakeWavBuffer());
+          return { outputPath: options.outputPath, duration: 2, rtf: 0.8,
+            model: 'drama-3-nvfp4-pruned', finishReason };
+        });
+        const response = await server.inject({
+          method: 'POST', url: '/drama3-tts/voices/clone/demo_clone/generate',
+          payload: { text: 'Keep this take for review.', format },
+        });
+        expect(response.statusCode).toBe(200);
+        if (format === 'buffer') {
+          expect(JSON.parse(response.payload)).toMatchObject({
+            finishReason, complete: finishReason === 'stop', rtf: 0.8,
+          });
+        } else expect(response.headers['x-finish-reason']).toBe(finishReason);
+      }
+    }
+  });
+
+  it('returns an explicit 400 for TensorFold sampling overrides', async () => {
+    drama3Mocks.generateVoiceClone.mockRejectedValueOnce(
+      new Error('invalid input: TensorFold uses a fixed temperature of 1.0'),
+    );
+    const response = await server.inject({
+      method: 'POST', url: '/drama3-tts/voices/clone/demo_clone/generate',
+      payload: { text: 'Hello.', temperature: 0.7 },
+    });
+    expect(response.statusCode).toBe(400);
+    expect(JSON.parse(response.payload).message).toContain('fixed temperature');
+  });
+
+  it('reports TensorFold capabilities without advertising multiple speakers or sampling controls', async () => {
+    const { drama3TtsService } = await import('../../src/services/drama3Tts.js');
+    drama3TtsService.getModelInfo.mockReturnValueOnce({
+      model: 'drama-3-nvfp4-pruned', backend: 'fish-drama3-tensorfold', voices: ['default'],
+      features: ['tts', 'direction_tags', 'voice_cloning'], sampleRate: 44100,
+    });
+    const response = await server.inject({ method: 'GET', url: '/drama3-tts/status' });
+    expect(response.statusCode).toBe(200);
+    expect(JSON.parse(response.payload)).toMatchObject({
+      backend: 'fish-drama3-tensorfold', speakerTags: '<|speaker:0|>',
+      perRequestMaxTokens: false, sampling: { temperature: 1, configurable: false },
+    });
+    expect(JSON.parse(response.payload).features).not.toContain('speaker_tags');
+  });
 });

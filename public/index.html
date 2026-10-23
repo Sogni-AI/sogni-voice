@@ -1191,7 +1191,7 @@
 
     <!-- Fish Drama 3 options: direction, whisper and speaker tag inserter -->
     <div id="drama3Options" class="hidden" style="margin-bottom: 16px; padding: 12px; border: 1px solid #ddd0f5; border-radius: 6px; background: #f8f5fe;">
-      <label style="display:block; margin-bottom: 6px;">Direct the read <span style="font-weight:normal;color:#666;font-size:12px;">— click to insert at the cursor. Any plain-language <code>[direction]</code> works; <code>&lt;|speaker:N|&gt;</code> switches character.</span></label>
+      <label style="display:block; margin-bottom: 6px;">Direct the read <span style="font-weight:normal;color:#666;font-size:12px;">— click to insert at the cursor. Any plain-language <code>[direction]</code> works. <span id="drama3SpeakerHint">Speaker tags switch character.</span></span></label>
       <div id="drama3TagChips" style="display:flex; flex-wrap:wrap; gap:6px;">
         <button type="button" class="fish-chip" data-tag="[nervous, barely holding it together] ">😰 nervous</button>
         <button type="button" class="fish-chip" data-tag="[warmly] ">🙂 warm</button>
@@ -1199,7 +1199,7 @@
         <button type="button" class="fish-chip" data-tag="[laughs] ">😂 laugh</button>
         <button type="button" class="fish-chip" data-tag="&lt;whisper&gt;" data-close="&lt;/whisper&gt;">🤫 whisper…</button>
         <button type="button" class="fish-chip" data-tag="&lt;|speaker:0|&gt; ">🎭 speaker 0</button>
-        <button type="button" class="fish-chip" data-tag="&lt;|speaker:1|&gt; ">🎭 speaker 1</button>
+        <button type="button" class="fish-chip" id="drama3SpeakerOne" data-tag="&lt;|speaker:1|&gt; ">🎭 speaker 1</button>
       </div>
       <div style="font-size:12px;color:#6b46c1; margin-top:8px;">Voice clones made in the Fish S2 voice-cloning tab appear in the voice list. The first request after a restart loads the model.</div>
     </div>
@@ -3610,9 +3610,9 @@
           ? `Clone: ${selectedVoice.replace(/^(pocket-)?clone:/, '')}`
           : `Voice: ${selectedVoice}`;
         const modelUsed = isDrama3
-          ? 'Fish Audio Drama 3 (drama3-mlx)'
+          ? 'Fish Audio Drama 3'
           : isFish
-          ? 'Fish Audio S2 Pro (8-bit MLX)'
+          ? 'Fish Audio S2 Pro'
           : isMossVoice
           ? 'MOSS-TTS-Nano (Reference)'
           : usedVoiceDesign
@@ -3639,10 +3639,16 @@
           extraInfo = `\nSpeed: ${speedRange.value}x`;
         }
 
-        ttsResult.className = 'result success';
-        ttsResult.textContent = `Audio generated successfully!\nModel: ${modelUsed}${usedStyle ? ' (Custom Voice)' : ''}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;
+        const finishReason = response.headers.get('X-Finish-Reason');
+        const incomplete = finishReason && finishReason !== 'stop';
+        const outcome = incomplete
+          ? (finishReason === 'length' ? 'Audio reached the length limit; the read may be incomplete.'
+            : 'Audio contains a long silence; the read may be incomplete.')
+          : 'Audio generated successfully!';
+        ttsResult.className = incomplete ? 'result error' : 'result success';
+        ttsResult.textContent = `${outcome}\nModel: ${modelUsed}${usedStyle ? ' (Custom Voice)' : ''}\n${voiceInfo}${extraInfo}\nText length: ${text.length} characters`;
         ttsTiming.textContent = `Elapsed time: ${elapsed}s`;
-        ttsStatus.textContent = 'Speech generated successfully!';
+        ttsStatus.textContent = incomplete ? 'Review the incomplete audio below.' : 'Speech generated successfully!';
       } catch (error) {
         ttsResult.className = 'result error';
         ttsResult.textContent = 'Error: ' + error.message;
@@ -4713,6 +4719,11 @@
         }
         const data = await response.json();
         drama3Clones = (data.clones || []).sort((a, b) => a.localeCompare(b));
+        const multipleSpeakers = data.features.includes('speaker_tags');
+        document.getElementById('drama3SpeakerOne').hidden = !multipleSpeakers;
+        document.getElementById('drama3SpeakerHint').textContent = multipleSpeakers
+          ? 'Speaker tags switch character.'
+          : 'This server supports one character per request.';
         if (currentModel === 'drama3') {
           const previous = voiceSelect.value;
           voiceSelect.innerHTML = '<option value="default">Drama 3 default voice</option>';

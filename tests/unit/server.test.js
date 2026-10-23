@@ -121,6 +121,45 @@ describe('server security configuration', () => {
     await server.stop();
   });
 
+  it('exposes speech completion and timing headers to allowed browser origins only', async () => {
+    vi.doMock('../../src/config/index.js', () => ({
+      config: {
+        server: { port: 3000, host: '127.0.0.1', corsOrigins: ['https://app.example.com'] },
+        auth: { enabled: false, apiKey: null },
+      },
+    }));
+    vi.doMock('../../src/plugins/index.js', () => ({ registerPlugins: vi.fn() }));
+    vi.doMock('../../src/routes/index.js', () => ({
+      routes: [{
+        method: 'POST',
+        path: '/speech',
+        handler: (_request, h) => h.response(Buffer.from('captured audio'))
+          .type('audio/wav').header('X-Finish-Reason', 'length').header('X-RTF', '0.8'),
+      }],
+    }));
+    const { createServer } = await import('../../src/server.js');
+    const server = await createServer();
+    try {
+      const allowed = await server.inject({
+        method: 'POST', url: '/speech', headers: { origin: 'https://app.example.com' },
+      });
+      expect(allowed.statusCode).toBe(200);
+      expect(allowed.headers['x-finish-reason']).toBe('length');
+      expect(allowed.headers['x-rtf']).toBe('0.8');
+      expect(allowed.headers['access-control-expose-headers'].toLowerCase().split(',').map(s => s.trim()))
+        .toEqual(expect.arrayContaining(['x-finish-reason', 'x-rtf']));
+      expect(allowed.rawPayload.equals(Buffer.from('captured audio'))).toBe(true);
+
+      const blocked = await server.inject({
+        method: 'POST', url: '/speech', headers: { origin: 'https://untrusted.example' },
+      });
+      expect(blocked.headers['access-control-allow-origin']).toBeUndefined();
+      expect(blocked.headers['access-control-expose-headers']).toBeUndefined();
+    } finally {
+      await server.stop();
+    }
+  });
+
   it('should allow loopback host without auth', async () => {
     vi.doMock('../../src/config/index.js', () => ({
       config: {

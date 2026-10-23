@@ -267,6 +267,7 @@ export class FishTTSService {
       duration: result.duration,
       rtf: result.rtf ?? null,
       model: this.modelInfo.model,
+      ...(result.finish_reason ? { finishReason: result.finish_reason } : {}),
     };
   }
 
@@ -287,7 +288,11 @@ export class FishTTSService {
       },
       { timeout: computeGenerationTimeout(this.cfg, text), signal: options.signal },
     );
-    return { outputPath: result.output_path, duration: result.duration, cloneId };
+    return {
+      outputPath: result.output_path, duration: result.duration, cloneId,
+      rtf: result.rtf ?? null, model: this.modelInfo.model,
+      ...(result.finish_reason ? { finishReason: result.finish_reason } : {}),
+    };
   }
 
   /** Create a voice clone from reference audio plus its transcript. */

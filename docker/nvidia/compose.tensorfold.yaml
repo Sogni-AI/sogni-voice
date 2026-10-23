@@ -1,0 +1,42 @@
+# Overlay the standard stack with the NVFP4 Drama 3 backend:
+# docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml up -d --build drama3 api
+# Checkpoints must be downloaded and verified first; see docs/linux-nvidia.md.
+services:
+  drama3:
+    image: sogni-voice-tensorfold:latest
+    build:
+      context: ../..
+      dockerfile: docker/nvidia/Dockerfile.tensorfold
+    command:
+      - tensorfold-native
+      - serve
+      - /app/checkpoints/drama-3-NVFP4-Pruned
+      - --host
+      - 127.0.0.1
+      - --port
+      - "8002"
+      - --name
+      - fishaudio/drama-3
+      - --context
+      - "8192"
+      - --parallel
+      - "1"
+      - --no-drafts
+      - --prompt-cache-gib
+      - "0"
+      - --keep-warm
+      - "0"
+      - --max-frames
+      - "1024"
+      - --cfg-gamma
+      - "1.5"
+      - --cfg-batched
+    environment:
+      TENSORFOLD_SEED_SALT: "0"
+  api:
+    image: sogni-voice-tensorfold:latest
+    environment:
+      DRAMA3_TTS_BACKEND: tensorfold
+      DRAMA3_TTS_MODEL_PATH: /app/checkpoints/drama-3-NVFP4-Pruned
+      DRAMA3_TTS_MODEL_ID: drama-3-nvfp4-pruned
+      DRAMA3_TTS_TENSORFOLD_NATIVE_PATH: /usr/local/bin/tensorfold-native

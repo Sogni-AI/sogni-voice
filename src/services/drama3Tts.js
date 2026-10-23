@@ -14,11 +14,31 @@ export class Drama3TTSService extends FishTTSService {
 
   get logTag() { return 'drama3-tts'; }
 
-  get backend() { return this.cfg?.backend === 'vllm-omni' ? 'fish-drama3-vllm-omni' : 'fish-drama3-mlx'; }
+  get backend() {
+    if (this.cfg?.backend === 'tensorfold') return 'fish-drama3-tensorfold';
+    return this.cfg?.backend === 'vllm-omni' ? 'fish-drama3-vllm-omni' : 'fish-drama3-mlx';
+  }
 
   get defaultModelId() { return 'fish-drama-3'; }
 
   daemonSpec() {
+    if (this.cfg.backend === 'tensorfold') {
+      const modelPath = resolveFromProjectRoot(this.cfg.modelPath);
+      const nativePath = resolveFromProjectRoot(this.cfg.tensorfoldNativePath);
+      return {
+        script: 'drama3_tensorfold_daemon.py',
+        setupHint: 'Build and start the TensorFold NVFP4 server (see docs/linux-nvidia.md).',
+        requiredPaths: [['TensorFold encoder', nativePath], ['codec checkpoint', modelPath]],
+        env: {
+          FISH_OMNI_URL: this.cfg.tensorfoldUrl,
+          FISH_OMNI_MODEL: this.cfg.omniModel,
+          DRAMA3_TTS_MODEL_PATH: modelPath,
+          DRAMA3_TTS_MODEL_ID: this.cfg.modelId,
+          DRAMA3_TTS_TENSORFOLD_NATIVE_PATH: nativePath,
+          FISH_TTS_VOICE_CLONES_DIR: resolveFromProjectRoot(this.cfg.voiceClonesDir),
+        },
+      };
+    }
     if (this.cfg.backend === 'vllm-omni') {
       return this.omniDaemonSpec({
         FISH_OMNI_ENGINE: 'drama3',

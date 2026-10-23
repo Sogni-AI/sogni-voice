@@ -56,6 +56,10 @@ const sendAudio = async ({ signal, h, outputPath, format, result, filename }) =>
       model: result.model,
       duration: result.duration,
       rtf: result.rtf ?? null,
+      ...(result.finishReason ? {
+        finishReason: result.finishReason,
+        complete: result.finishReason === 'stop',
+      } : {}),
     };
   }
   if (format === 'opus') {
@@ -65,14 +69,18 @@ const sendAudio = async ({ signal, h, outputPath, format, result, filename }) =>
       '-i', outputPath, '-c:a', 'libopus', '-b:a', '64k', opusPath,
     ], { timeout: 300000, signal });
     const opusBuffer = await readFile(opusPath, { signal });
-    return h.response(opusBuffer)
+    const response = h.response(opusBuffer)
       .type('audio/opus')
       .header('Content-Disposition', `attachment; filename="${filename}.opus"`);
+    if (result.finishReason) response.header('X-Finish-Reason', result.finishReason);
+    return response;
   }
-  return h.response(wavBuffer)
+  const response = h.response(wavBuffer)
     .type('audio/wav')
     .header('X-RTF', result.rtf == null ? '' : String(result.rtf))
     .header('Content-Disposition', `attachment; filename="${filename}.wav"`);
+  if (result.finishReason) response.header('X-Finish-Reason', result.finishReason);
+  return response;
 };
 
 // Decode any uploaded reference clip to 44.1 kHz mono 16-bit WAV (the Fish
@@ -344,6 +352,7 @@ const createFishTtsRoutes = ({
             voices,
             clones: hasCloneAccess(request) ? clones : [],
             model: service.getModelInfo().model,
+            features: service.getModelInfo().features,
             referenceAudio: { minSeconds: 1, maxSeconds: 30, recommendedSeconds: '5-15' },
           };
         } catch (error) {
@@ -371,7 +380,7 @@ const createFishTtsRoutes = ({
           streaming: false,
           ready: service.isReady(),
           features: modelInfo.features,
-          ...status,
+          ...(typeof status === 'function' ? status(modelInfo) : status),
         };
       },
     },
@@ -408,7 +417,16 @@ export const drama3TtsRoutes = createFishTtsRoutes({
   filePrefix: 'fish-drama3',
   description: 'Generate speech with Fish Audio Drama 3 (MLX port). Direct the delivery with '
     + 'plain-language [bracket] directions; <|speaker:N|> tags voice up to 16 characters.',
-  status: {
+  status: (modelInfo) => modelInfo.backend === 'fish-drama3-tensorfold' ? {
+    note: 'NVFP4 pruned Drama 3 through TensorFold. Inline directions and reference voice cloning; '
+      + 'only speaker 0. Sampling is fixed at temperature 1.0, top-p 0.9, top-k 30. '
+      + 'Per-request maxTokens is unsupported; the frame cap is configured on the server. '
+      + 'Fish Audio Community License: no hosted service; commercial use only under USD 500k annual revenue.',
+    directionExamples: ['[sighs]', '[laughs]', '[warmly]'],
+    speakerTags: '<|speaker:0|>',
+    sampling: { temperature: 1.0, topP: 0.9, topK: 30, configurable: false },
+    perRequestMaxTokens: false,
+  } : {
     note: 'Plain-language [direction] tags before or inside a line, paired tags such as '
       + '<whisper>…</whisper>, and <|speaker:0|>…<|speaker:15|> for multi-character scenes; '
       + 'zero-shot voice cloning from a reference clip + transcript (shared with Fish S2). '

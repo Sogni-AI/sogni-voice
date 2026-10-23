@@ -92,10 +92,11 @@ describe('FishTTSService', () => {
     expect(request.type).toBe('generate');
     expect(request.text).toBe('[happy] hi');
     expect(request.output_path).toBe('/tmp/out.wav');
-    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/out.wav","duration":1.2,"rtf":1.6}\n`);
+    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/out.wav","duration":1.2,"rtf":1.6,"finish_reason":"stop"}\n`);
     const result = await promise;
     expect(result.outputPath).toBe('/tmp/out.wav');
     expect(result.rtf).toBe(1.6);
+    expect(result.finishReason).toBe('stop');
   });
 
   it('sends transcript when creating a voice clone', async () => {
@@ -123,8 +124,10 @@ describe('FishTTSService', () => {
     const request = JSON.parse(mockStdin.lastWrite);
     expect(request.type).toBe('generate_voice_clone');
     expect(request.clone_id).toBe('my_clone');
-    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/c.wav","duration":1.0}\n`);
+    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/c.wav","duration":1.0,"rtf":0.9,"finish_reason":"length"}\n`);
     const result = await promise;
     expect(result.cloneId).toBe('my_clone');
+    expect(result.finishReason).toBe('length');
+    expect(result.rtf).toBe(0.9);
   });
 });

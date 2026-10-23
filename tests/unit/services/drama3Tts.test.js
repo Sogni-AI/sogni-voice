@@ -85,6 +85,35 @@ describe('Drama3TTSService', () => {
     expect(service.isEnabled()).toBe(true);
   });
 
+  it('uses the TensorFold adapter and native encoder for NVFP4 clones', async () => {
+    const { config } = await import('../../../src/config/index.js');
+    const original = { ...config.drama3Tts };
+    try {
+      Object.assign(config.drama3Tts, {
+        backend: 'tensorfold',
+        modelPath: './checkpoints/drama-3-NVFP4-Pruned',
+        modelId: 'drama-3-nvfp4-pruned',
+        tensorfoldNativePath: '/usr/local/bin/tensorfold-native',
+        tensorfoldUrl: 'http://127.0.0.1:8002',
+        omniModel: 'fishaudio/drama-3',
+      });
+      await initReady();
+      const [, [script], { env }] = spawn.mock.calls[0];
+      expect(script).toMatch(/scripts\/drama3_tensorfold_daemon\.py$/);
+      expect(env).toMatchObject({
+        FISH_OMNI_URL: 'http://127.0.0.1:8002',
+        FISH_OMNI_MODEL: 'fishaudio/drama-3',
+        DRAMA3_TTS_TENSORFOLD_NATIVE_PATH: '/usr/local/bin/tensorfold-native',
+        DRAMA3_TTS_MODEL_ID: 'drama-3-nvfp4-pruned',
+      });
+      expect(env.DRAMA3_TTS_MODEL_PATH).toMatch(/checkpoints\/drama-3-NVFP4-Pruned$/);
+      expect(service.backend).toBe('fish-drama3-tensorfold');
+    } finally {
+      for (const key of Object.keys(config.drama3Tts)) delete config.drama3Tts[key];
+      Object.assign(config.drama3Tts, original);
+    }
+  });
+
   it('sends generate requests in the Fish protocol', async () => {
     await initReady();
     const result = service.generate('<|speaker:0|> [quietly] Hello.', { outputPath: '/tmp/d3.wav' });

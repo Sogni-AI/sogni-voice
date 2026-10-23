@@ -82,16 +82,19 @@ other engines' memory first).
 
 ## Setup
 
-`./setup.sh` → **Fish Drama 3** in the TTS menu creates `.venv-drama3`, installs
-drama3-mlx and downloads the release (41.5 GB); it sets `DRAMA3_TTS_EXPERTS` from the
-Mac's memory. Manually:
+`./setup.sh` → **Fish Drama 3** in the TTS menu creates `.venv-drama3` and offers
+the original release (41.5 GB) or the pruned NVFP4 checkpoint (20.76 GiB).
+For the original it sets `DRAMA3_TTS_EXPERTS` from the Mac's memory. Manually:
 
 ```bash
 uv venv --python 3.12 .venv-drama3
-uv pip install --python .venv-drama3/bin/python "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.1"
+uv pip install --python .venv-drama3/bin/python "git+https://github.com/Sogni-AI/drama3-mlx@7f72841355aeeb351efb47a12837bad99458bcac"
 .venv-drama3/bin/hf download fishaudio/drama-3 --revision dd64a85cd82e9521f7202610ede97b367fc83946 \
   --local-dir checkpoints/drama-3
 ```
+
+Existing installations must run the pinned install above before starting the
+updated Mac daemon, including when keeping the original checkpoint.
 
 Then in `.env`:
 
@@ -110,8 +113,54 @@ DRAMA3_TTS_ENABLED=1
 | `DRAMA3_TTS_MODEL_ID` | `fish-drama-3` | reported by `/status` |
 | `DRAMA3_TTS_TEMPERATURE` / `DRAMA3_TTS_TOP_P` | `1.0` / `0.9` | defaults when a request sends no `temperature` |
 | `DRAMA3_TTS_ATTEMPTS` | `3` | tries per chunk when a take stalls (2 s+ of silence) |
+| `DRAMA3_TTS_CFG_GAMMA` | `1.5` for native NVFP4, otherwise `1.0` | Mac reference-voice guidance; inactive without audio conditioning |
 | `DRAMA3_TTS_VOICE_CLONES_DIR` | `FISH_TTS_VOICE_CLONES_DIR` or `./fish_voice_clones` | shared with S2 |
 | `DRAMA3_TTS_MAX_NEW_TOKENS` | `0` (= 600 frames per chunk) | |
 | `DRAMA3_TTS_TIMEOUT` / `_TIMEOUT_PER_CHAR_MS` / `_TIMEOUT_MAX` | `300000` / `400` / `900000` | |
 | `DRAMA3_TTS_STARTUP_TIMEOUT` | `600000` | |
 | `PREWARM_DRAMA3_TTS` | `0` | |
+
+## Pruned NVFP4 checkpoint
+
+[plotarmordev/drama-3-NVFP4-Pruned](https://huggingface.co/plotarmordev/drama-3-NVFP4-Pruned)
+keeps 7,369 of the original 10,240 routed experts and stores them in NVFP4.
+This is both pruning and quantization. The codec and other weights are unchanged.
+Built with Fish Audio; the original model license and the derivative's notice apply.
+
+On Mac, drama3-mlx reads the checkpoint's original packed weights, block scales,
+global scales and retained expert IDs directly. `DRAMA3_TTS_EXPERTS` does not
+requantize this format. Reference-voice generation defaults to guidance 1.5,
+as recommended by the quant's author; existing original/converted checkpoints
+keep guidance 1.0. The MLX runtime retains its own sampling and chunk-history
+behavior, so it does not promise identical output to TensorFold.
+
+After installing the drama3-mlx version above:
+
+```bash
+.venv-drama3/bin/hf download plotarmordev/drama-3-NVFP4-Pruned \
+  --revision 494db08481db952f834b2241bce63fb3dfa72554 \
+  --local-dir checkpoints/drama-3-NVFP4-Pruned
+(cd checkpoints/drama-3-NVFP4-Pruned && shasum -a 256 -c MANIFEST.sha256)
+```
+
+Set these in `.env`:
+
+```bash
+DRAMA3_TTS_ENABLED=1
+DRAMA3_TTS_MODEL_PATH=./checkpoints/drama-3-NVFP4-Pruned
+DRAMA3_TTS_MODEL_ID=drama-3-nvfp4-pruned
+```
+
+The existing Fish clone store works without converting or replacing the reference
+recordings. On DGX Spark the same checkpoint uses the pinned TensorFold engine;
+see [the NVIDIA setup](linux-nvidia.md#drama-3-nvfp4-on-dgx-spark).
+TensorFold currently accepts only speaker 0, uses fixed temperature 1.0/top-p
+0.9/top-k 30, and configures the audio-frame limit at server startup. Its responses
+expose `X-Finish-Reason` (`stop`, `length` or `silence`); a playable WAV can still
+be incomplete. The demo retains that audio and shows a warning.
+
+The author's measurements cover English on GB10. Pruning may affect other
+languages, unusual voices and expressive directions differently; verify those
+with your own recordings. A comparison against the existing vLLM-Omni deployment
+also changes the runtime, guidance and retry behavior, so it is not a measurement
+of quantization alone.

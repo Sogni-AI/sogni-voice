@@ -17,7 +17,7 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 | Qwen3-TTS | Jan 21-22, 2026 | ~8 days after Pocket |
 | MOSS-TTS-Nano | Apr 10, 2026 | 100M multilingual reference-voice model |
 | MOSS Transcribe-Diarize | Jul 9, 2026 | 0.9B one-pass ASR + diarization model |
-| Fish Drama 3 | Oct 13, 2026 | 35B MoE (3B active); runs here through our MLX port, [drama3-mlx](https://github.com/Sogni-AI/drama3-mlx) |
+| Fish Drama 3 | Oct 13, 2026 | Original release and pruned NVFP4; MLX on Mac, vLLM-Omni or TensorFold on NVIDIA. [Setup](docs/fish-drama3.md) |
 
 ### Licensing
 
@@ -1160,8 +1160,8 @@ curl -X DELETE http://localhost:3000/moss-tts/voices/clone/narrator \
 
 ### Fish Drama 3 Endpoints (experimental)
 
-Enabled with `DRAMA3_TTS_ENABLED=1` (`./setup.sh` → **Fish Drama 3** installs it and downloads
-the 41.5 GB release). Same shape as the Fish S2 routes, under `/drama3-tts`, sharing Fish S2's
+Enabled with `DRAMA3_TTS_ENABLED=1` (`./setup.sh` → **Fish Drama 3** offers the original
+41.5 GB release or the 20.76 GiB pruned NVFP4 checkpoint). Same shape as the Fish S2 routes, under `/drama3-tts`, sharing Fish S2's
 voice clones. Full details: [docs/fish-drama3.md](docs/fish-drama3.md).
 
 ```bash

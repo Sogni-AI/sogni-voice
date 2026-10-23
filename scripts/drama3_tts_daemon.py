@@ -74,6 +74,13 @@ class Drama3TTSDaemon(FishTTSDaemon):
             self._np, self._sf = np, sf
             started = time.perf_counter()
             self.model = Drama3.load(MODEL_PATH, experts=EXPERTS)
+            # The NVFP4 author's clone recipe uses guidance 1.5. Preserve the
+            # original release's unguided default; neither changes a request
+            # without reference audio.
+            self.cfg_gamma = float(os.environ.get(
+                "DRAMA3_TTS_CFG_GAMMA",
+                "1.5" if self.model.model.expert_format == "nvfp4" else "1.0",
+            ))
             # The base class treats a non-None server as "model loaded".
             self.server = self.model
             self.sample_rate = self.model.sample_rate
@@ -112,6 +119,7 @@ class Drama3TTSDaemon(FishTTSDaemon):
             "top_p": DEFAULT_TOP_P,
             "accept": accept,
             "attempts": ATTEMPTS,
+            "cfg_gamma": self.cfg_gamma,
         }
         started = time.perf_counter()
         try:

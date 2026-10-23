@@ -448,7 +448,7 @@ select_tts_engines() {
         "Qwen3-TTS (MLX, 10 languages, cloning, style control, voice design)"
         "MOSS-TTS-Nano (100M, multilingual reference voices, MLX, 48 kHz)"
         "Fish S2 Pro (8-bit MLX, expressive inline emotion + voice cloning) - Non-commercial, ~6.7GB"
-        "Fish Drama 3 (35B MoE via drama3-mlx, directed multi-character + cloning) - 64GB+ Mac, ~41.5GB"
+        "Fish Drama 3 (MLX, directed multi-character + cloning) - original or pruned NVFP4, 64GB+ Mac"
     )
 
     # Get selections via global MENU_RESULT (Pocket=yes; others disabled by default)
@@ -461,6 +461,17 @@ select_tts_engines() {
     ENABLE_MOSS=${tts_selected[3]}
     ENABLE_FISH=${tts_selected[4]}
     ENABLE_DRAMA3=${tts_selected[5]}
+
+    if [ "$ENABLE_DRAMA3" = "1" ]; then
+        show_radio_menu "Select Fish Drama 3 checkpoint" 0 \
+            "Original release (~41.5 GB download; q8/q4 experts selected from Mac memory)" \
+            "Pruned NVFP4 (~21 GiB download; native packed experts, clone guidance 1.5)"
+        if [ "$MENU_RESULT" = "1" ]; then
+            DRAMA3_CHECKPOINT="drama-3-NVFP4-Pruned"
+        else
+            DRAMA3_CHECKPOINT="drama-3"
+        fi
+    fi
 
     # Qwen uses separate daemons for cloning, styled voices, and voice design.
     # Select a paired Base/CustomVoice profile; VoiceDesign remains a lazy model.
@@ -673,7 +684,12 @@ configure_environment() {
     if [ "$ENABLE_DRAMA3" = "1" ]; then
         upsert_env_key "DRAMA3_TTS_ENABLED" "1"
         upsert_env_key "DRAMA3_TTS_PYTHON_PATH" "./.venv-drama3/bin/python3"
-        upsert_env_key "DRAMA3_TTS_MODEL_PATH" "./checkpoints/drama-3"
+        upsert_env_key "DRAMA3_TTS_MODEL_PATH" "./checkpoints/$DRAMA3_CHECKPOINT"
+        if [ "$DRAMA3_CHECKPOINT" = "drama-3-NVFP4-Pruned" ]; then
+            upsert_env_key "DRAMA3_TTS_MODEL_ID" "drama-3-nvfp4-pruned"
+        else
+            upsert_env_key "DRAMA3_TTS_MODEL_ID" "fish-drama-3"
+        fi
         # 8-bit experts peak near 52 GB; below 96 GB of memory use 4-bit (~32 GB).
         local memory_gb=$(( $(sysctl -n hw.memsize) / 1073741824 ))
         if [ "$memory_gb" -ge 96 ]; then
@@ -1033,9 +1049,15 @@ install_dependencies() {
         fi
         print_info "Installing drama3-mlx..."
         uv pip install --python .venv-drama3/bin/python \
-            "git+https://github.com/Sogni-AI/drama3-mlx@v0.1.1"
+            "git+https://github.com/Sogni-AI/drama3-mlx@7f72841355aeeb351efb47a12837bad99458bcac"
 
-        if [ ! -f checkpoints/drama-3/model-00008-of-00008.safetensors ]; then
+        if [ "$DRAMA3_CHECKPOINT" = "drama-3-NVFP4-Pruned" ]; then
+            print_info "Downloading pinned pruned NVFP4 Drama 3 (~21 GiB)..."
+            .venv-drama3/bin/hf download plotarmordev/drama-3-NVFP4-Pruned \
+                --revision 494db08481db952f834b2241bce63fb3dfa72554 \
+                --local-dir checkpoints/drama-3-NVFP4-Pruned
+            (cd checkpoints/drama-3-NVFP4-Pruned && shasum -a 256 -c MANIFEST.sha256)
+        elif [ ! -f checkpoints/drama-3/model-00008-of-00008.safetensors ]; then
             print_warning "Downloading Fish Drama 3 (~41.5 GB) — this can take a while."
             mkdir -p checkpoints
             .venv-drama3/bin/hf download fishaudio/drama-3 \

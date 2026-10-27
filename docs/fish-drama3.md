@@ -158,6 +158,10 @@ TensorFold currently accepts only speaker 0, uses fixed temperature 1.0/top-p
 0.9/top-k 30, and configures the audio-frame limit at server startup. Its responses
 expose `X-Finish-Reason` (`stop`, `length` or `silence`); a playable WAV can still
 be incomplete. The demo retains that audio and shows a warning.
+The NVIDIA overlay sends whole replies to TensorFold, uses a 4,096-frame budget,
+and keeps up to 2,400 characters in one generation. Its onset/mid-silence checks
+can redraw a failed take twice with a new seed. Clients should deliver only
+`X-Finish-Reason: stop`; see the NVIDIA guide for deadlines and longer scripts.
 
 The author's measurements cover English on GB10. Pruning may affect other
 languages, unusual voices and expressive directions differently; verify those

@@ -27,10 +27,22 @@ services:
       - --keep-warm
       - "0"
       - --max-frames
-      - "1024"
+      - "4096"
+      - --long-form
+      - --long-form-chars
+      - "2400"
       - --cfg-gamma
       - "1.5"
       - --cfg-batched
+      - --silence-onset-s
+      - "3.0"
+      - --silence-mid-s
+      - "3"
+      - --silence-redraws
+      - "2"
+      - --silence-redraw-plain
+      - --silence-redraw-plain-scope
+      - controls
     environment:
       TENSORFOLD_SEED_SALT: "0"
   api:

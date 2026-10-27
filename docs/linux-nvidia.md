@@ -190,16 +190,27 @@ TensorFold's pinned HTTP contract has these differences:
 - Only speaker `0` is supported; multi-speaker requests are rejected.
 - Sampling is fixed in the engine at temperature `1.0`, top-p `0.9`, top-k `30`.
   Other request temperatures and per-request `maxTokens` are rejected. The
-  overlay sets a maximum of 1,024 frames per chunk (about 47.55 seconds).
+  overlay sets a maximum of 4,096 frames per generation (about 190 seconds).
 - Seed salt is server-wide (`TENSORFOLD_SEED_SALT=0` in the overlay), with each
   request's seed derived from its prompt. It is not a per-request API seed.
-- Long texts retain this API's existing approximately 300-byte chunks. Each
-  chunk receives the same original clone reference. No automatic client retry
-  is used: replaying the same prompt and salt would produce the same take.
+- The adapter sends the whole reply in one request, with whitespace collapsed.
+  TensorFold long-form mode keeps up to 2,400 characters in one generation;
+  longer scripts use the engine's own sentence segmentation and audio history.
+  It receives the original clone reference. There is no client synthesis retry:
+  replaying the same prompt and salt would produce the same take.
+- Following [Undertone](https://github.com/plotarmordev/undertone), the overlay
+  enables 3-second onset/mid-silence detection and up to two seeded server
+  redraws, with delivery controls removed on redraw. The adapter sends a
+  deadline of 20 + 0.15 seconds per character, capped at its HTTP timeout minus
+  3 seconds (597 seconds by default); the engine also applies its own redraw
+  budget. Reference guidance stays at 1.5. The voice-specific short-reply and
+  high-register thresholds are not enabled without calibration. General API
+  users retain the full delivery-control vocabulary.
 - The server's `X-Finish-Reason` is forwarded on WAV/Opus replies; buffer JSON
   includes `finishReason` and `complete`. A capped or stalled take is preserved
-  with `complete: false`. The existing two-second silence check marks a stall
-  once, without retrying the same deterministic request. The author measured guidance with a reference;
+  with `complete: false`. Clients must check for `stop` before delivering audio.
+  Engine silence verdicts are authoritative; a recovered pause in a completed
+  take is available for client-side pacing. The author measured guidance with a reference;
   built-in voice requests remain unguided even when the gamma header says 1.5.
 
 Qualify one author-example canary before comparing a larger set. Compare exact

@@ -18,7 +18,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import numpy as np
 import soundfile as sf
 options = json.loads(sys.stdin.read())
-requests, encodes = [], []
+requests, encodes, deadlines = [], [], []
 audio = io.BytesIO()
 samples = np.concatenate([np.zeros(int(options.get("silence", 0) * 44100)), np.full(44100, 0.1)])
 sf.write(audio, samples, 44100, format="WAV", subtype="PCM_16")
@@ -37,6 +37,7 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self):
         payload = json.loads(self.rfile.read(int(self.headers["Content-Length"])))
         requests.append(payload)
+        deadlines.append(self.headers.get("X-Deadline-S"))
         allowed = {"model", "input", "voice", "response_format", "references"}
         if set(payload) - allowed: self.send(400, b'unsupported field', 'text/plain')
         elif options.get("http_error"): self.send(options["http_error"], b'fixture rejected request', 'text/plain')
@@ -75,7 +76,7 @@ with tempfile.TemporaryDirectory() as directory:
             results.append(daemon.generate(*args))
         else:
             results.append(daemon.generate_with_clone(args[0], "Marvin", *args[1:]))
-    print(json.dumps({"requests": requests, "encodes": encodes, "results": results,
+    print(json.dumps({"requests": requests, "encodes": encodes, "results": results, "deadlines": deadlines,
                       "duration": sf.info(output).duration if output.exists() else None,
                       "features": daemon.FEATURES, "original_wav_preserved": reference.read_bytes() == wav}))
 `;
@@ -123,9 +124,11 @@ describe('Drama 3 TensorFold HTTP adapter', () => {
     }
   });
 
-  itWithPython('keeps the same reference across chunks and reports a frame-cap finish without retrying', () => {
+  itWithPython('sends a whole reply once with a redraw deadline and reports a frame-cap finish without retrying', () => {
     const result = runHarness({ text: 'This sentence fills a longer passage. '.repeat(12), finish: 'length' });
-    expect(result.requests.length).toBeGreaterThan(1);
+    expect(result.requests).toHaveLength(1);
+    expect(result.requests[0].input).toBe('This sentence fills a longer passage. '.repeat(12).trim());
+    expect(Number(result.deadlines[0])).toBeCloseTo(20 + 0.15 * result.requests[0].input.length);
     expect(result.encodes).toHaveLength(1);
     for (const request of result.requests) expect(request.references).toEqual(result.requests[0].references);
     expect(result.duration).toBe(result.requests.length);
@@ -141,10 +144,16 @@ describe('Drama 3 TensorFold HTTP adapter', () => {
     }
   });
 
-  itWithPython('marks a stalled take incomplete once without deterministic retries', () => {
-    const result = runHarness({ silence: 2.5 });
+  itWithPython('passes the engine silence verdict through once without deterministic retries', () => {
+    const result = runHarness({ silence: 2.5, finish: 'silence' });
     expect(result.requests).toHaveLength(1);
     expect(result.results[0]).toMatchObject({ success: true, finish_reason: 'silence' });
     expect(result.duration).toBe(3.5);
+  });
+
+  itWithPython('preserves a completed take with a recovered pause for client pacing', () => {
+    const result = runHarness({ silence: 2.5, finish: 'stop' });
+    expect(result.requests).toHaveLength(1);
+    expect(result.results[0]).toMatchObject({ success: true, finish_reason: 'stop' });
   });
 });

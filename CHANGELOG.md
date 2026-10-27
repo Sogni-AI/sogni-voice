@@ -1,5 +1,12 @@
 # Changelog
 
+## 2026-10-27
+
+- Preserve continuous Drama 3 TensorFold replies through 2,400 characters and
+  use engine-managed segmentation for longer scripts. Increase the generation
+  budget to 4,096 frames and enable bounded, seeded silence redraws with a client
+  deadline. Preserve completion metadata so clients can withhold unfinished takes.
+
 ## 2026-10-23
 
 - Support the pruned Drama 3 NVFP4 checkpoint through native MLX on Apple Silicon

@@ -19,8 +19,8 @@ import time
 import urllib.error
 import urllib.request
 
-from drama3_text import InvalidInputError, split_text, validate_text
-from drama3_tts_daemon import Drama3TTSDaemon, STALL_SECONDS, longest_silence
+from drama3_text import InvalidInputError, validate_text
+from drama3_tts_daemon import Drama3TTSDaemon
 from fish_omni_daemon import OmniBackendMixin, OmniClient, REQUEST_TIMEOUT_SECONDS
 from fish_tts_daemon import _log
 
@@ -55,11 +55,19 @@ class TensorFoldClient(OmniClient):
         }
         request = urllib.request.Request(
             f"{self.url}/v1/audio/speech", data=json.dumps(payload).encode(),
-            headers={"Content-Type": "application/json"},
+            # Let the engine budget its own seeded redraws. The HTTP timeout
+            # remains 600 s for longer API scripts; reserve 3 s for WAV output.
+            headers={"Content-Type": "application/json",
+                     "X-Deadline-S": str(min(REQUEST_TIMEOUT_SECONDS - 3, 20 + 0.15 * len(text)))},
         )
         try:
             with urllib.request.urlopen(request, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-                return response.read(), response.headers.get("X-Finish-Reason", "unknown")
+                audio = response.read()
+                reason = response.headers.get("X-Finish-Reason", "unknown")
+                _log(f"TensorFold finish={reason}, silence_redraws="
+                     f"{response.headers.get('X-Silence-Redraws', 'off')}, mid_trips="
+                     f"{response.headers.get('X-Silence-Mid-Trips', 'off')}")
+                return audio, reason
         except urllib.error.HTTPError as error:
             detail = error.read().decode("utf-8", "replace")[:500]
             if error.code == 400:
@@ -82,30 +90,21 @@ class TensorFoldDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
             validate_text(text)
             if any(speaker != "0" for speaker in re.findall(r"<\|speaker:(\d+)\|>", text)):
                 raise InvalidInputError("TensorFold supports only <|speaker:0|>")
-            chunks = split_text(text)
+            # TensorFold's long-form mode owns segmentation and reference
+            # continuity. The vLLM 300-byte splitter restarted prosody here.
+            text = " ".join(text.split())
             started = time.perf_counter()
-            rendered = []
-            reasons = []
-            for chunk in chunks:
-                wav, reason = self.model.speech_wav(chunk, references)
-                audio, sample_rate = self._sf.read(io.BytesIO(wav), dtype="float32", always_2d=True)
-                if sample_rate != self.sample_rate:
-                    raise RuntimeError(f"Expected {self.sample_rate} Hz audio, received {sample_rate} Hz")
-                mono = audio.mean(axis=1)
-                # The existing Drama 3 stall check still applies. TensorFold's
-                # prompt-derived seed makes a repeated request identical, so
-                # keep the take and report the stall instead of retrying it.
-                if reason == "stop" and longest_silence(mono, self.sample_rate) >= STALL_SECONDS:
-                    reason = "silence"
-                rendered.append(mono)
-                reasons.append(reason)
-                if reason != "stop":
-                    _log(f"TensorFold chunk finished with {reason}: {chunk[:60]!r}")
-            duration = self._write_wav(self._np.concatenate(rendered), output_path)
+            wav, reason = self.model.speech_wav(text, references)
+            audio, sample_rate = self._sf.read(io.BytesIO(wav), dtype="float32", always_2d=True)
+            if sample_rate != self.sample_rate:
+                raise RuntimeError(f"Expected {self.sample_rate} Hz audio, received {sample_rate} Hz")
+            # The engine's onset/mid-silence guards run before its seeded
+            # redraws. A recovered pause in a completed take is not a stall.
+            duration = self._write_wav(audio.mean(axis=1), output_path)
             elapsed = time.perf_counter() - started
             return {"success": True, "output_path": output_path, "duration": duration,
                     "rtf": elapsed / duration if duration else None,
-                    "finish_reason": next((reason for reason in reasons if reason != "stop"), "stop")}
+                    "finish_reason": reason}
         except InvalidInputError as error:
             return {"success": False, "error": f"invalid input: {error}"}
 

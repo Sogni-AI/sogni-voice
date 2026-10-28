@@ -6,6 +6,7 @@ import { open, stat } from 'node:fs/promises';
 import { config } from '../config/index.js';
 import { transcriptionService } from '../services/transcription.js';
 import { qwenAsrService } from '../services/qwenAsr.js';
+import { nemotronService } from '../services/nemotron.js';
 import { mossTranscribeDiarizeService } from '../services/mossTranscribeDiarize.js';
 import { diarizationService } from '../services/diarization.js';
 import { tempFileManager } from '../utils/tempFile.js';
@@ -42,6 +43,25 @@ export const transcribeRoutes = [
     handler: async () => ({
       default: 'parakeet',
       models: [
+        {
+          id: 'nemotron',
+          name: 'NVIDIA Nemotron 3.5 Transcribe 30B-A4B',
+          enabled: Boolean(config.nemotron?.enabled),
+          model: config.nemotron?.modelId,
+          revision: config.nemotron?.modelRevision,
+          backend: config.nemotron?.backend,
+          languages: ['Arabic', 'Bengali', 'Bulgarian', 'Chinese', 'Croatian', 'Czech',
+            'Danish', 'Dutch', 'English', 'Estonian', 'Finnish', 'French', 'German',
+            'Greek', 'Hebrew', 'Hindi', 'Hungarian', 'Indonesian', 'Italian', 'Japanese',
+            'Korean', 'Latvian', 'Lithuanian', 'Maltese', 'Marathi', 'Polish', 'Portuguese',
+            'Romanian', 'Russian', 'Slovak', 'Slovenian', 'Spanish', 'Swedish', 'Tagalog',
+            'Tamil', 'Telugu', 'Thai', 'Turkish', 'Ukrainian', 'Vietnamese'],
+          timestamps: config.nemotron?.backend === 'vllm' ? ['sentence', 'word'] : [],
+          diarization: 'built-in',
+          maxAudioSeconds: 3600,
+          realtime: { enabled: false },
+          description: 'Multilingual transcription with vocabulary hints and optional speaker labels.',
+        },
         {
           id: 'parakeet',
           name: 'Parakeet TDT v3',
@@ -108,7 +128,7 @@ export const transcribeRoutes = [
       validate: {
         payload: Joi.object({
           file: Joi.any().required().description('Audio file to transcribe'),
-          engine: Joi.string().valid('parakeet', 'qwen3', 'moss-td').optional()
+          engine: Joi.string().valid('parakeet', 'qwen3', 'moss-td', 'nemotron').optional()
             .description('Speech recognition provider (default: parakeet)'),
           language: Joi.string().valid('auto', ...QWEN_ASR_LANGUAGES, ...QWEN_ASR_LANGUAGE_CODES)
             .insensitive().optional()
@@ -126,11 +146,11 @@ export const transcribeRoutes = [
           maxSpeakers: Joi.string().pattern(/^\d+$/).optional()
             .description('Upper bound on speaker count (1-20)'),
           prompt: Joi.string().trim().max(2000).optional()
-            .description('MOSS Transcribe-Diarize instruction override'),
+            .description('MOSS or Nemotron instruction override'),
           hotwords: Joi.string().trim().max(1000).optional()
-            .description('Comma-separated MOSS Transcribe-Diarize hotword hints'),
+            .description('Comma-separated MOSS or Nemotron vocabulary hints'),
           maxNewTokens: Joi.string().pattern(/^\d+$/).optional()
-            .description('MOSS Transcribe-Diarize generation limit (64-65536)'),
+            .description('MOSS or Nemotron generation limit (64-65536)'),
         }),
       },
       description: 'Transcribe an audio file to text',
@@ -164,14 +184,17 @@ export const transcribeRoutes = [
         if (engine === 'moss-td' && !mossTdConfig.enabled) {
           throw Boom.serviceUnavailable('MOSS Transcribe-Diarize is disabled');
         }
+        if (engine === 'nemotron' && !config.nemotron?.enabled) {
+          throw Boom.serverUnavailable('Nemotron transcription is disabled');
+        }
         const timestamps = timestampsParam === 'true';
         const wordTimestamps = wordTimestampsParam === 'true';
         // Default diarize=true when the server can actually do it. Avoids noisy
         // `diarization: {available: false}` on responses from servers that never
         // opted into diarization, preserving backward compat for those clients.
-        const usesBuiltInDiarization = engine === 'moss-td';
+        const usesBuiltInDiarization = engine === 'moss-td' || engine === 'nemotron';
         const diarizeAvailable = usesBuiltInDiarization || config.diarization.enabled;
-        const diarizeRequested = usesBuiltInDiarization || (diarizeParam == null
+        const diarizeRequested = engine === 'moss-td' || (diarizeParam == null
           ? diarizeAvailable
           : diarizeParam === 'true');
 
@@ -188,7 +211,20 @@ export const transcribeRoutes = [
           ? undefined
           : parseInt(maxNewTokensParam, 10);
 
-        if (engine === 'moss-td') {
+        if (engine === 'nemotron') {
+          if (config.nemotron.backend === 'mlx' && (timestamps || wordTimestamps)) {
+            throw Boom.badRequest('Nemotron MLX supports text and speaker labels without timestamps');
+          }
+          if (languageParam != null && languageParam.toLowerCase() !== 'auto') {
+            throw Boom.badRequest('Nemotron detects the spoken language; use prompt for language instructions');
+          }
+          if (numSpeakersParam != null || minSpeakersParam != null || maxSpeakersParam != null) {
+            throw Boom.badRequest('Nemotron does not accept speaker-count constraints');
+          }
+          if (maxNewTokens != null && (maxNewTokens < 64 || maxNewTokens > 65536)) {
+            throw Boom.badRequest('maxNewTokens must be between 64 and 65536');
+          }
+        } else if (engine === 'moss-td') {
           if (wordTimestamps) {
             throw Boom.badRequest(
               'MOSS Transcribe-Diarize provides segment timestamps, not word timestamps',
@@ -209,7 +245,7 @@ export const transcribeRoutes = [
           }
         } else if (prompt != null || hotwords != null || maxNewTokensParam != null) {
           throw Boom.badRequest(
-            'prompt, hotwords, and maxNewTokens are only supported by MOSS Transcribe-Diarize',
+            'prompt, hotwords, and maxNewTokens are only supported by MOSS Transcribe-Diarize and Nemotron',
           );
         }
 
@@ -255,6 +291,8 @@ export const transcribeRoutes = [
 
         const selectedService = engine === 'qwen3'
           ? qwenAsrService
+          : engine === 'nemotron'
+            ? nemotronService
           : engine === 'moss-td'
             ? mossTranscribeDiarizeService
             : transcriptionService;
@@ -264,6 +302,7 @@ export const transcribeRoutes = [
             wordTimestamps,
             ...(engine === 'qwen3' ? { language: languageParam || 'auto' } : {}),
             ...(engine === 'moss-td' ? { prompt, hotwords, maxNewTokens } : {}),
+            ...(engine === 'nemotron' ? { prompt, hotwords, maxNewTokens, diarize: diarizeRequested } : {}),
           }),
           wantDiarize
             ? diarizationService.diarize(tempFilePath, { numSpeakers, minSpeakers, maxSpeakers })
@@ -275,7 +314,34 @@ export const transcribeRoutes = [
         }
         const result = transcribeOutcome.value;
 
-        if (usesBuiltInDiarization) {
+        if (engine === 'nemotron') {
+          return {
+            success: true,
+            transcript: result.text,
+            filename: sanitizeEchoFilename(filename),
+            engine,
+            model: result.model,
+            revision: result.revision,
+            backend: result.backend,
+            finishReason: result.finishReason,
+            complete: result.complete,
+            segments: result.segments,
+            ...(result.timestamps ? {
+              timestamps: result.timestamps,
+              timestampLevel: result.timestampLevel,
+            } : {}),
+            ...(diarizeRequested ? {
+              diarization: {
+                available: true,
+                builtIn: true,
+                numSpeakers: new Set(result.segments.map((segment) => segment.speaker)).size,
+              },
+            } : {}),
+            metrics: result.metrics,
+          };
+        }
+
+        if (engine === 'moss-td') {
           const segments = result.timestamps || [];
           return {
             success: true,

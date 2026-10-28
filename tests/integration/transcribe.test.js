@@ -9,6 +9,7 @@ const mockTranscribe = vi.hoisted(() => vi.fn());
 const mockQwenTranscribe = vi.hoisted(() => vi.fn());
 const mockQwenAlign = vi.hoisted(() => vi.fn());
 const mockMossTdTranscribe = vi.hoisted(() => vi.fn());
+const mockNemotronTranscribe = vi.hoisted(() => vi.fn());
 const mockDiarize = vi.hoisted(() => vi.fn());
 
 // Mock config using environment variables
@@ -51,6 +52,12 @@ vi.mock('../../src/config/index.js', () => ({
       timeout: 300000,
       daemonStartupTimeout: 300000,
       preWarmDaemon: false,
+    },
+    nemotron: {
+      enabled: true,
+      backend: 'vllm',
+      modelId: 'nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B',
+      modelRevision: 'nemotron-revision',
     },
     mossTranscribeDiarize: {
       enabled: true,
@@ -120,6 +127,11 @@ vi.mock('../../src/services/mossTranscribeDiarize.js', () => ({
   },
 }));
 
+// Mock Nemotron's independent runtime
+vi.mock('../../src/services/nemotron.js', () => ({
+  nemotronService: { transcribe: mockNemotronTranscribe },
+}));
+
 // Mock the diarization service
 vi.mock('../../src/services/diarization.js', () => ({
   diarizationService: {
@@ -129,6 +141,7 @@ vi.mock('../../src/services/diarization.js', () => ({
 }));
 
 import { initServer } from '../../src/server.js';
+import { config } from '../../src/config/index.js';
 
 describe('POST /transcribe', () => {
   let server;
@@ -142,6 +155,19 @@ describe('POST /transcribe', () => {
     mockQwenTranscribe.mockReset();
     mockQwenAlign.mockReset();
     mockMossTdTranscribe.mockReset();
+    mockNemotronTranscribe.mockReset();
+    config.nemotron.enabled = true;
+    config.nemotron.backend = 'vllm';
+    mockNemotronTranscribe.mockResolvedValue({
+      text: '<spk:0> Hello.',
+      model: config.nemotron.modelId,
+      revision: config.nemotron.modelRevision,
+      backend: 'vllm',
+      segments: [{ speaker: 'S01', text: 'Hello.' }],
+      complete: true,
+      finishReason: 'stop',
+      metrics: { audioSeconds: 1.0, elapsedSeconds: 0.5 },
+    });
     mockDiarize.mockReset();
     // Default mock implementation
     mockTranscribe.mockResolvedValue({
@@ -184,6 +210,77 @@ describe('POST /transcribe', () => {
     if (server) {
       await server.stop();
     }
+  });
+
+  function requestNemotron(fields = {}) {
+    const boundary = 'nemotron-test-boundary';
+    const values = { engine: 'nemotron', ...fields };
+    const body = Object.entries(values).map(([name, value]) => (
+      `--${boundary}\r\nContent-Disposition: form-data; name="${name}"\r\n\r\n${value}\r\n`
+    )).join('')
+      + `--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="speech.wav"\r\n`
+      + 'Content-Type: audio/wav\r\n\r\nRIFF0000WAVEfmt 0000\r\n'
+      + `--${boundary}--\r\n`;
+    return server.inject({
+      method: 'POST', url: '/transcribe',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+  }
+
+  it('routes Nemotron with native speaker labels without calling pyannote', async () => {
+    const response = await requestNemotron({ diarize: 'true', hotwords: 'Sogni' });
+    expect(response.statusCode).toBe(200);
+    expect(response.result).toMatchObject({
+      engine: 'nemotron', complete: true, finishReason: 'stop',
+      segments: [{ speaker: 'S01', text: 'Hello.' }],
+      diarization: { available: true, builtIn: true, numSpeakers: 1 },
+    });
+    expect(response.result).not.toHaveProperty('timestamps');
+    expect(mockNemotronTranscribe).toHaveBeenCalledWith(expect.any(String), {
+      timestamps: false, wordTimestamps: false, diarize: true,
+      hotwords: 'Sogni', prompt: undefined, maxNewTokens: undefined,
+    });
+    expect(mockDiarize).not.toHaveBeenCalled();
+    expect(mockTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('preserves Nemotron word timings and incomplete output metadata', async () => {
+    mockNemotronTranscribe.mockResolvedValue({
+      text: 'Hello', segments: [], complete: false, finishReason: 'length',
+      timestampLevel: 'word', timestamps: [{ text: 'Hello', start: 0.1, end: 0.5 }],
+    });
+    const response = await requestNemotron({ wordTimestamps: 'true', diarize: 'false' });
+    expect(response.statusCode).toBe(200);
+    expect(response.result).toMatchObject({
+      transcript: 'Hello', complete: false, finishReason: 'length', timestampLevel: 'word',
+      timestamps: [{ text: 'Hello', start: 0.1, end: 0.5 }],
+    });
+    expect(response.result).not.toHaveProperty('diarization');
+  });
+
+  it('advertises Mac capabilities and rejects unsupported timestamps before inference', async () => {
+    config.nemotron.backend = 'mlx';
+    const models = await server.inject('/transcription/models');
+    expect(models.result.models.find((model) => model.id === 'nemotron')).toMatchObject({
+      enabled: true, backend: 'mlx', timestamps: [], diarization: 'built-in',
+      maxAudioSeconds: 3600, realtime: { enabled: false },
+    });
+    const response = await requestNemotron({ timestamps: 'true' });
+    expect(response.statusCode).toBe(400);
+    expect(mockNemotronTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('rejects Nemotron speaker-count constraints and oversized token limits', async () => {
+    expect((await requestNemotron({ numSpeakers: '2' })).statusCode).toBe(400);
+    expect((await requestNemotron({ maxNewTokens: '65537' })).statusCode).toBe(400);
+    expect(mockNemotronTranscribe).not.toHaveBeenCalled();
+  });
+
+  it('reports Nemotron disabled without starting its runtime', async () => {
+    config.nemotron.enabled = false;
+    expect((await requestNemotron()).statusCode).toBe(503);
+    expect(mockNemotronTranscribe).not.toHaveBeenCalled();
   });
 
   it('should transcribe an uploaded audio file', async () => {

@@ -283,9 +283,9 @@ with open('output.wav', 'wb') as f:
 
   <!-- Transcription Section -->
   <details class="section">
-    <summary><h2>1. STT - Parakeet, Qwen3-ASR, MOSS Transcribe-Diarize</h2></summary>
+    <summary><h2>1. STT - Parakeet, Nemotron 3.5, Qwen3-ASR, MOSS Transcribe-Diarize</h2></summary>
     <div class="section-content">
-    <p>Upload an audio file and receive a text transcript, or stream a microphone to Parakeet for interim and final events. Parakeet is the fast default; Qwen3-ASR adds multilingual recognition and alignment; experimental MOSS Transcribe-Diarize jointly emits English/Chinese text, speakers, and segment timestamps.</p>
+    <p>Upload an audio file and receive a text transcript, or stream a microphone to Parakeet for interim and final events. Parakeet is the fast default; Nemotron 3.5 adds 40-language recognition and native speaker labels; Qwen3-ASR adds multilingual recognition and alignment; experimental MOSS Transcribe-Diarize jointly emits English/Chinese text, speakers, and segment timestamps.</p>
 
     <div class="endpoint">
       <span class="method get">GET</span> /transcription/models
@@ -351,45 +351,45 @@ with open('output.wav', 'wb') as f:
       <tr>
         <td><code>engine</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td><code>parakeet</code> (default), <code>qwen3</code>, or experimental <code>moss-td</code></td>
+        <td><code>parakeet</code> (default), <code>nemotron</code>, <code>qwen3</code>, or experimental <code>moss-td</code></td>
       </tr>
       <tr>
         <td><code>language</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Qwen3-ASR language name/code or <code>auto</code> (default). Not accepted by <code>moss-td</code>, which handles English/Chinese automatically.</td>
+        <td>Qwen3-ASR language name/code or <code>auto</code> (default). Nemotron automatically detects language and accepts only <code>auto</code>. Not accepted by <code>moss-td</code>, which handles English/Chinese automatically.</td>
       </tr>
       <tr>
         <td><code>timestamps</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to include sentence-level timings with start/end times for each segment</td>
+        <td>Set to "true" to include sentence-level timings with start/end times for each segment. Nemotron timings require an NVIDIA worker.</td>
       </tr>
       <tr>
         <td><code>wordTimestamps</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to include word-level timings (overrides timestamps). Not supported by <code>moss-td</code>.</td>
+        <td>Set to "true" to include word-level timings (overrides timestamps). Not supported by <code>moss-td</code> or Nemotron on Mac.</td>
       </tr>
       <tr>
         <td><code>diarize</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Set to "true" to identify speakers with pyannote Community-1. MOSS always performs built-in diarization instead.</td>
+        <td>Set to "true" to identify speakers with pyannote Community-1. Nemotron uses native speaker tags (defaults to true; false gives plain text). MOSS always performs built-in diarization instead.</td>
       </tr>
       <tr>
         <td><code>numSpeakers</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Exact speaker count from 1-20. Overrides the minimum and maximum.</td>
+        <td>Exact speaker count from 1-20. Overrides the minimum and maximum. Not supported by Nemotron or MOSS.</td>
       </tr>
       <tr>
         <td><code>minSpeakers</code> / <code>maxSpeakers</code> <span class="optional">(optional)</span></td>
         <td>string</td>
-        <td>Expected speaker-count range from 1-20.</td>
+        <td>Expected speaker-count range from 1-20. Not supported by Nemotron or MOSS.</td>
       </tr>
       <tr>
-        <td><code>hotwords</code> / <code>prompt</code> <span class="optional">(MOSS only)</span></td>
+        <td><code>hotwords</code> / <code>prompt</code> <span class="optional">(MOSS or Nemotron)</span></td>
         <td>string</td>
-        <td>Optional vocabulary hints or a custom transcription instruction for <code>moss-td</code>.</td>
+        <td>Optional vocabulary hints (1,000 characters) or a custom instruction (2,000 characters).</td>
       </tr>
       <tr>
-        <td><code>maxNewTokens</code> <span class="optional">(MOSS only)</span></td>
+        <td><code>maxNewTokens</code> <span class="optional">(MOSS or Nemotron)</span></td>
         <td>string</td>
         <td>Generation limit from 64-65536; raise it for long recordings.</td>
       </tr>
@@ -446,6 +446,15 @@ with open('output.wav', 'wb') as f:
     { "speaker": "SPEAKER_01", "segmentCount": 1, "totalSeconds": 1.3 }
   ]
 }</code></pre>
+
+    <h3>Nemotron 3.5 Transcribe</h3>
+    <p>Uses NVIDIA's final 30B-A4B checkpoint through native MLX on Apple Silicon or NeMo/vLLM on NVIDIA. Both support text and native speaker labels for recordings up to 60 minutes. NVIDIA workers also provide CTC word/sentence timings. Check <code>GET /transcription/models</code> for the worker's capabilities. The separate upload size limit still applies.</p>
+    <pre><code>curl https://voice.sogni.ai/transcribe \
+  -H "X-API-Key: $VOICE_API_KEY" \
+  -F file=@recording.wav -F engine=nemotron \
+  -F diarize=true -F wordTimestamps=true</code></pre>
+    <p>Responses include <code>backend</code>, pinned model <code>revision</code>, <code>segments</code> with speaker/text pairs, <code>finishReason</code>, <code>complete</code>, and processing <code>metrics</code>. Timing requests add <code>timestamps</code> and <code>timestampLevel</code>. Check <code>complete</code>: a token-capped response retains partial text with <code>finishReason: "length"</code>. Mac speaker turns have no fabricated times.</p>
+    <p>Use <code>hotwords</code> for names and vocabulary hints, or <code>prompt</code> for custom instructions. For translation or questions about audio, set <code>diarize=false</code> and omit timings. <a href="https://github.com/Sogni-AI/sogni-voice/blob/main/docs/nemotron.md">Setup, runtime pins, and memory requirements</a>.</p>
 
     <h3>Qwen3-ASR with word alignment</h3>
     <p>When Qwen3-ASR receives <code>timestamps=true</code> or <code>wordTimestamps=true</code>, the Qwen3 ForcedAligner generates the requested spans. Alignment supports audio up to 5 minutes in 11 languages.</p>

@@ -1,5 +1,16 @@
 # Changelog
 
+## 2026-10-28
+
+- Add NVIDIA Nemotron 3.5 Transcribe 30B-A4B to `/transcribe`, model discovery,
+  and the recording/upload playground. Support vocabulary hints, custom
+  instructions, native speaker labels, and explicit completion status.
+- Add native MLX inference on Apple Silicon and an isolated NeMo/vLLM runtime
+  on DGX Spark. NVIDIA supports sentence/word timestamps; the Mac selector
+  offers text and speaker labels without unsupported timing options.
+- Pin NVIDIA's final-release checkpoint and both runtime revisions. Add Mac
+  setup and a Docker Compose overlay that preserves the existing Fish engines.
+
 ## 2026-10-27
 
 - Preserve continuous Drama 3 TensorFold replies through 2,400 characters and

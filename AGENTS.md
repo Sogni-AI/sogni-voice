@@ -49,6 +49,10 @@ This is a Hapi.js REST API with ES modules (`"type": "module"`).
 - Auto-restart if daemon dies unexpectedly
 
 **Services**:
+- `nemotron.js` → `scripts/nemotron_daemon.py`: NVIDIA Nemotron 3.5 Transcribe 30B-A4B
+  - Pinned final NVIDIA checkpoint; native MLX in `.venv-nemotron` on Mac, isolated NeMo/vLLM on NVIDIA
+  - 40-language offline ASR, vocabulary hints and native speaker labels; CTC word/sentence timings on NVIDIA only
+  - Enabled by default; runtime and memory requirements in `docs/nemotron.md`, NVIDIA overlay `docker/nvidia/compose.nemotron.yaml`
 - `transcription.js` → `scripts/parakeet_daemon.py`: Uses Parakeet TDT (parakeet-mlx) for transcription
   - Supports sentence-level and word-level timestamp extraction
   - Pins `parakeet-mlx==0.5.2` and an immutable model revision

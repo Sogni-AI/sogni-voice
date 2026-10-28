@@ -1,0 +1,2 @@
+# Isolated native Apple Silicon runtime; do not upgrade other speech venvs.
+mlx-audio[stt] @ git+https://github.com/Blaizzy/mlx-audio.git@c1e429151c56ce4057c62709f958df998e301d3f

@@ -12,7 +12,7 @@
 # - Dependency installation
 #
 # Usage: ./setup.sh
-#        ./setup.sh --non-interactive  (localhost defaults: Pocket TTS + Parakeet, no auth)
+#        ./setup.sh --non-interactive  (localhost defaults: Pocket TTS + Parakeet + Nemotron, no auth)
 ################################################################################
 
 set -e  # Exit on error
@@ -413,7 +413,7 @@ select_tts_engines() {
     if [ "$NON_INTERACTIVE" = "1" ]; then
         # Localhost-safe defaults for automated setup:
         # - Pocket TTS only
-        # - Parakeet enabled
+        # - Parakeet and Nemotron enabled (Nemotron weights load on first use)
         # - No auth (configured in setup_api_key)
         ENABLE_POCKET=1
         ENABLE_KOKORO=0
@@ -424,6 +424,7 @@ select_tts_engines() {
         ENABLE_PARAKEET=1
         ENABLE_QWEN_ASR=0
         ENABLE_MOSS_TD=0
+        ENABLE_NEMOTRON=1
         ENABLE_DIARIZATION=0
         QWEN_BASE_VARIANT="base-0.6b"
         QWEN_CUSTOM_VARIANT="custom-voice"
@@ -436,6 +437,7 @@ select_tts_engines() {
         print_info "- MOSS-TTS-Nano: disabled"
         print_info "- Parakeet STT: enabled"
         print_info "- Qwen3-ASR: disabled"
+        print_info "- Nemotron 3.5: enabled (weights load on first use)"
         print_info "- MOSS Transcribe-Diarize: disabled (experimental)"
         print_info "- Speaker diarization: disabled (requires gated-model access)"
         return
@@ -513,18 +515,21 @@ select_tts_engines() {
         "Parakeet TDT v3 (fast batch + live WebSocket, 25 languages) - Recommended"
         "Qwen3-ASR 0.6B (30 languages, auto detection, forced alignment)"
         "MOSS Transcribe-Diarize 0.9B (English/Chinese, built-in speakers) - Experimental"
+        "Nemotron 3.5 Transcribe (40 languages, speakers; 68 GB download, native MLX)"
     )
 
-    show_checkbox_menu "Select Speech-to-Text Engines" "1 0 0" "${stt_options[@]}"
+    show_checkbox_menu "Select Speech-to-Text Engines" "1 0 0 1" "${stt_options[@]}"
     IFS=' ' read -ra stt_selected <<< "$MENU_RESULT"
     ENABLE_PARAKEET=${stt_selected[0]}
     ENABLE_QWEN_ASR=${stt_selected[1]}
     ENABLE_MOSS_TD=${stt_selected[2]}
+    ENABLE_NEMOTRON=${stt_selected[3]}
 
     [ "$ENABLE_PARAKEET" = "1" ] && print_success "Parakeet (batch + realtime STT) enabled"
     [ "$ENABLE_QWEN_ASR" = "1" ] && print_success "Qwen3-ASR + ForcedAligner enabled"
     [ "$ENABLE_MOSS_TD" = "1" ] && print_success "MOSS Transcribe-Diarize enabled (experimental)"
-    if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ] && [ "$ENABLE_MOSS_TD" != "1" ]; then
+    [ "$ENABLE_NEMOTRON" = "1" ] && print_success "Nemotron 3.5 Transcribe enabled"
+    if [ "$ENABLE_PARAKEET" != "1" ] && [ "$ENABLE_QWEN_ASR" != "1" ] && [ "$ENABLE_MOSS_TD" != "1" ] && [ "$ENABLE_NEMOTRON" != "1" ]; then
         print_warning "No speech-to-text engine selected; transcription will be unavailable."
     fi
 
@@ -582,6 +587,11 @@ select_tts_engines() {
     fi
     echo ""
     echo "Transcription:"
+    if [ "$ENABLE_NEMOTRON" = "1" ]; then
+        echo -e "  ${CHECK} Nemotron 3.5 Transcribe (MLX)"
+    else
+        echo -e "  ${CROSS} Nemotron 3.5 Transcribe (disabled)"
+    fi
     if [ "$ENABLE_PARAKEET" = "1" ]; then
         echo -e "  ${CHECK} Parakeet (batch + realtime STT)"
     else
@@ -719,6 +729,10 @@ configure_environment() {
     else
         upsert_env_key "QWEN_ASR_ENABLED" "0"
     fi
+
+    upsert_env_key "NEMOTRON_ENABLED" "$ENABLE_NEMOTRON"
+    upsert_env_key "NEMOTRON_BACKEND" "mlx"
+    upsert_env_key "NEMOTRON_PYTHON_PATH" "./.venv-nemotron/bin/python3"
 
     if [ "$ENABLE_MOSS_TD" = "1" ]; then
         upsert_env_key "MOSS_TD_ENABLED" "1"
@@ -948,6 +962,15 @@ install_dependencies() {
         uv pip install --python .venv-qwen-tts/bin/python "mlx-audio==0.4.5"
         uv pip check --python .venv-qwen-tts/bin/python
         print_success "Qwen3-TTS MLX environment is ready"
+    fi
+
+    if [ "$ENABLE_NEMOTRON" = "1" ]; then
+        if [ ! -d .venv-nemotron ]; then
+            uv venv --python 3.12 .venv-nemotron
+        fi
+        print_info "Installing pinned native MLX runtime for Nemotron 3.5..."
+        uv pip install --python .venv-nemotron/bin/python -r requirements-nemotron.txt
+        print_success "Nemotron runtime ready; the pinned 68 GB checkpoint loads on first use"
     fi
 
     # Qwen3-ASR needs the current MLX-Audio stack, while Kokoro intentionally

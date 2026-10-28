@@ -1,0 +1,54 @@
+# Add to the existing compose stack. Fish containers keep their current image.
+# Download the pinned final-release checkpoint first; see docs/nemotron.md.
+services:
+  nemotron:
+    image: sogni-voice-nemotron:20261028
+    build:
+      context: ../..
+      dockerfile: docker/nvidia/Dockerfile.nemotron
+    network_mode: host
+    ipc: host
+    gpus: all
+    restart: unless-stopped
+    command:
+      - vllm
+      - serve
+      - /models/nemotron-3.5-transcribe
+      - --host=127.0.0.1
+      - --port=8003
+      - --served-model-name=nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B
+      - --trust-remote-code
+      - --dtype=bfloat16
+      - --quantization=fp8_per_tensor
+      # vLLM still checks this at startup even with an explicit KV-cache size.
+      - --gpu-memory-utilization=0.40
+      - --kv-cache-memory-bytes=1073741824
+      - --max-model-len=65536
+      - --max-num-batched-tokens=4096
+      - --max-num-seqs=1
+      - --enable-chunked-prefill
+      - --no-enable-prefix-caching
+      - --use-replayssm
+      - --mamba-backend=flashinfer
+      - --mamba-cache-mode=none
+      - --mm-processor-cache-gb=0
+      - --no-async-scheduling
+      - '--limit-mm-per-prompt={"audio":{"count":1,"length":120000000}}'
+      - --reasoning-parser=nemotron_v3
+      - --trust-request-mm-kwargs
+      - --middleware=nemo.collections.speechlm2.vllm.salm.ctc_serving.ctc_timestamp_middleware
+    volumes:
+      - ../../checkpoints:/models:ro
+      - nemotron-cache:/root/.cache
+    healthcheck:
+      test: ["CMD", "curl", "-fs", "http://127.0.0.1:8003/health"]
+      interval: 30s
+      start_period: 30m
+  api:
+    environment:
+      NEMOTRON_ENABLED: "true"
+      NEMOTRON_BACKEND: vllm
+      NEMOTRON_URL: http://127.0.0.1:8003
+      NEMOTRON_PYTHON_PATH: /app/.venv/bin/python3
+volumes:
+  nemotron-cache:

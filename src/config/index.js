@@ -75,6 +75,21 @@ export const config = {
     daemonStartupTimeout: parseInt(process.env.QWEN_ASR_DAEMON_STARTUP_TIMEOUT, 10) || 300000,
     preWarmDaemon: parseEnvBool(process.env.PREWARM_QWEN_ASR, false),
   },
+  nemotron: {
+    enabled: parseEnvBool(process.env.NEMOTRON_ENABLED, true),
+    backend: process.env.NEMOTRON_BACKEND || (onMac ? 'mlx' : 'vllm'),
+    modelId: process.env.NEMOTRON_MODEL_ID || 'nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B',
+    modelRevision: process.env.NEMOTRON_MODEL_REVISION || 'a188fff16c4f129a046788c2ad69e6198079a102',
+    modelPath: process.env.NEMOTRON_MODEL_PATH || '',
+    pythonPath: process.env.NEMOTRON_PYTHON_PATH || (onMac
+      ? './.venv-nemotron/bin/python3' : './.venv/bin/python3'),
+    url: process.env.NEMOTRON_URL || 'http://127.0.0.1:8003',
+    mlxBits: parseInt(process.env.NEMOTRON_MLX_BITS, 10) || 4,
+    maxNewTokens: parseInt(process.env.NEMOTRON_MAX_NEW_TOKENS, 10) || 16384,
+    timeout: parseInt(process.env.NEMOTRON_TIMEOUT, 10) || 3600000,
+    daemonStartupTimeout: parseInt(process.env.NEMOTRON_STARTUP_TIMEOUT, 10) || 1800000,
+    preWarmDaemon: parseEnvBool(process.env.PREWARM_NEMOTRON, false),
+  },
   mossTranscribeDiarize: {
     enabled: parseEnvBool(process.env.MOSS_TD_ENABLED, false),
     modelId: process.env.MOSS_TD_MODEL_ID || 'OpenMOSS-Team/MOSS-Transcribe-Diarize',

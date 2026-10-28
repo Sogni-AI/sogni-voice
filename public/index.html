@@ -970,6 +970,7 @@
         <select id="transcriptionEngine" style="padding: 6px 10px; border: 1px solid #ced4da; border-radius: 4px; font-size: 14px; width: 100%;">
           <option value="parakeet">Parakeet — fast default</option>
           <option value="qwen3">Qwen3-ASR — multilingual + alignment</option>
+          <option value="nemotron">Nemotron 3.5 — multilingual + speakers</option>
           <option value="moss-td">MOSS Transcribe-Diarize — experimental</option>
         </select>
       </div>
@@ -998,6 +999,10 @@
       </label>
     </div>
     <div id="transcriptionModelHint" style="font-size: 12px; color: #666; margin: -5px 0 12px;">Parakeet is the fast default for 25 European languages.</div>
+    <div class="form-group hidden" id="nemotronPromptGroup">
+      <label for="nemotronPrompt">Instruction (optional):</label>
+      <textarea id="nemotronPrompt" maxlength="2000" rows="2" style="min-height: 60px;" placeholder="Leave blank to transcribe, or ask for a translation or an answer about the recording."></textarea>
+    </div>
 
     <div class="live-transcription-card" id="liveTranscriptionCard" style="display: none;">
       <div class="live-transcription-header">
@@ -1556,6 +1561,7 @@
       tts: { enabled: false },
       transcription: { enabled: false },
       qwenAsr: { enabled: false },
+      nemotron: { enabled: false },
       mossTranscribeDiarize: { enabled: false },
       pocketTts: { enabled: false },
       qwenTts: { enabled: false },
@@ -1616,6 +1622,7 @@
       // Also disable form inputs
       const inputsToDisable = [
         'transcriptionEngine', 'qwenAsrLanguage', 'mossTdHotwords', 'timestampMode', 'diarizeCheckbox',
+        'nemotronPrompt',
         'alignmentText', 'alignmentLanguage', 'ttsText', 'voiceSelect', 'speedRange',
         'qwenModeSelect', 'languageSelect', 'styleInstruct', 'cloneName', 'mossCloneName',
       ];
@@ -2032,6 +2039,8 @@
     let parakeetRealtimeEnabled = false;
     let parakeetRealtimeEndpoint = '/v1/realtime/transcription';
     let qwenAsrEnabled = false;
+    let nemotronEnabled = false;
+    let nemotronTimestamps = false;
     let mossTdEnabled = false;
     let qwenAsrLanguages = [];
     let qwenAlignmentLanguages = [];
@@ -2077,6 +2086,8 @@
     const mossTdHotwordsGroup = document.getElementById('mossTdHotwordsGroup');
     const mossTdHotwords = document.getElementById('mossTdHotwords');
     const transcriptionModelHint = document.getElementById('transcriptionModelHint');
+    const nemotronPromptGroup = document.getElementById('nemotronPromptGroup');
+    const nemotronPrompt = document.getElementById('nemotronPrompt');
     const timestampMode = document.getElementById('timestampMode');
     const diarizeCheckbox = document.getElementById('diarizeCheckbox');
     const diarizeLabel = document.getElementById('diarizeLabel');
@@ -2118,6 +2129,7 @@
     function syncTranscriptionTimingAvailability() {
       const isQwen = transcriptionEngine.value === 'qwen3';
       const isMossTd = transcriptionEngine.value === 'moss-td';
+      const isNemotron = transcriptionEngine.value === 'nemotron';
       const language = qwenAsrLanguage.value;
       const alignmentSupported = language === 'auto' || qwenAlignmentLanguages.includes(language);
       const sentenceOption = timestampMode.querySelector('option[value="sentence"]');
@@ -2126,7 +2138,8 @@
         if (isMossTd) {
           option.disabled = option.value !== 'sentence';
         } else {
-          option.disabled = option.value !== 'none' && isQwen && !alignmentSupported;
+          option.disabled = option.value !== 'none'
+            && ((isQwen && !alignmentSupported) || (isNemotron && !nemotronTimestamps));
         }
       });
       if (isMossTd) {
@@ -2136,12 +2149,15 @@
         timestampMode.value = 'none';
         diarizeCheckbox.checked = false;
       }
+      if (isNemotron && !nemotronTimestamps) timestampMode.value = 'none';
       timestampMode.disabled = isMossTd || !canMakeAuthenticatedCalls();
       diarizeCheckbox.disabled = isMossTd || !canMakeAuthenticatedCalls();
-      diarizeText.textContent = isMossTd ? 'Built-in speakers' : 'Identify speakers';
-      diarizeBadge.textContent = isMossTd ? 'MOSS' : 'Community-1';
+      diarizeText.textContent = isMossTd || isNemotron ? 'Built-in speakers' : 'Identify speakers';
+      diarizeBadge.textContent = isNemotron ? 'Nemotron' : isMossTd ? 'MOSS' : 'Community-1';
       diarizeBadge.style.background = isMossTd ? '#6f42c1' : '#5b8def';
-      diarizeLabel.title = isMossTd
+      diarizeLabel.title = isNemotron
+        ? 'Nemotron labels speakers within the recording. Speaker labels also work without timings.'
+        : isMossTd
         ? 'MOSS emits speaker labels and segment timestamps in the same model pass.'
         : 'Labels speakers with pyannote Community-1. Sentence timings turn on automatically.';
     }
@@ -2157,9 +2173,14 @@
       const parakeetOption = transcriptionEngine.querySelector('option[value="parakeet"]');
       const qwenOption = transcriptionEngine.querySelector('option[value="qwen3"]');
       const mossTdOption = transcriptionEngine.querySelector('option[value="moss-td"]');
+      const nemotronOption = transcriptionEngine.querySelector('option[value="nemotron"]');
       parakeetOption.disabled = !parakeetEnabled;
       qwenOption.disabled = !qwenAsrEnabled;
       mossTdOption.disabled = !mossTdEnabled;
+      nemotronOption.disabled = !nemotronEnabled;
+      nemotronOption.textContent = nemotronEnabled
+        ? 'Nemotron 3.5 — multilingual + speakers'
+        : 'Nemotron 3.5 — not enabled';
       parakeetOption.textContent = parakeetEnabled
         ? 'Parakeet — fast default'
         : 'Parakeet — not enabled';
@@ -2174,17 +2195,21 @@
         parakeet: parakeetEnabled,
         qwen3: qwenAsrEnabled,
         'moss-td': mossTdEnabled,
+        nemotron: nemotronEnabled,
       }[transcriptionEngine.value];
       if (!currentEngineEnabled) {
         if (parakeetEnabled) transcriptionEngine.value = 'parakeet';
         else if (qwenAsrEnabled) transcriptionEngine.value = 'qwen3';
         else if (mossTdEnabled) transcriptionEngine.value = 'moss-td';
+        else if (nemotronEnabled) transcriptionEngine.value = 'nemotron';
       }
 
       const isQwen = transcriptionEngine.value === 'qwen3';
       const isMossTd = transcriptionEngine.value === 'moss-td';
       qwenAsrLanguageGroup.classList.toggle('hidden', !isQwen);
-      mossTdHotwordsGroup.classList.toggle('hidden', !isMossTd);
+      const isNemotron = transcriptionEngine.value === 'nemotron';
+      mossTdHotwordsGroup.classList.toggle('hidden', !isMossTd && !isNemotron);
+      nemotronPromptGroup.classList.toggle('hidden', !isNemotron);
       alignmentLab.style.display = qwenAsrEnabled ? 'block' : 'none';
       if (isQwen) {
         transcriptionModelHint.textContent = qwenAsrLanguage.value === 'auto'
@@ -2192,11 +2217,14 @@
           : `Qwen3-ASR will transcribe in ${qwenAsrLanguage.value}. Timings are available for the ForcedAligner languages.`;
       } else if (isMossTd) {
         transcriptionModelHint.textContent = 'Experimental: one MPS model pass returns English/Chinese text, speaker labels, and segment timestamps. Up to 90 minutes; no word timings or speaker-count hints.';
+      } else if (isNemotron) {
+        transcriptionModelHint.textContent = 'Nemotron 3.5 transcribes 40 languages with vocabulary hints and optional speaker labels. Record or upload up to 60 minutes.'
+          + (nemotronTimestamps ? ' Sentence and word timings are available.' : ' Timings are unavailable on this worker.');
       } else {
         transcriptionModelHint.textContent = 'Parakeet is the fast default for 25 European languages.';
       }
 
-      const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled || mossTdEnabled;
+      const hasTranscriptionEngine = parakeetEnabled || qwenAsrEnabled || mossTdEnabled || nemotronEnabled;
       const liveActive = liveState !== 'idle';
       recordBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls() || liveActive;
       uploadBtn.disabled = !hasTranscriptionEngine || !canMakeAuthenticatedCalls() || liveActive;
@@ -2224,6 +2252,8 @@
     }
 
     async function loadTranscriptionModels(showAuthError = false) {
+      nemotronEnabled = Boolean(serviceStatus.nemotron?.enabled);
+      nemotronTimestamps = Boolean(serviceStatus.nemotron?.timestamps);
       parakeetEnabled = Boolean(serviceStatus.transcription?.enabled);
       parakeetRealtimeEnabled = Boolean(serviceStatus.transcription?.realtimeEnabled);
       qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
@@ -2235,6 +2265,9 @@
           const parakeet = data.models?.find((model) => model.id === 'parakeet');
           const qwen = data.models?.find((model) => model.id === 'qwen3');
           const mossTd = data.models?.find((model) => model.id === 'moss-td');
+          const nemotron = data.models?.find((model) => model.id === 'nemotron');
+          nemotronEnabled = Boolean(nemotron?.enabled);
+          nemotronTimestamps = Boolean(nemotron?.timestamps?.length);
           parakeetEnabled = Boolean(parakeet?.enabled);
           parakeetRealtimeEnabled = Boolean(parakeet?.realtime?.enabled);
           parakeetRealtimeEndpoint = parakeet?.realtime?.endpoint
@@ -2577,12 +2610,15 @@
     diarizeCheckbox.addEventListener('change', () => {
       // Speaker labels need timestamp segments. Choose the least noisy timing
       // mode automatically instead of presenting a disabled control.
-      if (diarizeCheckbox.checked && timestampMode.value === 'none') {
+      if (diarizeCheckbox.checked && timestampMode.value === 'none'
+          && transcriptionEngine.value !== 'nemotron') {
         timestampMode.value = 'sentence';
       }
     });
     timestampMode.addEventListener('change', () => {
-      if (timestampMode.value === 'none') diarizeCheckbox.checked = false;
+      if (timestampMode.value === 'none' && transcriptionEngine.value !== 'nemotron') {
+        diarizeCheckbox.checked = false;
+      }
       syncTranscriptionTimingAvailability();
     });
 
@@ -2718,6 +2754,12 @@
     function renderTranscriptResult(data, mode) {
       transcriptResult.replaceChildren();
 
+      if (data.engine === 'nemotron') {
+        const meta = document.createElement('div');
+        meta.textContent = `Nemotron 3.5${data.complete === false ? ' · output limit reached; transcript is incomplete' : ''}`;
+        meta.style.marginBottom = '6px';
+        transcriptResult.appendChild(meta);
+      }
       if (data.engine === 'qwen3') {
         const meta = document.createElement('div');
         meta.style.fontSize = '12px';
@@ -2738,7 +2780,7 @@
         transcriptResult.appendChild(meta);
       }
 
-      const timedSegments = data.timestamps || data.segments;
+      const timedSegments = data.timestamps || (data.engine !== 'nemotron' ? data.segments : null);
       const useTimestamps = timedSegments && timedSegments.length > 0;
       if (useTimestamps) {
         const label = document.createElement('div');
@@ -2764,6 +2806,16 @@
           line.appendChild(document.createTextNode(
             `[${formatTime(seg.start)} → ${formatTime(seg.end)}] ${seg.text}`,
           ));
+          transcriptResult.appendChild(line);
+        }
+      } else if (data.engine === 'nemotron' && data.segments?.length) {
+        for (const segment of data.segments) {
+          const line = document.createElement('div');
+          const chip = document.createElement('span');
+          chip.className = 'speaker-chip';
+          chip.style.background = speakerColor(segment.speaker);
+          chip.textContent = segment.speaker;
+          line.append(chip, document.createTextNode(segment.text));
           transcriptResult.appendChild(line);
         }
       } else {
@@ -2805,15 +2857,19 @@
 
       const startTime = performance.now();
       const mode = timestampMode.value;
-      const diarize = diarizeCheckbox && diarizeCheckbox.checked && mode !== 'none';
+      const diarize = diarizeCheckbox && diarizeCheckbox.checked
+        && (mode !== 'none' || transcriptionEngine.value === 'nemotron');
 
       try {
         const formData = new FormData();
         formData.append('file', audioBlob, filename);
         formData.append('engine', transcriptionEngine.value);
+        if (transcriptionEngine.value === 'nemotron' && nemotronPrompt.value.trim()) {
+          formData.append('prompt', nemotronPrompt.value.trim());
+        }
         if (transcriptionEngine.value === 'qwen3') {
           formData.append('language', qwenAsrLanguage.value || 'auto');
-        } else if (transcriptionEngine.value === 'moss-td' && mossTdHotwords.value.trim()) {
+        } else if (['moss-td', 'nemotron'].includes(transcriptionEngine.value) && mossTdHotwords.value.trim()) {
           formData.append('hotwords', mossTdHotwords.value.trim());
         }
         if (mode === 'sentence') {
@@ -4931,6 +4987,8 @@
         );
         qwenAsrEnabled = Boolean(serviceStatus.qwenAsr?.enabled);
         mossTdEnabled = Boolean(serviceStatus.mossTranscribeDiarize?.enabled);
+        nemotronEnabled = Boolean(serviceStatus.nemotron?.enabled);
+        nemotronTimestamps = Boolean(serviceStatus.nemotron?.timestamps);
         updatePocketAvailability();
         updateQwenAvailability();
         updateMossAvailability();

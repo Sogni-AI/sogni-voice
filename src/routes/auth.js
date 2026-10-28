@@ -40,6 +40,10 @@ const getServiceStatus = () => ({
     ),
   },
   qwenAsr: { enabled: Boolean(config.qwenAsr?.enabled) },
+  nemotron: {
+    enabled: Boolean(config.nemotron?.enabled),
+    timestamps: config.nemotron?.backend === 'vllm',
+  },
   mossTranscribeDiarize: { enabled: Boolean(config.mossTranscribeDiarize?.enabled) },
   pocketTts: { enabled: Boolean(config.pocketTts?.enabled) },
   qwenTts: { enabled: Boolean(config.qwenTts?.enabled) },

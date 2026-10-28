@@ -8,6 +8,7 @@ NVIDIA GPU. Only the model runtimes differ from macOS:
 | Fish S2 Pro (`/fish-tts`) | 8-bit MLX community conversion | Fish's official release in a vLLM-Omni server |
 | Fish Drama 3 (`/drama3-tts`) | drama3-mlx | Fish's official release (FP8 experts) in a vLLM-Omni server |
 | Parakeet (`/transcribe`) | parakeet-mlx, batch + realtime | NVIDIA's checkpoint through transformers, **batch only** |
+| Nemotron 3.5 (`engine=nemotron`) | native MLX, text + speaker labels | isolated NeMo/vLLM, text + speakers + CTC timings; [setup](nemotron.md) |
 | Pocket TTS (`/pocket-tts`) | CPU | CPU |
 | Kokoro, Qwen3-TTS/ASR, MOSS | MLX | not available |
 

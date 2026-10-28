@@ -1,0 +1,26 @@
+# Separate runtime: Fish remains on its verified vLLM-Omni version.
+FROM sogni-voice-nvidia:latest
+
+ARG NEMO_SPEECH_REVISION=7b05f096d54db47078fd1569a54d1f3ba4a4c51f
+RUN git init /opt/nemotron-speech \
+    && git -C /opt/nemotron-speech remote add origin https://github.com/NVIDIA-NeMo/Speech.git \
+    && git -C /opt/nemotron-speech fetch --depth=1 origin "${NEMO_SPEECH_REVISION}" \
+    && git -C /opt/nemotron-speech checkout --detach FETCH_HEAD
+
+WORKDIR /opt/nemotron-speech
+RUN uv venv --python 3.12 .venv \
+    && UV_PROJECT_ENVIRONMENT=/opt/nemotron-speech/.venv \
+       uv sync --extra asr --extra vllm --locked --no-install-project \
+    && uv pip install --python .venv/bin/python --no-deps -e . \
+    && uv pip install --python .venv/bin/python --no-deps \
+       av==19.0.2 opencv-python-headless==5.0.0.93
+
+ENV VIRTUAL_ENV=/opt/nemotron-speech/.venv \
+    PATH=/opt/nemotron-speech/.venv/bin:$PATH \
+    VLLM_PLUGINS=nemo_speechlm \
+    VLLM_MAX_AUDIO_DECODE_DURATION_S=3600 \
+    VLLM_MAX_AUDIO_CLIP_FILESIZE_MB=180 \
+    VLLM_USE_V2_MODEL_RUNNER=0
+
+ENTRYPOINT []
+CMD ["vllm", "--help"]

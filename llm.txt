@@ -75,9 +75,17 @@ Endpoints:
 - POST /tts (Kokoro, if enabled)
 - POST /pocket-tts (Pocket TTS)
 - POST /transcribe
+- GET /transcription/models (engine availability and timing capabilities)
 - WS /v1/realtime/transcription (Parakeet 16 kHz float32 PCM streaming)
 - GET /tts/voices (Kokoro, if enabled)
 - GET /pocket-tts/voices
+
+Nemotron 3.5: send engine=nemotron to /transcribe for multilingual transcription
+and native speaker labels. Setup installs its isolated MLX runtime; first use
+downloads the pinned 67.5 GB checkpoint. The original-checkpoint path needs a
+128 GB Apple Silicon Mac and at least 75 GB free disk space. Mac returns text
+and untimed speaker turns; NVIDIA workers also support word/sentence timings.
+Check complete/finishReason in responses. See docs/nemotron.md for configuration.
 
 ## Phase 4: Integrate with OpenClaw
 

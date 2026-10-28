@@ -10,6 +10,7 @@ import {
 import { pocketTtsService } from './services/pocketTts.js';
 import { diarizationService } from './services/diarization.js';
 import { qwenAsrService } from './services/qwenAsr.js';
+import { nemotronService } from './services/nemotron.js';
 import { mossTtsService } from './services/mossTts.js';
 import { fishTtsService } from './services/fishTts.js';
 import { drama3TtsService } from './services/drama3Tts.js';
@@ -30,6 +31,7 @@ const gracefulShutdown = async (signal) => {
     pocketTtsService.shutdown(),
     diarizationService.shutdown(),
     qwenAsrService.shutdown(),
+    nemotronService.shutdown(),
     mossTtsService.shutdown(),
     fishTtsService.shutdown(),
     drama3TtsService.shutdown(),
@@ -100,6 +102,10 @@ startServer()
     if (config.qwenAsr.enabled && config.qwenAsr.preWarmDaemon) {
       console.log('Pre-warming Qwen3-ASR daemon...');
       preWarmPromises.push(preWarmDaemon('Qwen3-ASR daemon', () => qwenAsrService.initialize()));
+    }
+
+    if (config.nemotron.enabled && config.nemotron.preWarmDaemon) {
+      preWarmPromises.push(preWarmDaemon('Nemotron daemon', () => nemotronService.initialize()));
     }
 
     if (config.mossTts.enabled && config.mossTts.preWarmDaemon) {

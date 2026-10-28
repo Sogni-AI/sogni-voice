@@ -18,6 +18,7 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 | MOSS-TTS-Nano | Apr 10, 2026 | 100M multilingual reference-voice model |
 | MOSS Transcribe-Diarize | Jul 9, 2026 | 0.9B one-pass ASR + diarization model |
 | Fish Drama 3 | Oct 13, 2026 | Original release and pruned NVFP4; MLX on Mac, vLLM-Omni or TensorFold on NVIDIA. [Setup](docs/fish-drama3.md) |
+| Nemotron 3.5 Transcribe | Oct 28, 2026 | 40-language transcription with speaker labels; MLX on Mac and NeMo/vLLM on DGX Spark. [Setup](docs/nemotron.md) |
 
 ### Licensing
 
@@ -28,6 +29,7 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 | Qwen3-TTS | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Qwen3-ASR + ForcedAligner | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Parakeet TDT v3 | Apache 2.0 (`parakeet-mlx`) | CC-BY-4.0 | ✅ Permitted with attribution |
+| Nemotron 3.5 Transcribe | MIT (MLX Audio), Apache 2.0 (NeMo/vLLM) | OpenMDW-1.1 | See [NVIDIA's model card](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B) |
 | MOSS-TTS-Nano | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | MOSS Transcribe-Diarize | Apache 2.0 | Apache 2.0 | ✅ Permitted |
 | Fish Drama 3 (via drama3-mlx) | Fish Audio Community License | Fish Audio Community License | ⚠️ Only under USD 500k annual revenue; no hosted TTS/cloning service without a Fish Audio license |
@@ -48,6 +50,11 @@ A REST + WebSocket API and configuration for running cutting-edge, open-source t
 
 ## Features
 
+- **Nemotron 3.5 Transcribe**: `engine=nemotron` on the existing `/transcribe` endpoint
+  - NVIDIA's pinned final-release 30B-A4B checkpoint, native MLX on Apple Silicon and an isolated NeMo/vLLM server on NVIDIA
+  - 40 languages, vocabulary hints, optional speaker labels, and custom audio instructions
+  - Sentence/word timestamps on NVIDIA; text and untimed speaker turns on MLX
+  - Completion status preserves truncated output; [setup and API details](docs/nemotron.md)
 - **Audio Transcription**: Upload audio files and get text transcripts using [parakeet-mlx](https://github.com/senstella/parakeet-mlx)
   - Sentence-level timestamps for subtitle generation
   - Word-level timestamps for precise timing

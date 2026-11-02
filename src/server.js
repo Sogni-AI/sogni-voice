@@ -13,6 +13,11 @@ import {
 
 const LOOPBACK_HOSTS = new Set(['127.0.0.1', '::1', 'localhost']);
 
+// nginx reuses idle upstream connections for 60 s by default. If the API closes
+// one first, a request sent as it closes fails, and because nginx won't retry a
+// POST the caller gets a 502. Outlast nginx so that it always closes first.
+const KEEP_ALIVE_TIMEOUT_MS = 65_000;
+
 const isLoopbackHost = (host) => LOOPBACK_HOSTS.has(host);
 
 const appendVaryHeader = (currentValue, headerName) => {
@@ -110,6 +115,7 @@ export const createServer = async () => {
       },
     },
   });
+  server.listener.keepAliveTimeout = KEEP_ALIVE_TIMEOUT_MS;
 
   if (corsPolicy.enabled) {
     server.route({

@@ -1,5 +1,11 @@
 # Changelog
 
+## 2026-11-02
+
+- Fix intermittent 502s on POST requests behind nginx. The API closed idle
+  connections after 6 s while nginx kept reusing them for 60 s, so a request
+  sent as one closed failed. The API now keeps them open for 65 s.
+
 ## 2026-10-28
 
 - Add NVIDIA Nemotron 3.5 Transcribe 30B-A4B to `/transcribe`, model discovery,

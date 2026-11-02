@@ -32,6 +32,34 @@ describe('server security configuration', () => {
     await expect(createServer()).rejects.toThrow(/Refusing to bind to non-loopback host "0.0.0.0" without API key authentication/);
   });
 
+  it('should keep idle connections open longer than nginx reuses them', async () => {
+    vi.doMock('../../src/config/index.js', () => ({
+      config: {
+        server: {
+          port: 3000,
+          host: '127.0.0.1',
+          corsOrigins: [],
+        },
+        auth: {
+          enabled: false,
+          apiKey: null,
+        },
+      },
+    }));
+    vi.doMock('../../src/plugins/index.js', () => ({
+      registerPlugins: vi.fn(),
+    }));
+    vi.doMock('../../src/routes/index.js', () => ({
+      routes: [],
+    }));
+
+    const { createServer } = await import('../../src/server.js');
+    const server = await createServer();
+
+    // nginx's default upstream keepalive_timeout is 60 s.
+    expect(server.listener.keepAliveTimeout).toBeGreaterThan(60_000);
+  });
+
   it('should allow public host with auth and API key', async () => {
     vi.doMock('../../src/config/index.js', () => ({
       config: {

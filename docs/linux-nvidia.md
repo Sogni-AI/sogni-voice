@@ -81,8 +81,23 @@ curl http://localhost:3000/health
 To update, `git pull` and run the same `up -d --build`. Because all three
 services share the image, that restarts the model servers too, and Fish TTS is
 unavailable for about 13 minutes. For a change that touches only the API or the Python
-daemons, rebuild and restart just the API:
-`docker compose -f docker/nvidia/compose.yaml up -d --build --no-deps api`.
+daemons, rebuild the image and restart just the API. The `api` service has no build
+step of its own, so `up --build --no-deps api` would restart it on the old image:
+
+```bash
+docker compose -f docker/nvidia/compose.yaml build drama3
+docker compose -f docker/nvidia/compose.yaml up -d --no-deps api
+```
+
+If you use the TensorFold or Nemotron overlay below, list the same `-f` files on every
+command, or Compose recreates the API without their settings. With TensorFold, the API
+also runs its own image, so build that one instead:
+
+```bash
+docker build -f docker/nvidia/Dockerfile.tensorfold -t sogni-voice-tensorfold:latest .
+docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml \
+  -f docker/nvidia/compose.nemotron.yaml up -d --no-build --no-deps api
+```
 
 The vLLM-Omni servers listen on 127.0.0.1 only (S2 on 8001, Drama 3 on 8002).
 The API listens on `HOST:PORT` from `.env`. Clones live in `fish_voice_clones/`

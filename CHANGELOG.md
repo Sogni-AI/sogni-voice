@@ -5,6 +5,10 @@
 - Fix intermittent 502s on POST requests behind nginx. The API closed idle
   connections after 6 s while nginx kept reusing them for 60 s, so a request
   sent as one closed failed. The API now keeps them open for 65 s.
+- Retry the Parakeet pre-load once after 20 s. On a DGX Spark the first attempt can
+  fail with a CUDA out-of-memory error while other daemons are starting.
+- Correct the API-only restart in `docs/linux-nvidia.md`. The old command rebuilt
+  nothing and, on a stack with overlays, dropped their settings.
 
 ## 2026-10-28
 

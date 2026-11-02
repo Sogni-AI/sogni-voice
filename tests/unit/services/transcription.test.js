@@ -105,6 +105,38 @@ describe('TranscriptionService', () => {
       await expect(initPromise).rejects.toThrow('Daemon failed to start');
     });
 
+    it('should start a new daemon when retried after an error status', async () => {
+      const { spawn: freshSpawn } = await import('node:child_process');
+
+      const firstAttempt = service.initialize();
+      setTimeout(() => {
+        mockStdout.push('{"status":"error","error":"CUDA error: out of memory"}\n');
+      }, 10);
+      await expect(firstAttempt).rejects.toThrow('Daemon failed to start');
+
+      const retryStdout = new Readable({ read() {} });
+      const retryProcess = new EventEmitter();
+      retryProcess.stdin = new Writable({
+        write(chunk, encoding, callback) {
+          callback();
+        },
+      });
+      retryProcess.stdout = retryStdout;
+      retryProcess.stderr = new Readable({ read() {} });
+      retryProcess.kill = vi.fn();
+      freshSpawn.mockReturnValue(retryProcess);
+      mockProcess = retryProcess;
+
+      const retry = service.initialize();
+      setTimeout(() => {
+        retryStdout.push('{"status":"ready"}\n');
+      }, 10);
+      await retry;
+
+      expect(freshSpawn).toHaveBeenCalledTimes(2);
+      expect(service.isReady()).toBe(true);
+    });
+
     it('should deduplicate concurrent initialization calls', async () => {
       const { spawn: freshSpawn } = await import('node:child_process');
 

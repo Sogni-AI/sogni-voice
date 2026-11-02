@@ -16,6 +16,12 @@ import { fishTtsService } from './services/fishTts.js';
 import { drama3TtsService } from './services/drama3Tts.js';
 import { mossTranscribeDiarizeService } from './services/mossTranscribeDiarize.js';
 import { config } from './config/index.js';
+import { preWarmDaemon } from './utils/preWarm.js';
+
+// On a DGX Spark, the NVIDIA driver can refuse a new GPU context when free memory
+// is short, even with plenty of file cache it could reclaim. Parakeet hit this
+// while starting beside the other daemons, and the same load worked 21 s later.
+const TRANSCRIPTION_PREWARM_RETRY_MS = 20000;
 
 const gracefulShutdown = async (signal) => {
   console.log(`\nShutting down gracefully... (received ${signal})`);
@@ -48,14 +54,6 @@ process.on('unhandledRejection', (err) => {
   process.exit(1);
 });
 
-const preWarmDaemon = async (name, initialize) => {
-  try {
-    await initialize();
-  } catch (error) {
-    console.error(`${name} pre-warm failed:`, error);
-  }
-};
-
 startServer()
   .then(async () => {
     // Optionally pre-warm the daemons
@@ -63,7 +61,11 @@ startServer()
 
     if (config.transcription.enabled && config.transcription.preWarmDaemon) {
       console.log('Pre-warming transcription daemon...');
-      preWarmPromises.push(preWarmDaemon('Transcription daemon', () => transcriptionService.initialize()));
+      preWarmPromises.push(preWarmDaemon(
+        'Transcription daemon',
+        () => transcriptionService.initialize(),
+        { retryAfterMs: TRANSCRIPTION_PREWARM_RETRY_MS },
+      ));
     }
 
     if (config.tts.enabled && config.tts.preWarmDaemon) {

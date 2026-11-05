@@ -77,8 +77,8 @@ deployment leases during a live worker update.
 
 The overlay allocates 1 GiB for the KV cache and serves one request at a time,
 with a 65,536-token context and 4,096-token prefill batches. Model weights and
-working memory are additional; GPU memory peaked at 24.5 GB on a Spark. MTP
-speculation is disabled. Unlike NVIDIA's dedicated H100 throughput recipe, this
+working memory are additional; GPU memory reached 28.7 GB on a Spark during
+51-minute recordings. MTP speculation is disabled. Unlike NVIDIA's dedicated H100 throughput recipe, this
 setup shares the Spark with S2, Drama 3 and Parakeet.
 
 The startup log must report `quantization=modelopt_mixed`; NVIDIA's card says to stop
@@ -152,10 +152,20 @@ benchmarks or validation of every supported language.
   minutes, with published transcripts. Errors on 102 clips were 10.96% against 11.43%
   and 11.10% for two FP8 loads, within FP8's own reload variation, and about 20%
   faster. Speaker labels and word timings were equivalent on the meeting clips.
-  **Known problem:** on a 22.4-minute earnings call, NVFP4 repeated a 457-word passage
-  until the token limit and lost the rest of the call, while FP8 finished it twice.
-  The response carries `finishReason: "length"` and `complete: false`, so long-audio
-  clients must check completion.
+- DGX Spark, long audio (November 3–5, 2026 SGT): real earnings calls in plain mode,
+  temperature 0, across separate model loads.
+
+  | Length | NVFP4 | Online FP8 |
+  |---|---|---|
+  | Up to 24.8 minutes | 13 of 15 requests clean: one repetition loop, one silent skip | 12 of 12 clean |
+  | About 51 minutes | 0 of 4 complete: repetition loop every time | 1 of 2 complete: one repetition loop |
+
+  **A repetition loop** runs to the token limit and loses the rest of the recording.
+  The response carries `finishReason: "length"` and `complete: false`, so clients must
+  check completion. **The silent skip** dropped about a quarter of a 20.4-minute call
+  while still reporting `finishReason: "stop"` and `complete: true`, so completion does
+  not prove a long transcript is whole. Results vary between loads of the same build.
+  Neither build is reliable near 50 minutes.
 
 The original checkpoint SHA-256 is
 `03142dde5176c1d4df21ee829642745a1d670ea4d79e1a4684c64d53195acff2`.

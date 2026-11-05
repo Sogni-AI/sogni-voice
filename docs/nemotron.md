@@ -1,16 +1,18 @@
 # NVIDIA Nemotron 3.5 Transcribe
 
 Select **Nemotron 3.5** in the recording/upload model selector, or send
-`engine=nemotron` to `POST /transcribe`. It uses the
+`engine=nemotron` to `POST /transcribe`. Mac uses the
 [final NVIDIA checkpoint](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B)
-at revision `a188fff16c4f129a046788c2ad69e6198079a102`, licensed under
+at revision `a188fff16c4f129a046788c2ad69e6198079a102`. Linux + NVIDIA uses NVIDIA's
+[NVFP4 build](https://huggingface.co/nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4)
+at revision `66c6adc4020179567074d0399cda2a4eeb2bb347`. Both are licensed under
 OpenMDW-1.1. The early-access community checkpoints are not used.
 
 | Capability | Apple Silicon | Linux + NVIDIA |
 |---|---|---|
 | Runtime | Native MLX Audio | NeMo Speech plugin for vLLM 0.32.0 |
-| Language-model precision | 4-bit affine, group 64 | Online FP8 from the official BF16 weights |
-| Audio/speaker encoders | Original precision; MoE routers stay FP32 | BF16 |
+| Language-model precision | 4-bit affine, group 64 | NVFP4 checkpoint (ModelOpt mixed precision) |
+| Audio/speaker encoders | Original precision; MoE routers stay FP32 | FP8 audio-encoder linears, as shipped |
 | Transcription | 40 languages, automatic detection | Same |
 | Speaker labels | Built in, untimed turns | Built in, optional timed words/sentences |
 | Timestamps | Unavailable in the MLX port | Native CTC word alignment |
@@ -57,9 +59,9 @@ a separate image, pinned to NeMo Speech
 Build the base Sogni NVIDIA image first as described in [linux-nvidia.md](linux-nvidia.md).
 
 ```bash
-uvx --from huggingface_hub hf download nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B \
-  --revision a188fff16c4f129a046788c2ad69e6198079a102 \
-  --local-dir checkpoints/nemotron-3.5-transcribe
+uvx --from huggingface_hub hf download nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4 \
+  --revision 66c6adc4020179567074d0399cda2a4eeb2bb347 \
+  --local-dir checkpoints/nemotron-3.5-transcribe-nvfp4
 docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.nemotron.yaml \
   build nemotron
 docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.nemotron.yaml \
@@ -75,10 +77,19 @@ deployment leases during a live worker update.
 
 The overlay allocates 1 GiB for the KV cache and serves one request at a time,
 with a 65,536-token context and 4,096-token prefill batches. Model weights and
-working memory are additional. It uses online FP8 because
-the FP8/NVFP4 repositories linked in the release card were inaccessible when this
-integration was prepared. MTP speculation is disabled. Unlike NVIDIA's dedicated
-H100 throughput recipe, this setup shares the Spark with S2, Drama 3 and Parakeet.
+working memory are additional; GPU memory peaked at 24.5 GB on a Spark. MTP
+speculation is disabled. Unlike NVIDIA's dedicated H100 throughput recipe, this
+setup shares the Spark with S2, Drama 3 and Parakeet.
+
+The startup log must report `quantization=modelopt_mixed`; NVIDIA's card says to stop
+if it doesn't. The first start on a host compiles FlashInfer kernels, at about 6 GB
+of RAM per compiler process. At ninja's default parallelism that froze a Spark that
+was also serving voice, so the overlay sets `MAX_JOBS=2` and caps the container's RAM
+at 36 GB. Expect the build to take about 30 minutes. The kernels persist in the
+`nemotron-kernels` volume, and later starts load in about 4 minutes.
+
+The previous online-FP8 setup is the overlay at commit `35bd5b1` plus the final BF16
+checkpoint. It uses about 11 GB more GPU memory.
 
 ## API
 
@@ -137,6 +148,14 @@ benchmarks or validation of every supported language.
   The first browser timing request took 25.41 seconds including first-use
   compilation; the later sentence request took 5.17 seconds through the local
   API and SSH tunnel.
+- DGX Spark, NVFP4 against online FP8 (November 3, 2026 SGT): 105 real clips, 62
+  minutes, with published transcripts. Errors on 102 clips were 10.96% against 11.43%
+  and 11.10% for two FP8 loads, within FP8's own reload variation, and about 20%
+  faster. Speaker labels and word timings were equivalent on the meeting clips.
+  **Known problem:** on a 22.4-minute earnings call, NVFP4 repeated a 457-word passage
+  until the token limit and lost the rest of the call, while FP8 finished it twice.
+  The response carries `finishReason: "length"` and `complete: false`, so long-audio
+  clients must check completion.
 
 The original checkpoint SHA-256 is
 `03142dde5176c1d4df21ee829642745a1d670ea4d79e1a4684c64d53195acff2`.

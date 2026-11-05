@@ -1,5 +1,5 @@
 # Add to the existing compose stack. Fish containers keep their current image.
-# Download the pinned final-release checkpoint first; see docs/nemotron.md.
+# Download the pinned NVFP4 checkpoint first; see docs/nemotron.md.
 services:
   nemotron:
     image: sogni-voice-nemotron:20261028
@@ -10,16 +10,25 @@ services:
     ipc: host
     gpus: all
     restart: unless-stopped
+    # The first start compiles FlashInfer kernels at about 6 GB per compiler. Uncapped, that froze
+    # a whole Spark, so limit the jobs and this container's RAM. GPU memory isn't charged to the cap.
+    mem_limit: 36g
+    memswap_limit: 36g
+    environment:
+      MAX_JOBS: "2"
+      FLASHINFER_WORKSPACE_BASE: /fi
+      # Required by NVIDIA's NVFP4 recipe.
+      VLLM_DISABLED_KERNELS: FlashInferFP8ScaledMMLinearKernel
     command:
       - vllm
       - serve
-      - /models/nemotron-3.5-transcribe
+      - /models/nemotron-3.5-transcribe-nvfp4
       - --host=127.0.0.1
       - --port=8003
-      - --served-model-name=nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B
+      - --served-model-name=nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4
       - --trust-remote-code
       - --dtype=bfloat16
-      - --quantization=fp8_per_tensor
+      - --kv-cache-dtype=fp8
       # vLLM still checks this at startup even with an explicit KV-cache size.
       - --gpu-memory-utilization=0.40
       - --kv-cache-memory-bytes=1073741824
@@ -40,6 +49,7 @@ services:
     volumes:
       - ../../checkpoints:/models:ro
       - nemotron-cache:/root/.cache
+      - nemotron-kernels:/fi
     healthcheck:
       test: ["CMD", "curl", "-fs", "http://127.0.0.1:8003/health"]
       interval: 30s
@@ -50,5 +60,8 @@ services:
       NEMOTRON_BACKEND: vllm
       NEMOTRON_URL: http://127.0.0.1:8003
       NEMOTRON_PYTHON_PATH: /app/.venv/bin/python3
+      NEMOTRON_MODEL_ID: nvidia/NVIDIA-Nemotron-3.5-Transcribe-30B-A4B-NVFP4
+      NEMOTRON_MODEL_REVISION: 66c6adc4020179567074d0399cda2a4eeb2bb347
 volumes:
   nemotron-cache:
+  nemotron-kernels:

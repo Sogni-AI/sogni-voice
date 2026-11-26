@@ -17,7 +17,7 @@ name: sogni-voice
 
 services:
   worker:
-    image: ${SOGNI_VOICE_WORKER_IMAGE:-sogni-voice-nvidia:latest}
+    image: ${SOGNI_VOICE_WORKER_IMAGE:-sogni-voice-tensorfold:latest}
     pull_policy: never
     network_mode: host
     restart: unless-stopped
@@ -41,7 +41,6 @@ services:
       - ../../scripts:/app/scripts:ro
       - ../../package.json:/app/package.json:ro
       - ${DATA_DIR:-worker-state}:/app/worker-state
-      - /proc/driver/nvidia:/proc/driver/nvidia:ro
 
 volumes:
   worker-state:

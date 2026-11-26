@@ -283,6 +283,26 @@ class OmniDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
             "rtf": elapsed / duration if duration > 0 else None,
         }
 
+    def generate_with_reference(
+        self, text, reference_audio_path, reference_text, output_path, max_tokens=None, temperature=None
+    ) -> dict:
+        if self.model is None:
+            return {"success": False, "error": "Model not loaded"}
+        if not reference_audio_path or not os.path.exists(reference_audio_path):
+            return {"success": False, "error": f"Reference audio not found: {reference_audio_path}"}
+        if not reference_text or not str(reference_text).strip():
+            return {"success": False, "error": "A transcript of the reference audio is required"}
+        try:
+            self._validate_reference(reference_audio_path)
+            reference = self.model.encode_reference(
+                reference_audio_path, transcript=str(reference_text).strip()
+            )
+            return self._synthesize(text, output_path, [reference], max_tokens, temperature)
+        except Exception as e:  # noqa: BLE001
+            _log(f"generate_with_reference error: {e}")
+            traceback.print_exc()
+            return {"success": False, "error": str(e)}
+
 
 if __name__ == "__main__":
     (OmniDrama3TTSDaemon if ENGINE == "drama3" else OmniFishTTSDaemon)().run()

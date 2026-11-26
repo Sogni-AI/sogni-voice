@@ -13,6 +13,7 @@
     "pm2:delete": "pm2 delete sogni-voice",
     "pm2:logs": "pm2 logs sogni-voice",
     "pm2:status": "pm2 status",
+    "worker": "node scripts/sogni-voice-worker.mjs",
     "worker:start": "node src/network/index.js",
     "worker:dev": "node --watch src/network/index.js",
     "pm2:worker:start": "SOGNI_NETWORK_WORKER=true pm2 start ecosystem.config.cjs --only sogni-speech-worker",

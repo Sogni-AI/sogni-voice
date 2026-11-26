@@ -7,6 +7,7 @@ distinct reference once per daemon. No reference files are changed. See
 docs/linux-nvidia.md for the pinned engine, checkpoint, and serving settings.
 """
 
+from collections import OrderedDict
 import hashlib
 import io
 import json
@@ -26,27 +27,69 @@ from fish_tts_daemon import _log
 
 NATIVE_PATH = os.environ.get("DRAMA3_TTS_TENSORFOLD_NATIVE_PATH", "/usr/local/bin/tensorfold-native")
 MODEL_PATH = os.environ.get("DRAMA3_TTS_MODEL_PATH", "./checkpoints/drama-3-NVFP4-Pruned")
+MAX_CACHED_REFERENCES = max(1, int(os.environ.get("DRAMA3_TENSORFOLD_MAX_CACHED_REFERENCES", "32")))
 
 
 class TensorFoldClient(OmniClient):
     def __init__(self, *args):
         super().__init__(*args)
-        self.references = {}
+        self.references = OrderedDict()
 
-    def encode_reference(self, audio_path, transcript):
+    def _encode_reference_uncached(self, audio_path, transcript):
+        with tempfile.TemporaryDirectory(prefix="drama3-reference-") as temporary:
+            output = Path(temporary) / "reference.json"
+            try:
+                completed = subprocess.run(
+                    [
+                        NATIVE_PATH,
+                        "voice",
+                        "encode",
+                        os.path.abspath(str(audio_path)),
+                        "--model",
+                        MODEL_PATH,
+                        f"--text={transcript}",
+                        "--name",
+                        "reference",
+                        "--out",
+                        str(output),
+                    ],
+                    check=True,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.PIPE,
+                    timeout=REQUEST_TIMEOUT_SECONDS,
+                )
+                if completed is not None and getattr(completed, "stderr", None):
+                    err_text = completed.stderr.decode("utf-8", "replace").strip()
+                    if err_text:
+                        _log(f"tensorfold-native voice encode stderr: {err_text[:500]}")
+                encoded = json.loads(output.read_text())
+                return {"text": encoded["text"], "vq_codes": encoded["vq_codes"]}
+            except subprocess.CalledProcessError as error:
+                err_text = (error.stderr or b"").decode("utf-8", "replace").strip()
+                _log(f"tensorfold-native voice encode failed (rc={error.returncode}): {err_text[:500]}")
+                raise InvalidInputError("Reference audio could not be encoded") from error
+            except subprocess.TimeoutExpired as error:
+                _log(f"tensorfold-native voice encode timed out: {error}")
+                raise InvalidInputError("Reference audio could not be encoded") from error
+            except (OSError, ValueError, KeyError) as error:
+                _log(f"tensorfold-native voice encode produced unreadable output: {error}")
+                raise InvalidInputError("Reference audio could not be encoded") from error
+
+    def encode_reference(self, audio_path, transcript, cache=True):
+        if not cache:
+            return self._encode_reference_uncached(audio_path, transcript)
+
         # Clone creation can replace the WAV or transcript under the same ID.
         key = (hashlib.sha256(Path(audio_path).read_bytes()).hexdigest(), transcript)
-        if key not in self.references:
-            with tempfile.TemporaryDirectory(prefix="drama3-reference-") as temporary:
-                output = Path(temporary) / "reference.json"
-                subprocess.run(
-                    [NATIVE_PATH, "voice", "encode", str(audio_path), "--model", MODEL_PATH,
-                     "--text", transcript, "--name", "reference", "--out", str(output)],
-                    check=True, stdout=subprocess.DEVNULL, timeout=REQUEST_TIMEOUT_SECONDS,
-                )
-                encoded = json.loads(output.read_text())
-            self.references[key] = {"text": encoded["text"], "vq_codes": encoded["vq_codes"]}
-        return self.references[key]
+        if key in self.references:
+            self.references.move_to_end(key)
+            return self.references[key]
+
+        encoded = self._encode_reference_uncached(audio_path, transcript)
+        self.references[key] = encoded
+        while len(self.references) > MAX_CACHED_REFERENCES:
+            self.references.popitem(last=False)
+        return encoded
 
     def speech_wav(self, text, references):
         payload = {
@@ -119,8 +162,34 @@ class TensorFoldDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
         try:
             reference = self.model.encode_reference(reference_path, self._read_transcript(clone_id))
             return self._synthesize(text, output_path, [reference], max_tokens, temperature)
+        except InvalidInputError as error:
+            return {"success": False, "error": f"invalid input: {error}"}
         except Exception as error:
             _log(f"TensorFold clone generation failed: {error}")
+            return {"success": False, "error": str(error)}
+
+    def generate_with_reference(
+        self, text, reference_audio_path, reference_text, output_path, max_tokens=None, temperature=None
+    ):
+        if self.model is None:
+            return {"success": False, "error": "Model not loaded"}
+        if max_tokens is not None:
+            return {"success": False, "error": "invalid input: TensorFold sets maxTokens at server startup; omit maxTokens"}
+        if temperature is not None and float(temperature) != 1.0:
+            return {"success": False, "error": "invalid input: TensorFold uses a fixed temperature of 1.0"}
+        if not reference_audio_path or not os.path.exists(reference_audio_path):
+            return {"success": False, "error": "invalid input: Reference audio not found"}
+        if not reference_text or not str(reference_text).strip():
+            return {"success": False, "error": "A transcript of the reference audio is required"}
+        try:
+            reference = self.model.encode_reference(
+                reference_audio_path, str(reference_text).strip(), cache=True,
+            )
+            return self._synthesize(text, output_path, [reference], max_tokens, temperature)
+        except InvalidInputError as error:
+            return {"success": False, "error": f"invalid input: {error}"}
+        except Exception as error:
+            _log(f"TensorFold ephemeral reference generation failed: {error}")
             return {"success": False, "error": str(error)}
 
 

@@ -82,15 +82,32 @@ class TransformersParakeet:
 
     def load_audio(self, audio_path: str):
         """Decode any ffmpeg-readable file to mono float32 at the model's rate."""
-        if not os.path.exists(audio_path):
+        resolved_path = os.path.abspath(audio_path)
+        if not os.path.exists(resolved_path):
             raise FileNotFoundError(audio_path)
         decoded = subprocess.run(
             [
-                "ffmpeg", "-nostdin", "-v", "error", "-i", audio_path,
-                "-f", "f32le", "-ac", "1", "-ar", str(self.sample_rate), "-",
+                "ffmpeg",
+                "-nostdin",
+                "-v",
+                "error",
+                "-protocol_whitelist",
+                "file,pipe",
+                "-t",
+                "7201",
+                "-i",
+                resolved_path,
+                "-f",
+                "f32le",
+                "-ac",
+                "1",
+                "-ar",
+                str(self.sample_rate),
+                "-",
             ],
             capture_output=True,
             check=False,
+            timeout=180,
         )
         if decoded.returncode != 0:
             raise RuntimeError(

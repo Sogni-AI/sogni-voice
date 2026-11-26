@@ -23,6 +23,8 @@ module.exports = {
         PORT: port,
         HOST: host,
         CORS_ORIGINS: corsOrigins,
+        // Under PM2, sogni-speech-worker runs as its own sidecar process below.
+        SOGNI_NETWORK_WORKER: 'false',
         // ORT threading config: generateLock serializes requests, so we can allow
         // intra-op parallelism for faster single-inference performance
         OMP_NUM_THREADS: '4',
@@ -34,6 +36,7 @@ module.exports = {
         PORT: port,
         HOST: host,
         CORS_ORIGINS: corsOrigins,
+        SOGNI_NETWORK_WORKER: 'false',
         // ORT threading config: generateLock serializes requests, so we can allow
         // intra-op parallelism for faster single-inference performance
         OMP_NUM_THREADS: '4',

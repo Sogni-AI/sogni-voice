@@ -295,6 +295,47 @@ export class FishTTSService {
     };
   }
 
+  /**
+   * Stateless one-shot voice cloning from an ephemeral reference WAV + transcript.
+   * Never reads from or writes to `VOICE_CLONES_DIR`.
+   */
+  async generateWithReference(text, {
+    referenceAudioPath,
+    referenceText,
+    outputPath,
+    maxTokens,
+    temperature,
+    signal,
+  } = {}) {
+    if (!outputPath) throw new FishTTSError('outputPath is required');
+    if (!referenceAudioPath) throw new FishTTSError('referenceAudioPath is required');
+    if (!referenceText || !String(referenceText).trim()) {
+      throw new FishTTSError('referenceText is required');
+    }
+
+    const payload = {
+      type: 'generate_with_reference',
+      text,
+      reference_audio_path: referenceAudioPath,
+      reference_text: String(referenceText).trim(),
+      output_path: outputPath,
+    };
+    if (maxTokens !== undefined) payload.max_tokens = maxTokens;
+    if (temperature !== undefined) payload.temperature = temperature;
+
+    const result = await this._sendRequest(
+      payload,
+      { timeout: computeGenerationTimeout(this.cfg, text), signal },
+    );
+    return {
+      outputPath: result.output_path,
+      duration: result.duration,
+      rtf: result.rtf ?? null,
+      model: this.modelInfo.model,
+      ...(result.finish_reason ? { finishReason: result.finish_reason } : {}),
+    };
+  }
+
   /** Create a voice clone from reference audio plus its transcript. */
   async createVoiceClone(audioPath, transcript, cloneId) {
     if (!audioPath) throw new FishTTSError('audioPath is required');

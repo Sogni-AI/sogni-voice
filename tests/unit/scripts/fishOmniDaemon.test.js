@@ -29,7 +29,7 @@ const itWithPython = python ? it : it.skip;
 // Runs scripts/fish_omni_daemon.py against a stand-in vLLM-Omni server whose
 // replies are scripted per test: each reply is [status, seconds of tone,
 // seconds of leading silence], consumed in order.
-const runHarness = ({ engine, model, replies, text }) => {
+const runHarness = ({ engine, model, replies, text, ephemeral = false }) => {
   const script = `
 import base64, io, json, os, sys, tempfile, threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -72,18 +72,21 @@ server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
 threading.Thread(target=server.serve_forever, daemon=True).start()
 
 workdir = tempfile.mkdtemp()
-clone_dir = os.path.join(workdir, "aurochs")
-os.makedirs(clone_dir)
-with open(os.path.join(clone_dir, "reference.wav"), "wb") as f:
-    f.write(tone(2.0, 0.0))
-with open(os.path.join(clone_dir, "metadata.json"), "w") as f:
-    json.dump({"clone_id": "aurochs", "transcript": "The words in the clip."}, f)
+clones_dir = os.path.join(workdir, "clones")
+os.makedirs(clones_dir)
+if not config.get("ephemeral"):
+    clone_dir = os.path.join(clones_dir, "aurochs")
+    os.makedirs(clone_dir)
+    with open(os.path.join(clone_dir, "reference.wav"), "wb") as f:
+        f.write(tone(2.0, 0.0))
+    with open(os.path.join(clone_dir, "metadata.json"), "w") as f:
+        json.dump({"clone_id": "aurochs", "transcript": "The words in the clip."}, f)
 
 os.environ.update({
     "FISH_OMNI_ENGINE": config["engine"],
     "FISH_OMNI_URL": f"http://127.0.0.1:{server.server_address[1]}",
     "FISH_OMNI_MODEL": config["model"],
-    "FISH_TTS_VOICE_CLONES_DIR": workdir,
+    "FISH_TTS_VOICE_CLONES_DIR": clones_dir,
 })
 sys.path.insert(0, ${JSON.stringify(join(repoRoot, 'scripts'))})
 import fish_omni_daemon as omni
@@ -91,14 +94,27 @@ import fish_omni_daemon as omni
 daemon = (omni.OmniDrama3TTSDaemon if config["engine"] == "drama3" else omni.OmniFishTTSDaemon)()
 assert daemon.load_model()
 output = os.path.join(workdir, "out.wav")
-result = daemon.generate_with_clone(config["text"], "aurochs", output)
+if config.get("ephemeral"):
+    ephemeral_wav = os.path.join(workdir, "ephemeral-input.wav")
+    with open(ephemeral_wav, "wb") as f:
+        f.write(tone(2.0, 0.0))
+    result = daemon.handle_request(json.dumps({
+        "id": "ephemeral-req",
+        "type": "generate_with_reference",
+        "text": config["text"],
+        "reference_audio_path": ephemeral_wav,
+        "reference_text": "Stateless omni transcript.",
+        "output_path": output,
+    }))
+else:
+    result = daemon.generate_with_clone(config["text"], "aurochs", output)
 duration = sf.info(output).duration if result.get("success") else None
 for request in requests:
     request["ref_audio"] = request.get("ref_audio", "")[:22]
-print(json.dumps({"result": result, "requests": requests, "duration": duration}))
+print(json.dumps({"result": result, "requests": requests, "duration": duration, "clones_entries": os.listdir(clones_dir)}))
 `;
   const run = spawnSync(python, ['-c', script], {
-    input: JSON.stringify({ engine, model, replies, text }),
+    input: JSON.stringify({ engine, model, replies, text, ephemeral }),
     encoding: 'utf8',
   });
   if (run.status !== 0) throw new Error(run.stderr);
@@ -206,6 +222,25 @@ describe('fish_omni_daemon.py', () => {
       expect(request.max_new_tokens).toBe(600);
     }
     expect(duration).toBeCloseTo(4.0, 1);
+  });
+
+  itWithPython('renders stateless generate_with_reference on both s2 and drama3 without touching VOICE_CLONES_DIR', () => {
+    for (const [engine, model] of [['s2', 'fishaudio/s2-pro'], ['drama3', 'fishaudio/drama-3']]) {
+      const { result, requests, clones_entries: clonesEntries } = runHarness({
+        engine,
+        model,
+        replies: [[200, 1.0, 0]],
+        text: 'One-shot stateless synthesis.',
+        ephemeral: true,
+      });
+      expect(result).toMatchObject({ id: 'ephemeral-req', success: true });
+      expect(clonesEntries).toEqual([]);
+      expect(requests[0]).toMatchObject({
+        model,
+        ref_audio: 'data:audio/wav;base64,',
+        ref_text: 'Stateless omni transcript.',
+      });
+    }
   });
 });
 

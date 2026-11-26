@@ -4,6 +4,7 @@ import { writeFileSync } from 'node:fs';
 const fishMocks = vi.hoisted(() => ({
   generate: vi.fn(),
   generateVoiceClone: vi.fn(),
+  generateWithReference: vi.fn(),
   createVoiceClone: vi.fn(),
   deleteVoiceClone: vi.fn(),
   renameVoiceClone: vi.fn(),
@@ -12,7 +13,16 @@ const fishMocks = vi.hoisted(() => ({
 const drama3Mocks = vi.hoisted(() => ({
   generate: vi.fn(),
   generateVoiceClone: vi.fn(),
+  generateWithReference: vi.fn(),
   listVoiceClones: vi.fn(),
+}));
+const sttMocks = vi.hoisted(() => ({
+  parakeetTranscribe: vi.fn(),
+  nemotronTranscribe: vi.fn(),
+}));
+const configState = vi.hoisted(() => ({
+  transcriptionEnabled: false,
+  nemotronEnabled: false,
 }));
 const processMocks = vi.hoisted(() => ({ ffprobeDuration: '5.0\n' }));
 
@@ -63,7 +73,11 @@ vi.mock('../../src/config/index.js', () => ({
       timeout: 60000, daemonStartupTimeout: 60000, preWarmDaemon: false,
     },
     transcription: {
-      enabled: false, timeout: 300000, daemonStartupTimeout: 120000, preWarmDaemon: false,
+      get enabled() { return configState.transcriptionEnabled; },
+      timeout: 300000, daemonStartupTimeout: 120000, preWarmDaemon: false,
+    },
+    nemotron: {
+      get enabled() { return configState.nemotronEnabled; },
     },
     qwenAsr: { enabled: false },
     diarization: { enabled: false },
@@ -106,6 +120,7 @@ vi.mock('../../src/services/fishTts.js', () => ({
   fishTtsService: {
     generate: fishMocks.generate,
     generateVoiceClone: fishMocks.generateVoiceClone,
+    generateWithReference: fishMocks.generateWithReference,
     createVoiceClone: fishMocks.createVoiceClone,
     deleteVoiceClone: fishMocks.deleteVoiceClone,
     renameVoiceClone: fishMocks.renameVoiceClone,
@@ -128,6 +143,7 @@ vi.mock('../../src/services/drama3Tts.js', () => ({
   drama3TtsService: {
     generate: drama3Mocks.generate,
     generateVoiceClone: drama3Mocks.generateVoiceClone,
+    generateWithReference: drama3Mocks.generateWithReference,
     listVoiceClones: drama3Mocks.listVoiceClones,
     isReady: vi.fn().mockReturnValue(false),
     getModelInfo: vi.fn().mockReturnValue({
@@ -138,6 +154,20 @@ vi.mock('../../src/services/drama3Tts.js', () => ({
       sampleRate: 44100,
       streaming: false,
     }),
+  },
+}));
+
+vi.mock('../../src/services/transcription.js', () => ({
+  transcriptionService: {
+    transcribe: sttMocks.parakeetTranscribe,
+    isReady: vi.fn().mockReturnValue(false),
+  },
+}));
+
+vi.mock('../../src/services/nemotron.js', () => ({
+  nemotronService: {
+    transcribe: sttMocks.nemotronTranscribe,
+    isReady: vi.fn().mockReturnValue(false),
   },
 }));
 
@@ -295,6 +325,16 @@ describe('Fish Drama 3 routes', () => {
       writeFileSync(options.outputPath, createFakeWavBuffer());
       return { outputPath: options.outputPath, duration: 2.0, cloneId: options.cloneId };
     });
+    drama3Mocks.generateWithReference.mockImplementation(async (text, options) => {
+      writeFileSync(options.outputPath, createFakeWavBuffer());
+      return {
+        outputPath: options.outputPath,
+        duration: 2.0,
+        rtf: 0.75,
+        model: 'drama-3-nvfp4-pruned',
+        finishReason: 'stop',
+      };
+    });
     drama3Mocks.listVoiceClones.mockResolvedValue({ voices: ['default'], clones: ['demo_clone'] });
     server = await initServer();
   });
@@ -399,5 +439,118 @@ describe('Fish Drama 3 routes', () => {
       perRequestMaxTokens: false, sampling: { temperature: 1, configurable: false },
     });
     expect(JSON.parse(response.payload).features).not.toContain('speaker_tags');
+  });
+
+  it('supports mp3 and flac output format conversions alongside opus and wav', async () => {
+    for (const [format, mime] of [['mp3', 'audio/mpeg'], ['flac', 'audio/flac']]) {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/drama3-tts',
+        payload: { text: '[warmly] Testing audio output formats.', format },
+      });
+      expect(response.statusCode).toBe(200);
+      expect(response.headers['content-type']).toBe(mime);
+      expect(response.headers['content-disposition']).toContain(`fish-drama3-output.${format}`);
+    }
+  });
+
+  it('generates speech with stateless POST /drama3-tts/generate-with-reference and explicit transcript', async () => {
+    const wav = createFakeWavBuffer();
+    const boundary = '----drama3-ephemeral';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ref.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+      wav,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\n[sighs] Ephemeral clone line.\r\n--${boundary}\r\nContent-Disposition: form-data; name="referenceText"\r\n\r\nSpoken reference words.\r\n--${boundary}\r\nContent-Disposition: form-data; name="format"\r\n\r\nmp3\r\n--${boundary}--\r\n`),
+    ]);
+
+    const response = await server.inject({
+      method: 'POST',
+      url: '/drama3-tts/generate-with-reference',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(response.statusCode).toBe(200);
+    expect(response.headers['content-type']).toBe('audio/mpeg');
+    expect(response.headers['x-finish-reason']).toBe('stop');
+    expect(drama3Mocks.generateWithReference).toHaveBeenCalledWith(
+      '[sighs] Ephemeral clone line.',
+      expect.objectContaining({
+        referenceAudioPath: expect.stringMatching(/\.wav$/),
+        referenceText: 'Spoken reference words.',
+      }),
+    );
+  });
+
+  it('auto-transcribes reference audio via Parakeet when transcript is omitted on /drama3-tts/generate-with-reference', async () => {
+    configState.transcriptionEnabled = true;
+    sttMocks.parakeetTranscribe.mockResolvedValueOnce({
+      text: 'Auto transcribed reference phrase.',
+      rawOutput: '',
+    });
+
+    const wav = createFakeWavBuffer();
+    const boundary = '----drama3-autostt';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ref.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+      wav,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\nDeliver this line.\r\n--${boundary}--\r\n`),
+    ]);
+
+    try {
+      const response = await server.inject({
+        method: 'POST',
+        url: '/drama3-tts/generate-with-reference',
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        payload: body,
+      });
+      expect(response.statusCode).toBe(200);
+      expect(sttMocks.parakeetTranscribe).toHaveBeenCalledWith(
+        expect.stringMatching(/\.wav$/),
+        expect.objectContaining({ timestamps: false, wordTimestamps: false }),
+      );
+      expect(drama3Mocks.generateWithReference).toHaveBeenLastCalledWith(
+        'Deliver this line.',
+        expect.objectContaining({ referenceText: 'Auto transcribed reference phrase.' }),
+      );
+    } finally {
+      configState.transcriptionEnabled = false;
+    }
+  });
+
+  it('returns 400 on /drama3-tts/generate-with-reference when transcript is omitted and no STT engine is enabled or speech is empty', async () => {
+    configState.transcriptionEnabled = false;
+    configState.nemotronEnabled = false;
+
+    const wav = createFakeWavBuffer();
+    const boundary = '----drama3-nostt';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ref.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+      wav,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\nNo STT engine.\r\n--${boundary}--\r\n`),
+    ]);
+
+    const noEngineRes = await server.inject({
+      method: 'POST',
+      url: '/drama3-tts/generate-with-reference',
+      headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+      payload: body,
+    });
+    expect(noEngineRes.statusCode).toBe(400);
+    expect(JSON.parse(noEngineRes.payload).message).toMatch(/no transcription engine is enabled/i);
+
+    configState.nemotronEnabled = true;
+    sttMocks.nemotronTranscribe.mockResolvedValueOnce({ text: '<spk:0>   ' });
+    try {
+      const emptyRes = await server.inject({
+        method: 'POST',
+        url: '/drama3-tts/generate-with-reference',
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        payload: body,
+      });
+      expect(emptyRes.statusCode).toBe(400);
+      expect(JSON.parse(emptyRes.payload).message).toMatch(/no speech detected/i);
+    } finally {
+      configState.nemotronEnabled = false;
+    }
   });
 });

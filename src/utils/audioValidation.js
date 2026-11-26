@@ -1,7 +1,7 @@
 import Boom from '@hapi/boom';
 import { basename } from 'node:path';
 
-export const ALLOWED_AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'flac'];
+export const ALLOWED_AUDIO_EXTENSIONS = ['mp3', 'wav', 'm4a', 'mp4', 'webm', 'ogg', 'oga', 'opus', 'flac'];
 
 const MAX_FILENAME_LENGTH = 255;
 

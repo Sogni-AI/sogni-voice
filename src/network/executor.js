@@ -1,11 +1,20 @@
+import { writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
 import { config } from '../config/index.js';
+import { createSyntheticTestWavBuffer } from '../utils/audioFormat.js';
 import { tempFileManager } from '../utils/tempFile.js';
-import { downloadToFile, uploadFile } from './artifacts.js';
-import { findSpeechModel } from './capabilities.js';
+import {
+  downloadReferenceAudio,
+  findReferenceAudioAsset,
+  transcodeAndVerifySttAudio,
+  transcodeReferenceWav,
+  uploadJobArtifact,
+  validateAndProbeAudio,
+} from './artifacts.js';
+import { buildCanonicalTranscript } from './backends.js';
+import { findWorkerModel } from './capabilities.js';
+import { MAX_MEDIA_WORKER_CONCURRENT_JOBS } from './config.js';
 
-// `options` is the standard Error options bag, so `{ cause }` on a mapped error
-// keeps the underlying adapter/daemon stack reachable. The (code, message) call
-// shape is unchanged for every other throw site.
 export class JobError extends Error {
   constructor(code, message, options = undefined) {
     super(message, options);
@@ -14,34 +23,69 @@ export class JobError extends Error {
   }
 }
 
-// setTimeout stores its delay in a signed 32-bit int and silently reruns anything
-// larger as 1ms, so an oversized broker deadline would fire the timeout race
-// instantly and fail every job it touched.
 export const MAX_TIMER_DELAY_MS = 2147483647;
+const ALLOWED_DRAMA3_FORMATS = new Set(['mp3', 'wav', 'flac']);
+const MAX_RECENT_JOB_TIMINGS = 64;
 
-// Mirrors computeGenerationTimeout() in src/services/qwenTts.js:17 — long TTS
-// input costs wall time roughly linearly in characters. Used only when the
-// broker omits timeoutMs.
-export function computeJobTimeout(job, fallbackMs = config.networkWorker.defaultJobTimeoutMs) {
+export function ensureCompleteTimings(partial = {}) {
+  const round = (v) => (typeof v === 'number' && Number.isFinite(v) ? Math.round(v * 1000) / 1000 : 0);
+  return {
+    assetDownload: round(partial.assetDownload),
+    modelInit: round(partial.modelInit),
+    modelUnload: round(partial.modelUnload),
+    modelLoad: round(partial.modelLoad),
+    inference: round(partial.inference),
+    safeContent: round(partial.safeContent),
+    assetUpload: round(partial.assetUpload),
+    other: round(partial.other),
+  };
+}
+
+export function computeJobTimeout(
+  job,
+  fallbackMs = config.networkWorker?.defaultJobTimeoutMs || 600_000,
+) {
   const requested = Number(job?.timeoutMs);
   if (Number.isFinite(requested) && requested > 0) {
     return Math.min(requested, MAX_TIMER_DELAY_MS);
   }
 
-  const text = typeof job?.params?.text === 'string' ? job.params.text : '';
-  const scaled = fallbackMs + text.length * 40;
-  return Math.min(900000, Math.max(fallbackMs, scaled));
+  if (job?.workflowId === 'fish_drama_3_nvfp4') {
+    const text = String(job?.clientParams?.tags || job?.clientParams?.positivePrompt || '');
+    const scaled = Math.max(fallbackMs, 180_000 + text.length * 250);
+    return Math.min(900_000, scaled);
+  }
+
+  const rawDeclared = Number(job?.clientParams?.duration);
+  const declaredDuration = Number.isFinite(rawDeclared) && rawDeclared > 0 ? rawDeclared : 60;
+  const sttScaled = Math.max(fallbackMs, 120_000 + declaredDuration * 500);
+  return Math.min(3_600_000, sttScaled);
 }
 
-// The service adapters take no per-call timeout (src/services/transcription.js:190,
-// src/services/tts.js:193), so the broker's deadline is enforced out here.
-export function withTimeout(promise, timeoutMs, label) {
+export function estimateJobEtaSeconds(job, model, elapsedSeconds = 0) {
+  let expectedTotalSeconds = 15;
+  if (model?.engine === 'drama3') {
+    const chars = String(job?.clientParams?.tags || job?.clientParams?.positivePrompt || '').length || 60;
+    expectedTotalSeconds = Math.max(6, Math.ceil(4 + chars * 0.06));
+  } else if (model?.engine === 'parakeet') {
+    const rawDur = Number(job?.clientParams?.duration);
+    const dur = Number.isFinite(rawDur) && rawDur > 0 ? rawDur : 60;
+    expectedTotalSeconds = Math.max(3, Math.ceil(2 + dur * 0.04));
+  } else if (model?.engine === 'nemotron') {
+    const rawDur = Number(job?.clientParams?.duration);
+    const dur = Number.isFinite(rawDur) && rawDur > 0 ? rawDur : 60;
+    expectedTotalSeconds = Math.max(5, Math.ceil(4 + dur * 0.12));
+  }
+  return Math.max(1, Math.ceil(expectedTotalSeconds - elapsedSeconds));
+}
+
+export function withTimeout(promise, timeoutMs, label, onTimeout = null) {
   let timer = null;
   const deadline = new Promise((_, reject) => {
-    timer = setTimeout(
-      () => reject(new JobError('timeout', `${label} exceeded ${timeoutMs}ms`)),
-      timeoutMs,
-    );
+    timer = setTimeout(() => {
+      onTimeout?.();
+      reject(new JobError('genfailure', `${label} timed out after ${timeoutMs}ms`));
+    }, timeoutMs);
   });
 
   return Promise.race([promise, deadline]).finally(() => {
@@ -49,265 +93,488 @@ export function withTimeout(promise, timeoutMs, label) {
   });
 }
 
-export function extensionFromUrl(url, fallback = 'wav') {
-  try {
-    const name = new URL(url).pathname.split('/').pop() || '';
-    const dot = name.lastIndexOf('.');
-    if (dot > 0 && dot < name.length - 1) return name.slice(dot + 1).toLowerCase();
-  } catch {
-    return fallback;
-  }
-  return fallback;
-}
+const isAbortError = (error, signal) => (
+  Boolean(signal?.aborted)
+  || error?.name === 'AbortError'
+  || error?.code === 'aborted'
+);
 
-// Batch Parakeet returns text plus optional segments and no duration
-// (scripts/parakeet_daemon.py:140), so billable audio length comes from the end
-// of the last sentence segment.
-export function deriveAudioSeconds(result) {
-  const segments = Array.isArray(result?.timestamps) ? result.timestamps : [];
-  if (segments.length === 0) return null;
-
-  const last = segments[segments.length - 1];
-  return typeof last?.end === 'number' ? Number(last.end.toFixed(3)) : null;
-}
-
-export class SpeechExecutor {
+export class VoiceSupernetExecutor {
   constructor({
-    speechModels,
-    maxConcurrentJobs = config.networkWorker.maxConcurrentJobs,
-    transcriptionService,
-    ttsService,
-    qwenTtsService = null,
+    workerModels,
+    backend,
+    apiUrl = 'https://api.sogni.ai',
+    sogniEnv = config.networkWorker?.sogniEnv || 'staging',
+    rejectUnauthorized = undefined,
+    maxConcurrentJobs = 1,
     tempFiles = tempFileManager,
-    artifacts = { downloadToFile, uploadFile },
+    artifacts = {
+      downloadReferenceAudio,
+      validateAndProbeAudio,
+      transcodeAndVerifySttAudio,
+      transcodeReferenceWav,
+      uploadJobArtifact,
+    },
     now = () => Date.now(),
   }) {
-    this.speechModels = speechModels;
-    this.maxConcurrentJobs = maxConcurrentJobs;
-    this.transcriptionService = transcriptionService;
-    this.ttsService = ttsService;
-    this.qwenTtsService = qwenTtsService;
+    this.workerModels = workerModels || [];
+    this.backend = backend;
+    this.apiUrl = apiUrl;
+    this.sogniEnv = sogniEnv;
+    this.rejectUnauthorized = rejectUnauthorized;
+    // Sogni socket tracks a single activeWorkerJob per media worker socket: clamp to 1.
+    this.maxConcurrentJobs = Math.min(
+      MAX_MEDIA_WORKER_CONCURRENT_JOBS,
+      Math.max(1, Number(maxConcurrentJobs) || 1),
+    );
     this.tempFiles = tempFiles;
     this.artifacts = artifacts;
     this.now = now;
     this.draining = false;
+    this.loadedModelID = null;
     this.activeJobs = new Map();
-    this.modelCounts = new Map();
+    this.recentTimings = new Map();
   }
 
   get activeRequests() {
     return this.activeJobs.size;
   }
 
+  setWorkerModels(models) {
+    this.workerModels = [...models];
+  }
+
+  getHeldJobs() {
+    const current = this.now();
+    return [...this.activeJobs.values()].map((entry) => ({
+      jobID: entry.job.jobID,
+      ...(entry.job.imageId ? { imgID: entry.job.imageId } : {}),
+      phase: entry.phase,
+      step: entry.phase === 'finished' ? 1 : 0,
+      stepCount: 1,
+      heldForMs: Math.max(0, current - entry.startedAt),
+    }));
+  }
+
   accept(job) {
     if (this.draining) {
       throw new JobError('draining', 'Worker is draining and not accepting new jobs');
     }
-    if (!job || typeof job.jobID !== 'string' || job.jobID.length === 0) {
-      throw new JobError('invalid_request', 'jobRequest is missing jobID');
+    if (!job || typeof job.jobID !== 'string' || job.jobID.trim().length === 0) {
+      throw new JobError('invalidInput', 'jobRequest is missing jobID');
     }
-    if (job.jobType !== 'speech') {
-      throw new JobError('invalid_request', `Unsupported jobType "${job.jobType}"`);
+    if (typeof job.workflowId !== 'string' || job.workflowId.trim().length === 0) {
+      throw new JobError('invalidInput', 'jobRequest is missing workflowId');
     }
     if (this.activeJobs.has(job.jobID)) {
-      throw new JobError('invalid_request', `Job ${job.jobID} is already running`);
+      throw new JobError('invalidInput', `Job ${job.jobID} is already running`);
     }
 
-    const model = findSpeechModel(this.speechModels, job.modelID, job.task);
+    const model = findWorkerModel(this.workerModels, job.workflowId);
     if (!model) {
       throw new JobError(
-        'unsupported_model',
-        `No enabled engine for modelID "${job.modelID}" task "${job.task}"`,
+        'genfailure',
+        `Workflow "${job.workflowId}" is not enabled on this worker`,
       );
     }
+
     if (this.activeJobs.size >= this.maxConcurrentJobs) {
       throw new JobError(
         'capacity_exceeded',
-        `Worker is at capacity (${this.maxConcurrentJobs} concurrent jobs)`,
+        `Worker is at capacity (${this.maxConcurrentJobs} concurrent job(s))`,
       );
     }
 
-    const modelCount = this.modelCounts.get(model.id) || 0;
-    if (modelCount >= model.maxConcurrent) {
-      throw new JobError(
-        'capacity_exceeded',
-        `Model ${model.id} is at capacity (${model.maxConcurrent} concurrent jobs)`,
-      );
-    }
-
-    this.activeJobs.set(job.jobID, { model, aborted: false });
-    this.modelCounts.set(model.id, modelCount + 1);
-    return model;
+    const entry = {
+      job,
+      model,
+      controller: new AbortController(),
+      aborted: false,
+      phase: 'setup',
+      startedAt: this.now(),
+      timings: {},
+    };
+    this.activeJobs.set(job.jobID, entry);
+    return { model, entry };
   }
 
-  // `entry` is captured once here and never re-read from activeJobs: abort() deletes
-  // the map entry, so a by-ID lookup later in the run would miss the abort flag and
-  // report a cancelled job as a success.
+  _rememberTimings(jobID, timings) {
+    this.recentTimings.delete(jobID);
+    this.recentTimings.set(jobID, ensureCompleteTimings(timings));
+    while (this.recentTimings.size > MAX_RECENT_JOB_TIMINGS) {
+      const oldestKey = this.recentTimings.keys().next().value;
+      this.recentTimings.delete(oldestKey);
+    }
+  }
+
+  getTimings(jobID) {
+    const active = this.activeJobs.get(jobID);
+    if (active) return ensureCompleteTimings(active.timings);
+    const remembered = this.recentTimings.get(jobID);
+    return ensureCompleteTimings(remembered);
+  }
+
   async execute(job) {
     const entry = this.activeJobs.get(job.jobID);
     if (!entry) {
-      throw new JobError('invalid_request', `Job ${job.jobID} was not accepted`);
+      throw new JobError('invalidInput', `Job ${job.jobID} was not accepted`);
     }
 
-    const startedAt = this.now();
     const timeoutMs = computeJobTimeout(job);
     let tempDir = null;
 
     try {
-      tempDir = await this.tempFiles.createTempDir('sogni-speech-job-');
+      tempDir = await this.tempFiles.createTempDir('sogni-voice-job-');
+      const runWork = entry.model.task === 'stt'
+        ? this._executeStt(job, entry, tempDir)
+        : this._executeDrama3(job, entry, tempDir);
 
-      const work = entry.model.task === 'stt'
-        ? this._runStt(job, entry, tempDir)
-        : this._runTts(job, entry, tempDir);
+      const result = await withTimeout(
+        runWork,
+        timeoutMs,
+        `Job ${job.jobID}`,
+        () => entry.controller.abort(),
+      );
 
-      const outcome = await withTimeout(work, timeoutMs, `Job ${job.jobID}`);
       if (entry.aborted) {
-        throw new JobError('aborted', `Job ${job.jobID} was aborted`);
+        throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
       }
+
+      this._rememberTimings(job.jobID, entry.timings);
+      return result;
+    } catch (error) {
+      const capturedTimings = ensureCompleteTimings(entry.timings);
+      this._rememberTimings(job.jobID, capturedTimings);
+
+      let mappedError;
+      if (entry.aborted || isAbortError(error, entry.controller.signal)) {
+        if (entry.aborted) {
+          mappedError = new JobError('aborted', `Job ${job.jobID} was cancelled`, { cause: error });
+        }
+      }
+      if (!mappedError) {
+        if (error instanceof JobError) {
+          mappedError = error;
+        } else if (error?.invalidInput) {
+          mappedError = new JobError('invalidInput', error.message, { cause: error });
+        } else {
+          mappedError = new JobError('genfailure', error?.message || String(error), { cause: error });
+        }
+      }
+      mappedError.timings = capturedTimings;
+      throw mappedError;
+    } finally {
+      if (tempDir) await this.tempFiles.cleanup(tempDir);
+      this._release(job.jobID, entry);
+    }
+  }
+
+  async _executeDrama3(job, entry, tempDir) {
+    const { signal } = entry.controller;
+    const outputFormat = String(job.outputFormat || 'mp3').toLowerCase();
+    if (!ALLOWED_DRAMA3_FORMATS.has(outputFormat)) {
+      throw new JobError(
+        'invalidInput',
+        `Unsupported Drama 3 outputFormat "${job.outputFormat}" (expected mp3, wav, or flac)`,
+      );
+    }
+
+    const isTest = job.isTest === true;
+    const rawText = isTest
+      ? (job.clientParams?.tags || job.clientParams?.positivePrompt || 'This is a short voice test.')
+      : (typeof job.clientParams?.tags === 'string' && job.clientParams.tags.length > 0
+          ? job.clientParams.tags
+          : (typeof job.clientParams?.positivePrompt === 'string' ? job.clientParams.positivePrompt : ''));
+
+    if (!String(rawText).trim()) {
+      throw new JobError('invalidInput', 'Drama 3 job requires non-empty text');
+    }
+
+    let referenceWavPath = null;
+    if (!isTest && findReferenceAudioAsset(job)) {
+      const dlStart = this.now();
+      let downloaded;
+      try {
+        downloaded = await this.artifacts.downloadReferenceAudio(job, tempDir, {
+          apiUrl: this.apiUrl,
+          sogniEnv: this.sogniEnv,
+          rejectUnauthorized: this.rejectUnauthorized,
+          signal,
+        });
+      } catch (error) {
+        entry.timings.assetDownload = (this.now() - dlStart) / 1000;
+        if (isAbortError(error, signal)) throw error;
+        const code = error?.invalidInput ? 'invalidInput' : 'genfailure';
+        throw new JobError(code, `Failed to download referenceAudio: ${error.message}`, {
+          cause: error,
+        });
+      }
+      entry.timings.assetDownload = (this.now() - dlStart) / 1000;
+
+      const setupStart = this.now();
+      const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, { signal });
+      if (probed.duration < 1) {
+        throw new JobError(
+          'invalidInput',
+          `Reference audio must be at least 1 seconds long, got ${probed.duration.toFixed(1)}s`,
+        );
+      }
+      if (probed.duration > 30) {
+        throw new JobError(
+          'invalidInput',
+          `Reference audio must be at most 30 seconds long, got ${probed.duration.toFixed(1)}s`,
+        );
+      }
+
+      referenceWavPath = await this.artifacts.transcodeReferenceWav(
+        downloaded.path,
+        join(tempDir, 'reference-44k.wav'),
+        { signal },
+      );
+      entry.timings.other = (entry.timings.other || 0) + (this.now() - setupStart) / 1000;
+    }
+
+    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
+
+    entry.phase = 'running';
+    this.loadedModelID = entry.model.id;
+    const inferStart = this.now();
+    try {
+      const synthesized = await this.backend.synthesizeDrama3({
+        text: rawText,
+        referenceWavPath,
+        referenceText: isTest ? '' : (job.clientParams?.referenceText || ''),
+        outputFormat,
+        tempDir,
+        signal,
+      });
+      entry.timings.inference = (this.now() - inferStart) / 1000;
+
+      if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
+
+      entry.phase = 'finished';
+      const uploadStart = this.now();
+      let uploaded;
+      try {
+        uploaded = await this.artifacts.uploadJobArtifact({
+          apiUrl: this.apiUrl,
+          sogniEnv: this.sogniEnv,
+          jobId: job.jobID,
+          imageId: job.imageId,
+          buffer: synthesized.buffer,
+          contentType: synthesized.contentType,
+          artifactType: 'complete',
+          rejectUnauthorized: this.rejectUnauthorized,
+          signal,
+        });
+      } catch (error) {
+        entry.timings.assetUpload = (this.now() - uploadStart) / 1000;
+        if (isAbortError(error, signal)) throw error;
+        throw new JobError('imgUploadFailure', error.message, { cause: error });
+      }
+      entry.timings.assetUpload = (this.now() - uploadStart) / 1000;
 
       return {
         jobID: job.jobID,
-        ...outcome.payload,
-        meta: { ...outcome.meta, durationMs: this.now() - startedAt },
+        imgID: job.imageId,
+        performedStepCount: 1,
+        lastSeed: job.clientParams?.seed ?? 0,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        timings: ensureCompleteTimings(entry.timings),
+        sha256: uploaded.sha256,
       };
-    } finally {
-      this._release(job.jobID, entry);
-      if (tempDir) await this.tempFiles.cleanup(tempDir);
-    }
-  }
-
-  async _runStt(job, entry, tempDir) {
-    if (!job.input || typeof job.input.url !== 'string') {
-      throw new JobError('invalid_request', 'STT jobRequest requires input.url');
-    }
-
-    const inputPath = `${tempDir}/input.${extensionFromUrl(job.input.url)}`;
-    // A failed download can still leave a zero-byte file at inputPath, so the daemon
-    // is only handed the path once downloadToFile has resolved.
-    try {
-      await this.artifacts.downloadToFile(job.input.url, inputPath);
     } catch (error) {
-      throw new JobError('input_download_failed', error.message, { cause: error });
-    }
-
-    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
-
-    let result;
-    try {
-      result = await this.transcriptionService.transcribe(inputPath, { timestamps: true });
-    } catch (error) {
-      throw new JobError('stt_failed', error.message, { cause: error });
-    }
-
-    // The broker persists `transcript` as a string, so the wire field is the text
-    // alone. Segments and raw daemon output ride along under `transcriptDetails`,
-    // which the broker ignores today — it keeps the structured data one schema
-    // change away from being usable rather than dropping it here.
-    return {
-      payload: {
-        transcript: typeof result?.text === 'string' ? result.text : '',
-        transcriptDetails: result,
-      },
-      meta: { audioSeconds: deriveAudioSeconds(result) },
-    };
-  }
-
-  async _runTts(job, entry, tempDir) {
-    // Synthesized verbatim, not trimmed: the broker meters params.text exactly as it
-    // arrived, so trimming would bill for characters that were never spoken. Only the
-    // emptiness check looks at the trimmed form — whitespace alone is still no text.
-    const text = typeof job.params?.text === 'string' ? job.params.text : '';
-    if (!text.trim()) {
-      throw new JobError('invalid_request', 'TTS jobRequest requires params.text');
-    }
-    if (!job.output || typeof job.output.uploadUrl !== 'string') {
-      throw new JobError('invalid_request', 'TTS jobRequest requires output.uploadUrl');
-    }
-
-    // Only Kokoro has a rate control, and the broker applies no bounds of its own.
-    // The HTTP route gates the same range at the edge (Joi .min(0.5).max(2.0),
-    // src/routes/tts.js:35), so an out-of-range job has to fail here — before
-    // synthesis, since a rejected request must not be billed.
-    const hasSpeed = job.params.speed !== undefined
-      && job.params.speed !== null
-      && job.params.speed !== '';
-    let speed = config.tts.defaultSpeed;
-    if (entry.model.engine === 'kokoro' && hasSpeed) {
-      speed = Number(job.params.speed);
-      if (!Number.isFinite(speed) || speed < 0.5 || speed > 2.0) {
-        throw new JobError('invalid_request', 'speed must be between 0.5 and 2.0');
+      if (entry.timings.inference === undefined) {
+        entry.timings.inference = (this.now() - inferStart) / 1000;
       }
+      throw error;
     }
+  }
 
-    const outputPath = `${tempDir}/output.wav`;
-    try {
-      if (entry.model.engine === 'kokoro') {
-        await this.ttsService.generate(text, {
-          voice: job.params.voice || config.tts.defaultVoice,
-          speed,
-          outputPath,
+  async _executeStt(job, entry, tempDir) {
+    const { signal } = entry.controller;
+    const isTest = job.isTest === true;
+    let audioPath;
+    let actualDuration;
+
+    if (isTest) {
+      audioPath = join(tempDir, 'test-tone.wav');
+      await writeFile(audioPath, createSyntheticTestWavBuffer({ durationSeconds: 2, sampleRate: 16000 }));
+      actualDuration = 2.0;
+    } else {
+      const dlStart = this.now();
+      let downloaded;
+      try {
+        downloaded = await this.artifacts.downloadReferenceAudio(job, tempDir, {
+          apiUrl: this.apiUrl,
+          sogniEnv: this.sogniEnv,
+          rejectUnauthorized: this.rejectUnauthorized,
+          signal,
         });
+      } catch (error) {
+        entry.timings.assetDownload = (this.now() - dlStart) / 1000;
+        if (isAbortError(error, signal)) throw error;
+        const code = error?.invalidInput ? 'invalidInput' : 'genfailure';
+        throw new JobError(code, `Failed to download referenceAudio: ${error.message}`, {
+          cause: error,
+        });
+      }
+      if (!downloaded) {
+        throw new JobError('invalidInput', `${job.workflowId} requires referenceAudio input`);
+      }
+      entry.timings.assetDownload = (this.now() - dlStart) / 1000;
+
+      const rawDeclared = Number(job.clientParams?.duration);
+      const declaredDuration = Number.isFinite(rawDeclared) && rawDeclared > 0 ? rawDeclared : 60;
+      const maxAllowedSeconds = entry.model.engine === 'nemotron' ? 3600 : 7200;
+      const allowedMaxDuration = Math.min(maxAllowedSeconds, declaredDuration * 1.15 + 5);
+
+      const probeStart = this.now();
+      if (typeof this.artifacts.transcodeAndVerifySttAudio === 'function') {
+        const verified = await this.artifacts.transcodeAndVerifySttAudio(
+          downloaded.path,
+          join(tempDir, 'stt-clean-16k.flac'),
+          {
+            allowedMaxDuration,
+            declaredDuration,
+            maxModelSeconds: maxAllowedSeconds,
+            workflowId: job.workflowId,
+            signal,
+          },
+        );
+        audioPath = verified.path;
+        actualDuration = verified.duration;
       } else {
-        if (!this.qwenTtsService) {
-          throw new Error('Qwen preset TTS engine is not configured');
-        }
-        await this.qwenTtsService.generate(text, {
-          voice: job.params.voice || config.qwenTts.defaultVoice,
-          language: job.params.language || config.qwenTts.defaultLanguage,
-          outputPath,
-        });
+        const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, { signal });
+        actualDuration = probed.duration;
+        audioPath = downloaded.path;
       }
-    } catch (error) {
-      throw new JobError('tts_failed', error.message, { cause: error });
+      entry.timings.other = (entry.timings.other || 0) + (this.now() - probeStart) / 1000;
+
+      if (!Number.isFinite(actualDuration) || actualDuration <= 0) {
+        throw new JobError('invalidInput', 'Uploaded audio file has zero or unreadable duration.');
+      }
+
+      if (actualDuration > maxAllowedSeconds) {
+        throw new JobError(
+          'invalidInput',
+          `Audio duration ${actualDuration.toFixed(1)}s exceeds maximum ${maxAllowedSeconds}s for ${job.workflowId}`,
+        );
+      }
+
+      if (actualDuration > allowedMaxDuration) {
+        throw new JobError(
+          'invalidInput',
+          `Audio duration ${actualDuration.toFixed(1)}s exceeds declared duration ${declaredDuration}s`,
+        );
+      }
     }
 
-    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was aborted`);
+    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
 
+    const clientParams = job.clientParams || {};
+    const requestedTimestamps = typeof clientParams.timestamps === 'string'
+      ? clientParams.timestamps
+      : 'sentence';
+    if (!['none', 'sentence', 'word'].includes(requestedTimestamps)) {
+      throw new JobError(
+        'invalidInput',
+        `Unsupported timestamps granularity "${requestedTimestamps}" (expected none, sentence, or word)`,
+      );
+    }
+
+    const isNemotron = entry.model.engine === 'nemotron';
+    const diarize = isNemotron ? Boolean(clientParams.diarize) : false;
+    const hotwords = isNemotron && typeof clientParams.hotwords === 'string' && clientParams.hotwords.trim()
+      ? clientParams.hotwords.trim().slice(0, 1000)
+      : undefined;
+    const rawPromptHint = isNemotron
+      ? (clientParams.tags || clientParams.positivePrompt || '')
+      : '';
+    const prompt = typeof rawPromptHint === 'string' && rawPromptHint.trim()
+      ? rawPromptHint.trim().slice(0, 2000)
+      : undefined;
+
+    entry.phase = 'running';
+    this.loadedModelID = entry.model.id;
+    const inferStart = this.now();
+    let rawResult;
+    try {
+      rawResult = await this.backend.transcribe({
+        engine: entry.model.engine,
+        audioPath,
+        tempDir,
+        timestamps: requestedTimestamps !== 'none',
+        wordTimestamps: requestedTimestamps === 'word',
+        diarize,
+        hotwords,
+        prompt,
+        signal,
+      });
+      entry.timings.inference = (this.now() - inferStart) / 1000;
+    } catch (error) {
+      entry.timings.inference = (this.now() - inferStart) / 1000;
+      throw error;
+    }
+
+    if (entry.aborted) throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
+
+    const canonical = buildCanonicalTranscript({
+      workflowId: job.workflowId,
+      rawResult,
+      audioSeconds: actualDuration,
+      requestedTimestamps,
+      diarize,
+    });
+    const artifactBuffer = Buffer.from(JSON.stringify(canonical), 'utf-8');
+
+    entry.phase = 'finished';
+    const uploadStart = this.now();
     let uploaded;
     try {
-      uploaded = await this.artifacts.uploadFile(job.output.uploadUrl, outputPath);
+      uploaded = await this.artifacts.uploadJobArtifact({
+        apiUrl: this.apiUrl,
+        sogniEnv: this.sogniEnv,
+        jobId: job.jobID,
+        imageId: job.imageId,
+        buffer: artifactBuffer,
+        contentType: 'application/json',
+        artifactType: 'complete',
+        rejectUnauthorized: this.rejectUnauthorized,
+        signal,
+      });
     } catch (error) {
-      throw new JobError('upload_failed', error.message, { cause: error });
+      entry.timings.assetUpload = (this.now() - uploadStart) / 1000;
+      if (isAbortError(error, signal)) throw error;
+      throw new JobError('imgUploadFailure', error.message, { cause: error });
     }
+    entry.timings.assetUpload = (this.now() - uploadStart) / 1000;
 
-    // Catches an adapter that resolved having written nothing at all — an empty
-    // file, not silence: a 44-byte header-only WAV has bytes > 0 and passes.
-    // Checked outside the catch above so it reports as a synthesis fault rather
-    // than an upload one, and so no result — and no charge — settles for nothing.
-    if (uploaded.bytes === 0) {
-      throw new JobError('tts_failed', 'Synthesis produced empty audio');
-    }
-
-    // The broker meters NFC code points. text.length counts UTF-16 units, which
-    // over-reports astral characters and decomposed accents — every such job would
-    // trip the billing drift warning on a count the worker itself got wrong.
     return {
-      payload: { uploadedKey: uploaded.uploadedKey },
-      meta: { charCount: Array.from(text.normalize('NFC')).length },
+      jobID: job.jobID,
+      imgID: job.imageId,
+      performedStepCount: 1,
+      lastSeed: clientParams.seed ?? 0,
+      userCanceled: false,
+      triggeredNSFWFilter: false,
+      timings: ensureCompleteTimings(entry.timings),
+      sha256: uploaded.sha256,
     };
   }
 
-  // `expectedEntry` guards against a stale release: abort() frees the slot while the
-  // uncancellable adapter call is still running, so the broker can re-issue the same
-  // jobID before that first run settles. Releasing by ID alone would then evict the
-  // replacement job and let the worker over-admit past the model's maxConcurrent.
   _release(jobID, expectedEntry = null) {
     const entry = this.activeJobs.get(jobID);
     if (!entry) return;
     if (expectedEntry && entry !== expectedEntry) return;
-
     this.activeJobs.delete(jobID);
-    const remaining = (this.modelCounts.get(entry.model.id) || 1) - 1;
-    if (remaining <= 0) this.modelCounts.delete(entry.model.id);
-    else this.modelCounts.set(entry.model.id, remaining);
   }
 
   abort(jobID) {
     const entry = this.activeJobs.get(jobID);
     if (!entry) return false;
-
     entry.aborted = true;
-    this._release(jobID, entry);
+    entry.controller.abort();
     return true;
   }
 

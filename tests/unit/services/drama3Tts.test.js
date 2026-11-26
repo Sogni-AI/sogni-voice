@@ -123,4 +123,29 @@ describe('Drama3TTSService', () => {
     mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/d3.wav","duration":2.5,"rtf":0.9}\n`);
     expect(await result).toMatchObject({ outputPath: '/tmp/d3.wav', rtf: 0.9 });
   });
+
+  it('inherits stateless generateWithReference for Drama 3 ephemeral cloning', async () => {
+    await initReady();
+    const result = service.generateWithReference('[sighs] Stateless Drama 3.', {
+      referenceAudioPath: '/tmp/ref.wav',
+      referenceText: 'Reference transcript.',
+      outputPath: '/tmp/d3-ref.wav',
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    const request = JSON.parse(mockStdin.lastWrite);
+    expect(request).toMatchObject({
+      type: 'generate_with_reference',
+      reference_audio_path: '/tmp/ref.wav',
+      reference_text: 'Reference transcript.',
+      output_path: '/tmp/d3-ref.wav',
+    });
+    expect(request).not.toHaveProperty('max_tokens');
+    expect(request).not.toHaveProperty('temperature');
+    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/d3-ref.wav","duration":3.0,"rtf":0.85,"finish_reason":"stop"}\n`);
+    await expect(result).resolves.toMatchObject({
+      outputPath: '/tmp/d3-ref.wav',
+      duration: 3.0,
+      finishReason: 'stop',
+    });
+  });
 });

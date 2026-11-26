@@ -1,235 +1,255 @@
-import { describe, it, expect, vi } from 'vitest';
-import { SpeechExecutor } from '../../../src/network/executor.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { VOICE_SUPERNET_MODELS } from '../../../src/network/capabilities.js';
+import { VoiceSupernetExecutor } from '../../../src/network/executor.js';
 
-const MODELS = [{ id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' }];
+describe('VoiceSupernetExecutor STT (Parakeet & Nemotron)', () => {
+  let tempDir;
 
-const job = (overrides = {}) => ({
-  jobID: 'job-stt-1',
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'stt',
-  modelID: 'parakeet-tdt-0.6b-v3',
-  params: {},
-  input: { url: 'https://s3.test/in/clip.mp3?sig=1' },
-  output: null,
-  timeoutMs: 60000,
-  ...overrides,
-});
-
-const setup = (overrides = {}) => {
-  const transcriptionService = {
-    transcribe: vi.fn(async () => ({
-      text: 'hello world',
-      rawOutput: '',
-      timestamps: [{ start: 0, end: 2.5, text: 'hello world' }],
-    })),
-  };
-  const tempFiles = {
-    createTempDir: vi.fn(async () => '/tmp/sogni-speech-job-abc'),
-    cleanup: vi.fn(async () => {}),
-  };
-  const artifacts = {
-    downloadToFile: vi.fn(async (url, destPath) => ({ path: destPath, bytes: 1024 })),
-    uploadFile: vi.fn(),
-  };
-  let clock = 1000;
-  const executor = new SpeechExecutor({
-    speechModels: MODELS,
-    maxConcurrentJobs: 2,
-    transcriptionService,
-    ttsService: { generate: vi.fn() },
-    tempFiles,
-    artifacts,
-    now: () => {
-      clock += 250;
-      return clock;
-    },
-    ...overrides,
-  });
-  return { executor, transcriptionService, tempFiles, artifacts };
-};
-
-describe('SpeechExecutor STT', () => {
-  it('downloads the input, transcribes it, and returns transcript plus meta', async () => {
-    const { executor, transcriptionService, artifacts, tempFiles } = setup();
-    const request = job();
-    executor.accept(request);
-
-    const result = await executor.execute(request);
-
-    expect(artifacts.downloadToFile)
-      .toHaveBeenCalledWith('https://s3.test/in/clip.mp3?sig=1', '/tmp/sogni-speech-job-abc/input.mp3');
-    expect(transcriptionService.transcribe)
-      .toHaveBeenCalledWith('/tmp/sogni-speech-job-abc/input.mp3', { timestamps: true });
-    expect(result).toEqual({
-      jobID: 'job-stt-1',
-      transcript: 'hello world',
-      transcriptDetails: {
-        text: 'hello world',
-        rawOutput: '',
-        timestamps: [{ start: 0, end: 2.5, text: 'hello world' }],
-      },
-      meta: { audioSeconds: 2.5, durationMs: 250 },
-    });
-    expect(tempFiles.cleanup).toHaveBeenCalledWith('/tmp/sogni-speech-job-abc');
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'sogni-exec-stt-'));
   });
 
-  it('frees the concurrency slot after a successful job', async () => {
-    const { executor } = setup();
-    const request = job();
-    executor.accept(request);
-    await executor.execute(request);
-    expect(executor.activeRequests).toBe(0);
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
   });
 
-  it('reports a null audioSeconds when the daemon returns no timestamps', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockResolvedValueOnce({ text: 'hi', rawOutput: '' });
+  const makeSetup = (overrides = {}) => {
+    const uploadedPayloads = [];
+    const backend = {
+      transcribe: vi.fn(async ({ engine }) => (
+        engine === 'nemotron'
+          ? {
+              text: '<spk:0> Welcome aboard. <spk:1> Thank you.',
+              finishReason: 'stop',
+              complete: true,
+              timestamps: [
+                { text: 'Welcome', start: 0.1, end: 0.5, speaker: 'S01' },
+                { text: 'aboard.', start: 0.5, end: 1.0, speaker: 'S01' },
+                { text: 'Thank', start: 1.2, end: 1.5, speaker: 'S02' },
+                { text: 'you.', start: 1.5, end: 1.9, speaker: 'S02' },
+              ],
+            }
+          : {
+              text: 'Parakeet clean transcript.',
+              timestamps: [{ start: 0.0, end: 2.1, text: 'Parakeet clean transcript.' }],
+            }
+      )),
+      synthesizeDrama3: vi.fn(),
+    };
 
-    const result = await executor.execute(request);
-    expect(result.meta.audioSeconds).toBeNull();
-  });
-
-  // The broker stores transcript as a string column, so a daemon result without a
-  // text field still has to leave the wire field a string.
-  it('keeps transcript a string when the daemon returns no text', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockResolvedValueOnce({ rawOutput: '' });
-
-    const result = await executor.execute(request);
-    expect(result.transcript).toBe('');
-    expect(result.transcriptDetails).toEqual({ rawOutput: '' });
-  });
-
-  it('maps a download failure to input_download_failed', async () => {
-    const { executor, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.downloadToFile.mockRejectedValueOnce(new Error('Input download failed with HTTP 403'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'input_download_failed',
-      message: 'Input download failed with HTTP 403',
-    });
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  // A failed download can still leave a zero-byte file behind, so the daemon must
-  // never be handed a path from a download that threw.
-  it('never transcribes when the download failed', async () => {
-    const { executor, transcriptionService, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.downloadToFile.mockRejectedValueOnce(new Error('Input download produced an empty file'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'input_download_failed' });
-    expect(transcriptionService.transcribe).not.toHaveBeenCalled();
-  });
-
-  it('maps a daemon failure to stt_failed', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockRejectedValueOnce(new Error('Transcription timed out'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'stt_failed',
-      message: 'Transcription timed out',
-    });
-  });
-
-  // The wire message is only the adapter's message string; without the cause, a
-  // daemon crash arrives with this file's stack instead of the one that matters.
-  it('keeps the original error as the cause of a mapped JobError', async () => {
-    const { executor, transcriptionService, artifacts } = setup();
-    const daemonCrash = new Error('Transcription daemon exited with code 1');
-
-    const sttRequest = job();
-    executor.accept(sttRequest);
-    transcriptionService.transcribe.mockRejectedValueOnce(daemonCrash);
-    await expect(executor.execute(sttRequest)).rejects.toHaveProperty('cause', daemonCrash);
-
-    const downloadFailure = new Error('Input download failed with HTTP 403');
-    const downloadRequest = job({ jobID: 'job-stt-2' });
-    executor.accept(downloadRequest);
-    artifacts.downloadToFile.mockRejectedValueOnce(downloadFailure);
-    await expect(executor.execute(downloadRequest))
-      .rejects.toHaveProperty('cause', downloadFailure);
-  });
-
-  it('rejects an STT job with no input url', async () => {
-    const { executor } = setup();
-    const request = job({ input: null });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'STT jobRequest requires input.url',
-    });
-  });
-
-  it('enforces the broker timeout even though transcribe() ignores it', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job({ timeoutMs: 20 });
-    executor.accept(request);
-    transcriptionService.transcribe.mockImplementationOnce(() => new Promise(() => {}));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'timeout' });
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  it('throws aborted when the broker cancelled mid-flight', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-    transcriptionService.transcribe.mockImplementationOnce(async () => {
-      executor.abort('job-stt-1');
-      return { text: 'discarded', rawOutput: '' };
-    });
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'aborted' });
-  });
-
-  it('rejects execute for a job that was never accepted', async () => {
-    const { executor } = setup();
-    await expect(executor.execute(job({ jobID: 'ghost' }))).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'Job ghost was not accepted',
-    });
-  });
-
-  // abort() frees the slot while the uncancellable daemon call keeps running, so the
-  // broker can re-issue the same jobID before that first run settles. The abandoned
-  // run must recognise its own abort and must not release the replacement's slot,
-  // which is only possible if execute() holds the entry it captured at the start.
-  it('does not evict a re-accepted job when the abandoned run finally settles', async () => {
-    const { executor, transcriptionService } = setup();
-    const request = job();
-    executor.accept(request);
-
-    let finishTranscribe;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        finishTranscribe = () => resolve({ text: 'discarded', rawOutput: '' });
+    const artifacts = {
+      downloadReferenceAudio: vi.fn(async (_job, dir) => ({
+        path: join(dir, 'input.wav'),
+        bytes: 4096,
+        detectedFormat: 'wav',
+      })),
+      validateAndProbeAudio: vi.fn(async () => ({ duration: 10.5, formatName: 'wav' })),
+      transcodeAndVerifySttAudio: vi.fn(async (_inPath, outPath) => ({
+        path: outPath,
+        duration: 10.5,
+      })),
+      transcodeReferenceWav: vi.fn(),
+      uploadJobArtifact: vi.fn(async (req) => {
+        uploadedPayloads.push(req);
+        return {
+          uploadUrl: 'https://r2.sogni.test/complete.json',
+          uploadedKey: 'complete.json',
+          bytes: req.buffer.length,
+          sha256: 'c'.repeat(64),
+        };
       }),
-    );
+    };
 
-    const abandoned = executor.execute(request);
-    await vi.waitFor(() => expect(transcriptionService.transcribe).toHaveBeenCalled());
+    let clock = 1000;
+    const executor = new VoiceSupernetExecutor({
+      workerModels: VOICE_SUPERNET_MODELS,
+      backend,
+      apiUrl: 'https://api.sogni.test',
+      tempFiles: {
+        createTempDir: vi.fn(async () => tempDir),
+        cleanup: vi.fn(async () => {}),
+      },
+      artifacts,
+      now: () => {
+        clock += 200;
+        return clock;
+      },
+      ...overrides,
+    });
 
-    executor.abort('job-stt-1');
-    executor.accept(job());
-    const replacement = executor.activeJobs.get('job-stt-1');
+    return { executor, backend, artifacts, uploadedPayloads };
+  };
 
-    finishTranscribe();
-    await expect(abandoned).rejects.toMatchObject({ code: 'aborted' });
+  it('transcribes Parakeet audio and uploads canonical application/json artifact', async () => {
+    const { executor, backend, artifacts, uploadedPayloads } = makeSetup();
+    const job = {
+      jobID: 'stt-parakeet-1',
+      imageId: 'img-p1',
+      workflowId: 'parakeet_tdt_0.6b_v3_bf16',
+      outputFormat: 'json',
+      clientParams: { seed: 7, duration: 12, timestamps: 'sentence' },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
 
-    expect(executor.activeJobs.get('job-stt-1')).toBe(replacement);
-    expect(executor.activeRequests).toBe(1);
-    expect(executor.modelCounts.get('parakeet-tdt-0.6b-v3')).toBe(1);
+    executor.accept(job);
+    const result = await executor.execute(job);
+
+    expect(artifacts.downloadReferenceAudio).toHaveBeenCalledTimes(1);
+    expect(backend.transcribe).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'parakeet',
+      timestamps: true,
+      wordTimestamps: false,
+      diarize: false,
+    }));
+
+    expect(uploadedPayloads).toHaveLength(1);
+    expect(uploadedPayloads[0].contentType).toBe('application/json');
+    const transcriptJson = JSON.parse(uploadedPayloads[0].buffer.toString('utf-8'));
+    expect(transcriptJson).toEqual({
+      version: 1,
+      model: 'parakeet_tdt_0.6b_v3_bf16',
+      text: 'Parakeet clean transcript.',
+      duration: 10.5,
+      language: 'auto',
+      diarized: false,
+      timestampGranularity: 'sentence',
+      segments: [{ id: 0, start: 0, end: 2.1, text: 'Parakeet clean transcript.' }],
+      words: [],
+      complete: true,
+      finishReason: 'stop',
+    });
+    expect(result).toMatchObject({
+      jobID: 'stt-parakeet-1',
+      imgID: 'img-p1',
+      performedStepCount: 1,
+      lastSeed: 7,
+      sha256: 'c'.repeat(64),
+    });
+  });
+
+  it('transcribes Nemotron with diarization, hotwords, and prompt hint, stripping <spk:N> from text', async () => {
+    const { executor, backend, uploadedPayloads } = makeSetup();
+    const job = {
+      jobID: 'stt-nemotron-1',
+      imageId: 'img-n1',
+      workflowId: 'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+      outputFormat: 'json',
+      clientParams: {
+        duration: 15,
+        timestamps: 'word',
+        diarize: true,
+        hotwords: 'Sogni, TensorFold, GB10',
+        tags: 'Technical podcast interview',
+      },
+      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/interview.mp3' }],
+    };
+
+    executor.accept(job);
+    await executor.execute(job);
+
+    expect(backend.transcribe).toHaveBeenCalledWith(expect.objectContaining({
+      engine: 'nemotron',
+      timestamps: true,
+      wordTimestamps: true,
+      diarize: true,
+      hotwords: 'Sogni, TensorFold, GB10',
+      prompt: 'Technical podcast interview',
+    }));
+
+    const transcriptJson = JSON.parse(uploadedPayloads[0].buffer.toString('utf-8'));
+    expect(transcriptJson.text).toBe('Welcome aboard. Thank you.');
+    expect(transcriptJson.rawText).toBe('<spk:0> Welcome aboard. <spk:1> Thank you.');
+    expect(transcriptJson.diarized).toBe(true);
+    expect(transcriptJson.segments).toEqual([
+      { id: 0, start: 0.1, end: 1, text: 'Welcome aboard.', speaker: 'S01' },
+      { id: 1, start: 1.2, end: 1.9, text: 'Thank you.', speaker: 'S02' },
+    ]);
+    expect(transcriptJson.words[0]).toEqual({
+      word: 'Welcome',
+      start: 0.1,
+      end: 0.5,
+      speaker: 'S01',
+    });
+  });
+
+  it('synthesizes a 2s 16kHz PCM WAV test clip for isTest === true without downloading any asset', async () => {
+    const { executor, artifacts, uploadedPayloads } = makeSetup();
+    const job = {
+      jobID: 'stt-test-1',
+      imageId: 'img-test',
+      workflowId: 'parakeet_tdt_0.6b_v3_bf16',
+      isTest: true,
+      clientParams: {},
+      assets: [],
+    };
+
+    executor.accept(job);
+    await executor.execute(job);
+
+    expect(artifacts.downloadReferenceAudio).not.toHaveBeenCalled();
+    expect(artifacts.validateAndProbeAudio).not.toHaveBeenCalled();
+    const transcriptJson = JSON.parse(uploadedPayloads[0].buffer.toString('utf-8'));
+    expect(transcriptJson.duration).toBe(2);
+  });
+
+  it('rejects audio whose actual duration exceeds declared duration * 1.15 + 5s as invalidInput, including when duration is omitted (defaults to 60s)', async () => {
+    const { executor, artifacts, backend } = makeSetup();
+    artifacts.transcodeAndVerifySttAudio.mockResolvedValueOnce({
+      path: '/tmp/clean.flac',
+      duration: 120.4,
+    });
+
+    const job = {
+      jobID: 'stt-overrun',
+      imageId: 'img-over',
+      workflowId: 'parakeet_tdt_0.6b_v3_bf16',
+      clientParams: { duration: 60 },
+      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/long.mp3' }],
+    };
+
+    executor.accept(job);
+    await expect(executor.execute(job)).rejects.toMatchObject({
+      code: 'invalidInput',
+      message: 'Audio duration 120.4s exceeds declared duration 60s',
+    });
+    expect(backend.transcribe).not.toHaveBeenCalled();
+
+    // Omitted duration defaults to 60s (allowedMaxDuration = 74s)
+    artifacts.transcodeAndVerifySttAudio.mockResolvedValueOnce({
+      path: '/tmp/clean-omitted.flac',
+      duration: 80.0,
+    });
+    const omittedJob = {
+      jobID: 'stt-omitted-overrun',
+      imageId: 'img-omitted',
+      workflowId: 'parakeet_tdt_0.6b_v3_bf16',
+      clientParams: {},
+      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/long2.mp3' }],
+    };
+    executor.accept(omittedJob);
+    await expect(executor.execute(omittedJob)).rejects.toMatchObject({
+      code: 'invalidInput',
+      message: 'Audio duration 80.0s exceeds declared duration 60s',
+    });
+
+    // HTTP 404 / 0-byte download maps to invalidInput rather than genfailure
+    const dl404 = new Error('Input download failed with HTTP 404');
+    dl404.invalidInput = true;
+    artifacts.downloadReferenceAudio.mockRejectedValueOnce(dl404);
+    const missingJob = {
+      jobID: 'stt-404',
+      imageId: 'img-404',
+      workflowId: 'parakeet_tdt_0.6b_v3_bf16',
+      clientParams: { duration: 30 },
+      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/missing.mp3' }],
+    };
+    executor.accept(missingJob);
+    await expect(executor.execute(missingJob)).rejects.toMatchObject({
+      code: 'invalidInput',
+      message: expect.stringMatching(/HTTP 404/),
+    });
   });
 });

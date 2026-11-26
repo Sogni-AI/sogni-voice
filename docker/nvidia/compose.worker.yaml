@@ -1,0 +1,47 @@
+# Zero-downtime Sogni Supernet Worker sidecar for Linux + NVIDIA (e.g. dgx-spark-01 / dgx-spark-02).
+# Runs outbound WebSocket jobs against the already-running sogni-voice API (:3000)
+# WITHOUT restarting drama3, fish-s2, nemotron, or api containers!
+#
+# Running 2+ DGX Spark hosts on the Supernet (e.g. dgx-spark-01 and dgx-spark-02):
+#   - Give each host its own Fast-network NFT token ID (`SOGNI_NFT_TOKEN_ID`) and its own
+#     persistent `.sogni-worker-id` (`worker-state` volume or host `DATA_DIR` bind mount)
+#     so worker sessions never evict each other on sogni-socket.
+#   - Zero-shot voice cloning is 100% stateless across workers via S3/R2 signed URLs.
+#
+# Usage from the repo root:
+#   docker compose -f docker/nvidia/compose.worker.yaml up -d worker
+# (or combined with the stack overlays:
+#   docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml \
+#     -f docker/nvidia/compose.nemotron.yaml -f docker/nvidia/compose.worker.yaml up -d --no-deps worker)
+name: sogni-voice
+
+services:
+  worker:
+    image: ${SOGNI_VOICE_WORKER_IMAGE:-sogni-voice-nvidia:latest}
+    pull_policy: never
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 130s
+    env_file: ../../.env
+    environment:
+      SOGNI_NETWORK_WORKER: "true"
+      SOGNI_VOICE_BACKEND_MODE: ${SOGNI_VOICE_BACKEND_MODE:-http}
+      SOGNI_VOICE_API_URL: ${SOGNI_VOICE_API_URL:-http://127.0.0.1:3000}
+      SOGNI_VOICE_API_KEY: ${SOGNI_VOICE_API_KEY:-${AUTH_API_KEY:-}}
+      SOGNI_API_KEY: ${SOGNI_API_KEY:-}
+      SOGNI_NFT_TOKEN_ID: ${SOGNI_NFT_TOKEN_ID:-}
+      SOGNI_ENV: ${SOGNI_ENV:-staging}
+      SOGNI_GPU_BRAND: ${SOGNI_GPU_BRAND:-NVIDIA GB10}
+      SOGNI_WORKER_ID_FILE: /app/worker-state/.sogni-worker-id
+    command:
+      - node
+      - scripts/sogni-voice-worker.mjs
+    volumes:
+      - ../../src:/app/src:ro
+      - ../../scripts:/app/scripts:ro
+      - ../../package.json:/app/package.json:ro
+      - ${DATA_DIR:-worker-state}:/app/worker-state
+      - /proc/driver/nvidia:/proc/driver/nvidia:ro
+
+volumes:
+  worker-state:

@@ -78,7 +78,7 @@ describe('network config', () => {
       arch: 'arm64',
       totalMemBytes: 120 * (1024 ** 3),
       cpus: [{ model: 'ARM Cortex-X925', speed: 3000 }],
-      hostname: 'dgx-spark-01',
+      hostname: 'worker-host-1',
       execFileImpl: async () => ({ stdout: 'NVIDIA GB10, [N/A], 580.178.04\n' }),
     });
     expect(hw).toMatchObject({
@@ -99,7 +99,7 @@ describe('network config', () => {
       arch: 'arm64',
       totalMemBytes: 122 * (1024 ** 3),
       cpus: [{ model: 'unknown', speed: 2808 }],
-      hostname: 'dgx-spark-01',
+      hostname: 'worker-host-1',
       execFileImpl: async (cmd) => {
         if (cmd === 'lscpu') return { stdout: 'Architecture: aarch64\nModel name: Cortex-X925\n' };
         throw new Error('nvidia-smi unavailable');

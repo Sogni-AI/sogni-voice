@@ -1,5 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { writeFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import { join, dirname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const fishMocks = vi.hoisted(() => ({
   generate: vi.fn(),
@@ -24,7 +26,7 @@ const configState = vi.hoisted(() => ({
   transcriptionEnabled: false,
   nemotronEnabled: false,
 }));
-const processMocks = vi.hoisted(() => ({ ffprobeDuration: '5.0\n' }));
+const processMocks = vi.hoisted(() => ({ ffprobeDuration: '5.0\n', ffprobeError: null, ffmpegError: null }));
 
 const createFakeWavBuffer = () => {
   const buffer = Buffer.alloc(44);
@@ -48,7 +50,15 @@ vi.mock('node:child_process', () => ({
   execFile: vi.fn((command, args, options, callback) => {
     const cb = typeof options === 'function' ? options : callback;
     if (String(command).includes('ffprobe')) {
+      if (processMocks.ffprobeError) {
+        cb?.(processMocks.ffprobeError, '', processMocks.ffprobeError.stderr || '');
+        return;
+      }
       cb?.(null, processMocks.ffprobeDuration, '');
+      return;
+    }
+    if (processMocks.ffmpegError) {
+      cb?.(processMocks.ffmpegError, '', processMocks.ffmpegError.stderr || '');
       return;
     }
     const outputPath = args[args.length - 1];
@@ -552,5 +562,37 @@ describe('Fish Drama 3 routes', () => {
     } finally {
       configState.nemotronEnabled = false;
     }
+  });
+
+  it('returns generic 400 without /tmp stderr leaks on decodeReference failure and disables in-process worker in compose.yaml api service', async () => {
+    const wav = createFakeWavBuffer();
+    const boundary = '----drama3-baddecode';
+    const body = Buffer.concat([
+      Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="ref.wav"\r\nContent-Type: audio/wav\r\n\r\n`),
+      wav,
+      Buffer.from(`\r\n--${boundary}\r\nContent-Disposition: form-data; name="text"\r\n\r\nDecode error check.\r\n--${boundary}\r\nContent-Disposition: form-data; name="referenceText"\r\n\r\nRef words.\r\n--${boundary}--\r\n`),
+    ]);
+
+    const ffmpegErr = new Error('ffmpeg exited 1');
+    ffmpegErr.stderr = '/tmp/drama3-tts-ref-12345/secret.wav: Invalid data found when processing input';
+    processMocks.ffmpegError = ffmpegErr;
+    try {
+      const res = await server.inject({
+        method: 'POST',
+        url: '/drama3-tts/generate-with-reference',
+        headers: { 'content-type': `multipart/form-data; boundary=${boundary}` },
+        payload: body,
+      });
+      expect(res.statusCode).toBe(400);
+      const parsed = JSON.parse(res.payload);
+      expect(parsed.message).toBe('Reference audio could not be decoded');
+      expect(res.payload).not.toContain('/tmp/');
+    } finally {
+      processMocks.ffmpegError = null;
+    }
+
+    const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '../..');
+    const composeYaml = readFileSync(join(repoRoot, 'docker/nvidia/compose.yaml'), 'utf-8');
+    expect(composeYaml).toMatch(/api:[\s\S]*environment:\s*\n\s*SOGNI_NETWORK_WORKER:\s*"false"/);
   });
 });

@@ -195,32 +195,41 @@ describe('VoiceSupernetExecutor STT (Parakeet & Nemotron)', () => {
     expect(transcriptJson.duration).toBe(2);
   });
 
-  it('rejects audio whose actual duration exceeds declared duration * 1.15 + 5s as invalidInput, including when duration is omitted (defaults to 60s)', async () => {
+  it('enforces tight Math.ceil(declaredDuration * 1.02 + 1.5) STT worker tolerance while keeping 256 MiB maxBytes', async () => {
     const { executor, artifacts, backend } = makeSetup();
+    // 1s declared -> allowedMaxDuration = Math.ceil(1 * 1.02 + 1.5) = 3s (closes 6x short-clip exploit)
     artifacts.transcodeAndVerifySttAudio.mockResolvedValueOnce({
-      path: '/tmp/clean.flac',
-      duration: 120.4,
+      path: '/tmp/short-exploit.flac',
+      duration: 3.4,
     });
-
-    const job = {
-      jobID: 'stt-overrun',
-      imageId: 'img-over',
+    const shortExploitJob = {
+      jobID: 'stt-short-exploit',
+      imageId: 'img-short',
       workflowId: 'parakeet_tdt_0.6b_v3_bf16',
-      clientParams: { duration: 60 },
-      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/long.mp3' }],
+      clientParams: { duration: 1 },
+      assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/short6s.mp3' }],
     };
-
-    executor.accept(job);
-    await expect(executor.execute(job)).rejects.toMatchObject({
+    executor.accept(shortExploitJob);
+    await expect(executor.execute(shortExploitJob)).rejects.toMatchObject({
       code: 'invalidInput',
-      message: 'Audio duration 120.4s exceeds declared duration 60s',
+      message: 'Audio duration 3.4s exceeds declared duration 1s',
     });
+    expect(artifacts.downloadReferenceAudio).toHaveBeenLastCalledWith(
+      shortExploitJob,
+      tempDir,
+      expect.objectContaining({ maxBytes: 256 * 1024 * 1024 }),
+    );
+    expect(artifacts.transcodeAndVerifySttAudio).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ allowedMaxDuration: 3, declaredDuration: 1 }),
+    );
     expect(backend.transcribe).not.toHaveBeenCalled();
 
-    // Omitted duration defaults to 60s (allowedMaxDuration = 74s)
+    // Omitted duration defaults to 60s -> allowedMaxDuration = Math.ceil(60 * 1.02 + 1.5) = 63s
     artifacts.transcodeAndVerifySttAudio.mockResolvedValueOnce({
       path: '/tmp/clean-omitted.flac',
-      duration: 80.0,
+      duration: 63.5,
     });
     const omittedJob = {
       jobID: 'stt-omitted-overrun',
@@ -232,8 +241,13 @@ describe('VoiceSupernetExecutor STT (Parakeet & Nemotron)', () => {
     executor.accept(omittedJob);
     await expect(executor.execute(omittedJob)).rejects.toMatchObject({
       code: 'invalidInput',
-      message: 'Audio duration 80.0s exceeds declared duration 60s',
+      message: 'Audio duration 63.5s exceeds declared duration 60s',
     });
+    expect(artifacts.transcodeAndVerifySttAudio).toHaveBeenLastCalledWith(
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ allowedMaxDuration: 63, declaredDuration: 60 }),
+    );
 
     // HTTP 404 / 0-byte download maps to invalidInput rather than genfailure
     const dl404 = new Error('Input download failed with HTTP 404');

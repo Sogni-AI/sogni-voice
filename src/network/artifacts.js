@@ -17,6 +17,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const MIN_ARTIFACT_UPLOAD_BYTES_PER_SEC = 128 * 1024;
 export const MAX_ARTIFACT_UPLOAD_ATTEMPT_MS = 10 * 60_000;
 export const MAX_ARTIFACT_DOWNLOAD_BYTES = 256 * 1024 * 1024;
+export const MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES = 25 * 1024 * 1024;
 export const MAX_DOWNLOAD_REDIRECTS = 3;
 
 // Allowed single-file demuxers matching ComfyUI/worker/src/assets/mediaContainer.ts.
@@ -613,7 +614,7 @@ async function rejectDisguisedPlaylistHeader(filePath) {
   }
 }
 
-async function readFlacExactDurationSeconds(flacPath) {
+export async function readFlacExactDurationSeconds(flacPath) {
   const fh = await open(flacPath, 'r');
   try {
     const header = Buffer.alloc(42);
@@ -642,6 +643,7 @@ export async function validateAndProbeAudio(
   filePath,
   {
     execFileImpl = execFileAsync,
+    maxProbeSeconds = 7202,
     signal = undefined,
   } = {},
 ) {
@@ -707,12 +709,13 @@ export async function validateAndProbeAudio(
           '-nostdin', '-y', '-loglevel', 'error',
           '-protocol_whitelist', 'file,pipe',
           '-format_whitelist', MEDIA_DEMUXERS,
+          '-t', String(maxProbeSeconds),
           '-i', resolvedInput,
           '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'pcm_s16le',
           '--',
           probeWavPath,
         ],
-        { timeout: 120_000, signal },
+        { timeout: 120_000, killSignal: 'SIGKILL', signal },
       );
       const { size } = await stat(probeWavPath);
       duration = Math.max(0, (size - 44) / (16000 * 2));
@@ -863,9 +866,8 @@ export async function transcodeReferenceWav(
     );
   } catch (error) {
     if (isAbort(error, signal)) throw error;
-    throw makeInvalidInputError(
-      `Reference audio could not be decoded: ${error?.stderr || error?.message || error}`,
-    );
+    console.error('[voice-worker] transcodeReferenceWav failed:', error?.stderr || error?.message || error);
+    throw makeInvalidInputError('Reference audio could not be decoded', error);
   }
 
   const { size } = await stat(resolvedOutput);

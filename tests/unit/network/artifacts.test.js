@@ -260,6 +260,32 @@ describe('artifacts & media URL client', () => {
 
       const probed = await validateAndProbeAudio(wavPath, { execFileImpl });
       expect(probed).toEqual({ duration: 2, formatName: 'wav' });
+
+      // Container with duration="N/A" passes -t maxProbeSeconds to ffmpeg to prevent decompression bombs
+      const webmPath = join(tempDir, 'unknown-dur.webm');
+      await writeFile(webmPath, Buffer.from([0x1a, 0x45, 0xdf, 0xa3, 0x00, 0x00, 0x00, 0x00]));
+      const bombGuardExec = vi.fn(async (cmd, args) => {
+        if (cmd === 'ffprobe') {
+          return {
+            stdout: JSON.stringify({
+              streams: [{ codec_type: 'audio', duration: 'N/A' }],
+              format: { format_name: 'matroska,webm', duration: 'N/A' },
+            }),
+          };
+        }
+        expect(cmd).toBe('ffmpeg');
+        const tIdx = args.indexOf('-t');
+        expect(tIdx).toBeGreaterThan(-1);
+        expect(args[tIdx + 1]).toBe('32');
+        const probeOut = args[args.length - 1];
+        await writeFile(probeOut, createSyntheticTestWavBuffer({ durationSeconds: 3, sampleRate: 16000 }));
+        return { stdout: '', stderr: '' };
+      });
+      const webmProbed = await validateAndProbeAudio(webmPath, {
+        execFileImpl: bombGuardExec,
+        maxProbeSeconds: 32,
+      });
+      expect(webmProbed.duration).toBeCloseTo(3, 2);
     });
   });
 
@@ -375,6 +401,19 @@ describe('artifacts & media URL client', () => {
       ).rejects.toMatchObject({
         invalidInput: true,
         message: expect.stringMatching(/at most 30 seconds/),
+      });
+
+      // Sanitize ffmpeg decode failure so /tmp paths never leak in error.message
+      const failDecodeExec = vi.fn(async () => {
+        const err = new Error('Command failed');
+        err.stderr = '/tmp/sogni-voice-job-secret/input.bin: Invalid data found';
+        throw err;
+      });
+      await expect(
+        transcodeReferenceWav(refIn, refOut, { execFileImpl: failDecodeExec }),
+      ).rejects.toMatchObject({
+        invalidInput: true,
+        message: 'Reference audio could not be decoded',
       });
 
       // Build a real 42-byte FLAC header claiming 80 seconds (80 * 16000 = 1,280,000 samples)

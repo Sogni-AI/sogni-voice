@@ -2,12 +2,15 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { config } from '../../../src/config/index.js';
 import { createSyntheticTestWavBuffer } from '../../../src/utils/audioFormat.js';
 import {
+  HTTP_BACKEND_TIMEOUT_MS,
   HttpVoiceBackend,
   LocalVoiceBackend,
   SerialQueue,
   buildCanonicalTranscript,
+  resolveLongRunningDispatcher,
   stripSpeakerTags,
 } from '../../../src/network/backends.js';
 
@@ -340,7 +343,7 @@ describe('backends & canonical transcript builder', () => {
       });
 
       const out = await backend.synthesizeDrama3({
-        text: 'Zero downtime on dgx-spark-01.',
+        text: 'Zero downtime on worker-host-1.',
         referenceWavPath: refPath,
         referenceText: 'Provided transcript.',
         outputFormat: 'wav',
@@ -434,6 +437,76 @@ describe('backends & canonical transcript builder', () => {
         tempDir,
       });
       expect(deleteCalls).toBe(3);
+    });
+
+    it('defaults transcribeMaxBytes to 64 MiB, re-encodes large STT uploads at 24k (<=1h) or 16k (>1h) Opus, attaches 3700s undici dispatcher, and guards MLX Nemotron timestamps', async () => {
+      expect(config.upload.transcribeMaxBytes).toBe(64 * 1024 * 1024);
+      expect(HTTP_BACKEND_TIMEOUT_MS).toBe(3_700_000);
+
+      const dispatcher = await resolveLongRunningDispatcher();
+      expect(dispatcher).toBeDefined();
+
+      // Write an unrecognized-container file so _prepareSttUpload invokes ffmpeg re-encoding without needing a 25MB buffer
+      const rawPath = join(tempDir, 'large-uncompressed.raw');
+      await writeFile(rawPath, Buffer.alloc(64, 0x7f));
+
+      const ffmpegArgsCaptured = [];
+      const execFileImpl = vi.fn(async (_cmd, args) => {
+        ffmpegArgsCaptured.push(args);
+        const out = args[args.length - 1];
+        await writeFile(out, Buffer.from('OggS-compressed'));
+        return { stdout: '', stderr: '' };
+      });
+      const fetchCalls = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        fetchCalls.push({ url, init });
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({ success: true, transcript: '<spk:0> Speaker turn on MLX.', segments: [{ speaker: 'S01', text: 'Speaker turn on MLX.' }] }),
+        };
+      });
+
+      const backend = new HttpVoiceBackend({
+        apiUrl: 'http://127.0.0.1:3000',
+        fetchImpl,
+        execFileImpl,
+      });
+      backend.capabilities.nemotronEnabled = true;
+      backend.capabilities.nemotronSupportsTimestamps = false;
+
+      // <= 3600s uses 24k Opus
+      await backend.transcribe({
+        engine: 'parakeet',
+        audioPath: rawPath,
+        tempDir,
+        durationSeconds: 3600,
+      });
+      expect(ffmpegArgsCaptured[0]).toContain('24k');
+      expect(fetchCalls[0].init.dispatcher).toBe(dispatcher);
+
+      // > 3600s (e.g. 2-hour 7200s recording) uses 16k Opus (~14.4 MB)
+      const nemotronMlxRaw = await backend.transcribe({
+        engine: 'nemotron',
+        audioPath: rawPath,
+        tempDir,
+        durationSeconds: 7200,
+        timestamps: true,
+        wordTimestamps: true,
+        diarize: true,
+      });
+      expect(ffmpegArgsCaptured[1]).toContain('16k');
+      expect(nemotronMlxRaw.timestampsSupported).toBe(false);
+
+      const canonical = buildCanonicalTranscript({
+        workflowId: 'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+        rawResult: nemotronMlxRaw,
+        audioSeconds: 7200,
+        requestedTimestamps: 'word',
+        diarize: true,
+      });
+      expect(canonical.timestampGranularity).toBe('none');
+      expect(canonical.diarized).toBe(true);
     });
   });
 });

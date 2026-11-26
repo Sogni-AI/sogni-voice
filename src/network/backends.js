@@ -10,7 +10,7 @@ import { transcriptionService as defaultTranscriptionService } from '../services
 import { convertWavFile } from '../utils/audioFormat.js';
 import { sniffAudioFormat } from '../utils/audioValidation.js';
 import { preWarmDaemon } from '../utils/preWarm.js';
-import { MEDIA_DEMUXERS } from './artifacts.js';
+import { MEDIA_DEMUXERS, readFlacExactDurationSeconds } from './artifacts.js';
 import {
   buildLocalWorkerModels,
   filterModelsByAllowlist,
@@ -22,6 +22,49 @@ const SPEAKER_TAG_GLOBAL_RE = /\s*<spk:\d+>\s*/gi;
 const SPEAKER_TAG_DETECT_RE = /<spk:\d+>/i;
 const SENTENCE_TERMINATOR_RE = /[.!?。！？…]["'”’)\]]*$/;
 const HTTP_UPLOAD_RECOMPRESS_THRESHOLD_BYTES = 24 * 1024 * 1024;
+export const HTTP_BACKEND_TIMEOUT_MS = 3_700_000;
+
+let sharedLongRunningDispatcherPromise = null;
+
+export async function resolveLongRunningDispatcher() {
+  if (!sharedLongRunningDispatcherPromise) {
+    sharedLongRunningDispatcherPromise = (async () => {
+      try {
+        let sym = Object.getOwnPropertySymbols(globalThis).find((s) =>
+          String(s).startsWith('Symbol(undici.globalDispatcher.'),
+        );
+        if (!sym && typeof fetch === 'function') {
+          await fetch('data:text/plain,').catch(() => {});
+          sym = Object.getOwnPropertySymbols(globalThis).find((s) =>
+            String(s).startsWith('Symbol(undici.globalDispatcher.'),
+          );
+        }
+        const AgentCtor = sym ? globalThis[sym]?.constructor : null;
+        if (typeof AgentCtor === 'function') {
+          return new AgentCtor({
+            headersTimeout: HTTP_BACKEND_TIMEOUT_MS,
+            bodyTimeout: HTTP_BACKEND_TIMEOUT_MS,
+          });
+        }
+      } catch {
+        // Fall through to external undici lookup.
+      }
+      try {
+        const undici = await import('undici');
+        if (typeof undici?.Agent === 'function') {
+          return new undici.Agent({
+            headersTimeout: HTTP_BACKEND_TIMEOUT_MS,
+            bodyTimeout: HTTP_BACKEND_TIMEOUT_MS,
+          });
+        }
+      } catch {
+        // Custom test environment without undici.
+      }
+      return undefined;
+    })();
+  }
+  return sharedLongRunningDispatcherPromise;
+}
 
 const MIME_BY_EXT = {
   wav: 'audio/wav',
@@ -113,9 +156,10 @@ export function buildCanonicalTranscript({
   requestedTimestamps = 'sentence',
   diarize = false,
 }) {
-  const granularity = ['none', 'sentence', 'word'].includes(requestedTimestamps)
+  const requestedGranularity = ['none', 'sentence', 'word'].includes(requestedTimestamps)
     ? requestedTimestamps
     : 'sentence';
+  const granularity = rawResult?.timestampsSupported === false ? 'none' : requestedGranularity;
 
   const rawItems = Array.isArray(rawResult?.timestamps) ? rawResult.timestamps : [];
   const rawSpeakerTurns = Array.isArray(rawResult?.segments) ? rawResult.segments : [];
@@ -295,7 +339,7 @@ export class LocalVoiceBackend {
     if (engine === 'nemotron') {
       const mlxBackend = this.cfg?.nemotron?.backend === 'mlx';
       try {
-        return await this.nemotronService.transcribe(audioPath, {
+        const raw = await this.nemotronService.transcribe(audioPath, {
           timestamps: mlxBackend ? false : Boolean(timestamps || wordTimestamps),
           wordTimestamps: mlxBackend ? false : Boolean(wordTimestamps),
           diarize: Boolean(diarize),
@@ -303,6 +347,7 @@ export class LocalVoiceBackend {
           prompt,
           signal,
         });
+        return mlxBackend ? { ...raw, timestampsSupported: false } : raw;
       } catch (error) {
         if (error?.output?.statusCode === 400 || /^invalid input:/i.test(error?.message || '')) {
           throw tagInvalidInput(error.message, error);
@@ -420,6 +465,7 @@ export class HttpVoiceBackend {
     apiKey = process.env.SOGNI_VOICE_API_KEY || config.auth?.apiKey || '',
     allowlist = null,
     fetchImpl = fetch,
+    dispatcher = undefined,
     execFileImpl = execFileAsync,
     getActiveRequests = () => 0,
     logger = console,
@@ -429,15 +475,26 @@ export class HttpVoiceBackend {
     this.apiKey = String(apiKey || '').trim();
     this.allowlist = allowlist;
     this.fetchImpl = fetchImpl;
+    this.dispatcher = dispatcher;
     this.execFileImpl = execFileImpl;
     this.getActiveRequests = getActiveRequests;
     this.logger = logger;
     this.capabilities = {
       parakeetEnabled: false,
       nemotronEnabled: false,
-      nemotronSupportsTimestamps: true,
+      nemotronSupportsTimestamps: config.nemotron?.backend !== 'mlx',
       drama3Enabled: false,
     };
+  }
+
+  async _fetch(url, init = {}) {
+    const resolvedDispatcher = this.dispatcher !== undefined
+      ? this.dispatcher
+      : await resolveLongRunningDispatcher();
+    return this.fetchImpl(url, {
+      ...init,
+      ...(resolvedDispatcher ? { dispatcher: resolvedDispatcher } : {}),
+    });
   }
 
   _authHeaders(extra = {}) {
@@ -549,7 +606,7 @@ export class HttpVoiceBackend {
     // Resident GPU daemons are already warm inside the target sogni-voice API service.
   }
 
-  async _prepareSttUpload(audioPath, tempDir, signal) {
+  async _prepareSttUpload(audioPath, tempDir, signal, { durationSeconds } = {}) {
     const fh = await open(audioPath, 'r');
     let detected = null;
     try {
@@ -575,8 +632,17 @@ export class HttpVoiceBackend {
       };
     }
 
-    // Large uncompressed WAVs (>24 MB) or exotic containers are re-encoded to compact
-    // 16kHz mono Opus-in-Ogg so `/transcribe`'s default 25 MB multipart ceiling is respected.
+    let resolvedDuration = Number(durationSeconds);
+    if (!(resolvedDuration > 0) && detected === 'flac') {
+      resolvedDuration = await readFlacExactDurationSeconds(audioPath).catch(() => 0);
+    }
+    if (!(resolvedDuration > 0) && detected === 'wav') {
+      resolvedDuration = Math.max(0, (size - 44) / (16000 * 2));
+    }
+    const opusBitrate = resolvedDuration > 3600 ? '16k' : '24k';
+
+    // Large uncompressed WAVs/FLACs (>24 MB) or exotic containers are re-encoded to compact
+    // 16kHz mono Opus-in-Ogg (24k for <=3600s, 16k for >3600s so a 2-hour recording is ~14.4 MB).
     const oggPath = resolvePath(join(tempDir, 'stt-upload.ogg'));
     await this.execFileImpl(
       'ffmpeg',
@@ -585,7 +651,7 @@ export class HttpVoiceBackend {
         '-protocol_whitelist', 'file,pipe',
         '-format_whitelist', MEDIA_DEMUXERS,
         '-i', resolvePath(audioPath),
-        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libopus', '-b:a', '32k',
+        '-vn', '-ac', '1', '-ar', '16000', '-c:a', 'libopus', '-b:a', opusBitrate,
         '--',
         oggPath,
       ],
@@ -602,6 +668,7 @@ export class HttpVoiceBackend {
     engine,
     audioPath,
     tempDir,
+    durationSeconds = undefined,
     timestamps = true,
     wordTimestamps = false,
     diarize = false,
@@ -609,7 +676,7 @@ export class HttpVoiceBackend {
     prompt = undefined,
     signal = undefined,
   }) {
-    const upload = await this._prepareSttUpload(audioPath, tempDir, signal);
+    const upload = await this._prepareSttUpload(audioPath, tempDir, signal, { durationSeconds });
     const fileBuffer = await readFile(upload.path);
     const form = new FormData();
     form.append('file', new Blob([fileBuffer], { type: upload.mimeType }), upload.filename);
@@ -631,7 +698,7 @@ export class HttpVoiceBackend {
       form.append('diarize', 'false');
     }
 
-    const response = await this.fetchImpl(`${this.apiUrl}/transcribe`, {
+    const response = await this._fetch(`${this.apiUrl}/transcribe`, {
       method: 'POST',
       redirect: 'error',
       headers: this._authHeaders({ Accept: 'application/json' }),
@@ -662,6 +729,7 @@ export class HttpVoiceBackend {
       finishReason: payload.finishReason || 'stop',
       complete: payload.complete !== undefined ? payload.complete : true,
       metrics: payload.metrics,
+      ...(engine === 'nemotron' && !allowTimestamps ? { timestampsSupported: false } : {}),
     };
   }
 
@@ -715,7 +783,7 @@ export class HttpVoiceBackend {
       createForm.append('transcript', referenceText);
       createForm.append('cloneId', cloneId);
 
-      const createRes = await this.fetchImpl(`${this.apiUrl}/drama3-tts/voices/clone`, {
+      const createRes = await this._fetch(`${this.apiUrl}/drama3-tts/voices/clone`, {
         method: 'POST',
         redirect: 'error',
         headers: this._authHeaders(),
@@ -729,7 +797,7 @@ export class HttpVoiceBackend {
       }
       created = true;
 
-      const genRes = await this.fetchImpl(
+      const genRes = await this._fetch(
         `${this.apiUrl}/drama3-tts/voices/clone/${encodeURIComponent(cloneId)}/generate`,
         {
           method: 'POST',
@@ -753,7 +821,7 @@ export class HttpVoiceBackend {
       if (created) {
         for (let attempt = 1; attempt <= 3; attempt += 1) {
           try {
-            const delRes = await this.fetchImpl(
+            const delRes = await this._fetch(
               `${this.apiUrl}/drama3-tts/voices/clone/${encodeURIComponent(cloneId)}`,
               {
                 method: 'DELETE',
@@ -789,7 +857,7 @@ export class HttpVoiceBackend {
     let finishReason = 'stop';
 
     if (!referenceWavPath) {
-      const response = await this.fetchImpl(`${this.apiUrl}/drama3-tts`, {
+      const response = await this._fetch(`${this.apiUrl}/drama3-tts`, {
         method: 'POST',
         redirect: 'error',
         headers: this._authHeaders({ 'Content-Type': 'application/json' }),
@@ -821,7 +889,7 @@ export class HttpVoiceBackend {
       form.append('referenceText', resolvedReferenceText);
       form.append('format', 'wav');
 
-      const response = await this.fetchImpl(`${this.apiUrl}/drama3-tts/generate-with-reference`, {
+      const response = await this._fetch(`${this.apiUrl}/drama3-tts/generate-with-reference`, {
         method: 'POST',
         redirect: 'error',
         headers: this._authHeaders(),

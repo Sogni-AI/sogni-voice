@@ -6,6 +6,8 @@ import { tempFileManager } from '../utils/tempFile.js';
 import {
   downloadReferenceAudio,
   findReferenceAudioAsset,
+  MAX_ARTIFACT_DOWNLOAD_BYTES,
+  MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
   transcodeAndVerifySttAudio,
   transcodeReferenceWav,
   uploadJobArtifact,
@@ -24,7 +26,10 @@ export class JobError extends Error {
 }
 
 export const MAX_TIMER_DELAY_MS = 2147483647;
+export const DRAMA3_MAX_TEXT_CHARS = 5000;
+export const DRAMA3_MAX_REFERENCE_TEXT_CHARS = 2000;
 const ALLOWED_DRAMA3_FORMATS = new Set(['mp3', 'wav', 'flac']);
+const RESERVED_DRAMA3_CONTROL_TOKEN_RE = /<\|[\w:-]+\|>|<\|(?:im_start|im_end|voice|text|interleave|semantic:|endoftext)/i;
 const MAX_RECENT_JOB_TIMINGS = 64;
 
 export function ensureCompleteTimings(partial = {}) {
@@ -286,8 +291,29 @@ export class VoiceSupernetExecutor {
           ? job.clientParams.tags
           : (typeof job.clientParams?.positivePrompt === 'string' ? job.clientParams.positivePrompt : ''));
 
-    if (!String(rawText).trim()) {
+    const trimmedText = String(rawText).trim();
+    if (!trimmedText) {
       throw new JobError('invalidInput', 'Drama 3 job requires non-empty text');
+    }
+    if (trimmedText.length > DRAMA3_MAX_TEXT_CHARS) {
+      throw new JobError(
+        'invalidInput',
+        `Speech scripts are limited to ${DRAMA3_MAX_TEXT_CHARS} characters; this one is ${trimmedText.length}`,
+      );
+    }
+    if (RESERVED_DRAMA3_CONTROL_TOKEN_RE.test(trimmedText)) {
+      throw new JobError('invalidInput', 'Speech prompt contains reserved control tokens');
+    }
+
+    const rawReferenceText = isTest ? '' : String(job.clientParams?.referenceText || '').trim();
+    if (rawReferenceText.length > DRAMA3_MAX_REFERENCE_TEXT_CHARS) {
+      throw new JobError(
+        'invalidInput',
+        `referenceText is limited to ${DRAMA3_MAX_REFERENCE_TEXT_CHARS} characters; this one is ${rawReferenceText.length}`,
+      );
+    }
+    if (rawReferenceText && RESERVED_DRAMA3_CONTROL_TOKEN_RE.test(rawReferenceText)) {
+      throw new JobError('invalidInput', 'referenceText contains reserved control tokens');
     }
 
     let referenceWavPath = null;
@@ -299,6 +325,7 @@ export class VoiceSupernetExecutor {
           apiUrl: this.apiUrl,
           sogniEnv: this.sogniEnv,
           rejectUnauthorized: this.rejectUnauthorized,
+          maxBytes: MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
           signal,
         });
       } catch (error) {
@@ -312,7 +339,10 @@ export class VoiceSupernetExecutor {
       entry.timings.assetDownload = (this.now() - dlStart) / 1000;
 
       const setupStart = this.now();
-      const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, { signal });
+      const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, {
+        maxProbeSeconds: 32,
+        signal,
+      });
       if (probed.duration < 1) {
         throw new JobError(
           'invalidInput',
@@ -341,9 +371,9 @@ export class VoiceSupernetExecutor {
     const inferStart = this.now();
     try {
       const synthesized = await this.backend.synthesizeDrama3({
-        text: rawText,
+        text: trimmedText,
         referenceWavPath,
-        referenceText: isTest ? '' : (job.clientParams?.referenceText || ''),
+        referenceText: rawReferenceText,
         outputFormat,
         tempDir,
         signal,
@@ -410,6 +440,7 @@ export class VoiceSupernetExecutor {
           apiUrl: this.apiUrl,
           sogniEnv: this.sogniEnv,
           rejectUnauthorized: this.rejectUnauthorized,
+          maxBytes: MAX_ARTIFACT_DOWNLOAD_BYTES,
           signal,
         });
       } catch (error) {
@@ -428,7 +459,7 @@ export class VoiceSupernetExecutor {
       const rawDeclared = Number(job.clientParams?.duration);
       const declaredDuration = Number.isFinite(rawDeclared) && rawDeclared > 0 ? rawDeclared : 60;
       const maxAllowedSeconds = entry.model.engine === 'nemotron' ? 3600 : 7200;
-      const allowedMaxDuration = Math.min(maxAllowedSeconds, declaredDuration * 1.15 + 5);
+      const allowedMaxDuration = Math.min(maxAllowedSeconds, Math.ceil(declaredDuration * 1.02 + 1.5));
 
       const probeStart = this.now();
       if (typeof this.artifacts.transcodeAndVerifySttAudio === 'function') {
@@ -446,7 +477,10 @@ export class VoiceSupernetExecutor {
         audioPath = verified.path;
         actualDuration = verified.duration;
       } else {
-        const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, { signal });
+        const probed = await this.artifacts.validateAndProbeAudio(downloaded.path, {
+          maxProbeSeconds: 7202,
+          signal,
+        });
         actualDuration = probed.duration;
         audioPath = downloaded.path;
       }
@@ -505,6 +539,7 @@ export class VoiceSupernetExecutor {
         engine: entry.model.engine,
         audioPath,
         tempDir,
+        durationSeconds: actualDuration,
         timestamps: requestedTimestamps !== 'none',
         wordTimestamps: requestedTimestamps === 'word',
         diarize,

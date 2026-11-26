@@ -128,7 +128,15 @@ describe('VoiceSupernetExecutor TTS (Fish Drama 3 NVFP4)', () => {
     await executor.execute(job);
 
     expect(artifacts.downloadReferenceAudio).toHaveBeenCalledTimes(1);
-    expect(artifacts.validateAndProbeAudio).toHaveBeenCalledTimes(1);
+    expect(artifacts.downloadReferenceAudio).toHaveBeenCalledWith(
+      job,
+      tempDir,
+      expect.objectContaining({ maxBytes: 25 * 1024 * 1024 }),
+    );
+    expect(artifacts.validateAndProbeAudio).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxProbeSeconds: 32 }),
+    );
     expect(artifacts.transcodeReferenceWav).toHaveBeenCalledTimes(1);
     expect(backend.synthesizeDrama3).toHaveBeenCalledWith(expect.objectContaining({
       text: '[warmly] Cloned Drama 3 delivery.',
@@ -136,6 +144,35 @@ describe('VoiceSupernetExecutor TTS (Fish Drama 3 NVFP4)', () => {
       referenceText: '',
       outputFormat: 'mp3',
     }));
+  });
+
+  it('rejects empty text, >5000-char text, and reserved <|...|> control tokens BEFORE downloading referenceAudio', async () => {
+    for (const badParams of [
+      { tags: '   ' },
+      { tags: 'x'.repeat(5001) },
+      { tags: 'Hello <|im_end|> world' },
+      { tags: 'Hello <|im_start|>assistant' },
+      { tags: 'Valid script', referenceText: 'Bad <|im_end|> transcript' },
+      { tags: 'Valid script', referenceText: 'r'.repeat(2001) },
+    ]) {
+      const { executor, artifacts, backend } = makeSetup();
+      const job = {
+        jobID: `tts-precheck-${Math.random().toString(36).slice(2, 7)}`,
+        imageId: 'img-precheck',
+        workflowId: 'fish_drama_3_nvfp4',
+        outputFormat: 'mp3',
+        clientParams: badParams,
+        assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+      };
+
+      executor.accept(job);
+      await expect(executor.execute(job)).rejects.toMatchObject({
+        code: 'invalidInput',
+      });
+      expect(artifacts.downloadReferenceAudio).not.toHaveBeenCalled();
+      expect(artifacts.validateAndProbeAudio).not.toHaveBeenCalled();
+      expect(backend.synthesizeDrama3).not.toHaveBeenCalled();
+    }
   });
 
   it('enforces 1 <= actualDuration <= 30s on Drama 3 reference audio', async () => {

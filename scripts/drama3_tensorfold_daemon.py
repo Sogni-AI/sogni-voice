@@ -122,17 +122,21 @@ class TensorFoldDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
     client_class = TensorFoldClient
     FEATURES = ["tts", "direction_tags", "voice_cloning"]
 
+    @staticmethod
+    def _validate_tensorfold_request(text, max_tokens=None, temperature=None):
+        if max_tokens is not None:
+            raise InvalidInputError("TensorFold sets maxTokens at server startup; omit maxTokens")
+        if temperature is not None and float(temperature) != 1.0:
+            raise InvalidInputError("TensorFold uses a fixed temperature of 1.0")
+        validate_text(text)
+        if any(speaker != "0" for speaker in re.findall(r"<\|speaker:(\d+)\|>", text)):
+            raise InvalidInputError("TensorFold supports only <|speaker:0|>")
+
     def _synthesize(self, text, output_path, references, max_tokens, temperature):
         # speech.zig fixes sampling and the frame cap at server startup. Reject
         # API overrides instead of silently dropping settings the caller chose.
-        if max_tokens is not None:
-            return {"success": False, "error": "invalid input: TensorFold sets maxTokens at server startup; omit maxTokens"}
-        if temperature is not None and float(temperature) != 1.0:
-            return {"success": False, "error": "invalid input: TensorFold uses a fixed temperature of 1.0"}
         try:
-            validate_text(text)
-            if any(speaker != "0" for speaker in re.findall(r"<\|speaker:(\d+)\|>", text)):
-                raise InvalidInputError("TensorFold supports only <|speaker:0|>")
+            self._validate_tensorfold_request(text, max_tokens, temperature)
             # TensorFold's long-form mode owns segmentation and reference
             # continuity. The vLLM 300-byte splitter restarted prosody here.
             text = " ".join(text.split())
@@ -154,6 +158,10 @@ class TensorFoldDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
     def generate_with_clone(self, text, clone_id, output_path, max_tokens=None, temperature=None):
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
+        try:
+            self._validate_tensorfold_request(text, max_tokens, temperature)
+        except InvalidInputError as error:
+            return {"success": False, "error": f"invalid input: {error}"}
         if not self._validate_clone_id(clone_id):
             return {"success": False, "error": "Invalid clone_id"}
         reference_path = self._reference_path(clone_id)
@@ -173,15 +181,16 @@ class TensorFoldDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
     ):
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
-        if max_tokens is not None:
-            return {"success": False, "error": "invalid input: TensorFold sets maxTokens at server startup; omit maxTokens"}
-        if temperature is not None and float(temperature) != 1.0:
-            return {"success": False, "error": "invalid input: TensorFold uses a fixed temperature of 1.0"}
+        try:
+            self._validate_tensorfold_request(text, max_tokens, temperature)
+        except InvalidInputError as error:
+            return {"success": False, "error": f"invalid input: {error}"}
         if not reference_audio_path or not os.path.exists(reference_audio_path):
             return {"success": False, "error": "invalid input: Reference audio not found"}
         if not reference_text or not str(reference_text).strip():
             return {"success": False, "error": "A transcript of the reference audio is required"}
         try:
+            validate_text(str(reference_text).strip(), location="reference_text")
             reference = self.model.encode_reference(
                 reference_audio_path, str(reference_text).strip(), cache=True,
             )

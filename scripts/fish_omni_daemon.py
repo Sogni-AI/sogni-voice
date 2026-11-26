@@ -288,16 +288,23 @@ class OmniDrama3TTSDaemon(OmniBackendMixin, Drama3TTSDaemon):
     ) -> dict:
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
+        try:
+            validate_text(text)
+        except InvalidInputError as e:
+            return {"success": False, "error": f"invalid input: {e}"}
         if not reference_audio_path or not os.path.exists(reference_audio_path):
-            return {"success": False, "error": f"Reference audio not found: {reference_audio_path}"}
+            return {"success": False, "error": "Reference audio not found"}
         if not reference_text or not str(reference_text).strip():
             return {"success": False, "error": "A transcript of the reference audio is required"}
         try:
+            validate_text(str(reference_text).strip(), location="reference_text")
             self._validate_reference(reference_audio_path)
             reference = self.model.encode_reference(
                 reference_audio_path, transcript=str(reference_text).strip()
             )
             return self._synthesize(text, output_path, [reference], max_tokens, temperature)
+        except InvalidInputError as e:
+            return {"success": False, "error": f"invalid input: {e}"}
         except Exception as e:  # noqa: BLE001
             _log(f"generate_with_reference error: {e}")
             traceback.print_exc()

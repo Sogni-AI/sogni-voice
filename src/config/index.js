@@ -116,7 +116,7 @@ export const config = {
   },
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
-    transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 25) * 1024 * 1024,
+    transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 64) * 1024 * 1024,
   },
   pocketTts: {
     enabled: parseEnvBool(process.env.POCKET_TTS_ENABLED, false),

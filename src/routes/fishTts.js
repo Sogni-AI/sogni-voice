@@ -168,7 +168,8 @@ const decodeReference = async (audio, tempDir) => {
     }
   } catch (error) {
     if (error.isBoom) throw error;
-    throw Boom.badRequest(`Reference audio could not be inspected: ${error.stderr || error.message}`);
+    console.error('decodeReference ffprobe failed:', error.stderr || error.message);
+    throw Boom.badRequest('Reference audio could not be decoded');
   }
 
   const wavPath = resolvePath(await tempFileManager.createTempFile(tempDir, 'wav'));
@@ -184,7 +185,8 @@ const decodeReference = async (audio, tempDir) => {
       wavPath,
     ], { timeout: 300000 });
   } catch (error) {
-    throw Boom.badRequest(`Reference audio could not be decoded: ${error.stderr || error.message}`);
+    console.error('decodeReference ffmpeg failed:', error.stderr || error.message);
+    throw Boom.badRequest('Reference audio could not be decoded');
   }
 
   // Browser WebM recordings often report Duration: N/A in container headers, and

@@ -73,6 +73,8 @@ services:
       fish-s2:
         condition: service_healthy
     env_file: ../../.env
+    environment:
+      SOGNI_NETWORK_WORKER: "false"
     volumes:
       - ../../checkpoints:/app/checkpoints:ro
       - ../../fish_voice_clones:/app/fish_voice_clones

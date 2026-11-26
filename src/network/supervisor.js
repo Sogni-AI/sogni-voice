@@ -382,7 +382,7 @@ export async function createSupervisor(overrides = {}) {
     sogniEnv: overrides.sogniEnv || config.networkWorker?.sogniEnv,
   });
   const credentials = overrides.credentials || resolveWorkerCredentials();
-  if (!credentials.apiKey) {
+  if (!credentials.apiKey && !overrides.checkOnly) {
     throw new Error(
       'SOGNI_API_KEY (or API_KEY / SOGNI_WORKER_API_KEY) is required to start the Sogni Supernet worker',
     );

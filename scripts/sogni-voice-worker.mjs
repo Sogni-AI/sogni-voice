@@ -64,6 +64,7 @@ try {
   startupPromise = createSupervisor({
     defaultBackendMode: 'http',
     ownsDaemons: true,
+    checkOnly: args.has('--check'),
   });
   workerBundle = await startupPromise;
   startupPromise = null;

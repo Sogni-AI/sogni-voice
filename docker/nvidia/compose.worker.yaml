@@ -25,13 +25,6 @@ services:
     env_file: ../../.env
     environment:
       SOGNI_NETWORK_WORKER: "true"
-      SOGNI_VOICE_BACKEND_MODE: ${SOGNI_VOICE_BACKEND_MODE:-http}
-      SOGNI_VOICE_API_URL: ${SOGNI_VOICE_API_URL:-http://${HOST:-127.0.0.1}:${PORT:-3000}}
-      SOGNI_VOICE_API_KEY: ${SOGNI_VOICE_API_KEY:-${AUTH_API_KEY:-}}
-      SOGNI_API_KEY: ${SOGNI_API_KEY:-}
-      SOGNI_NFT_TOKEN_ID: ${SOGNI_NFT_TOKEN_ID:-}
-      SOGNI_ENV: ${SOGNI_ENV:-staging}
-      SOGNI_GPU_BRAND: ${SOGNI_GPU_BRAND:-NVIDIA GB10}
       SOGNI_WORKER_ID_FILE: /app/worker-state/.sogni-worker-id
     command:
       - node

@@ -397,11 +397,16 @@ export async function createSupervisor(overrides = {}) {
   );
   const allowlist = overrides.allowlist ?? parseModelAllowlist();
 
+  const defaultVoiceHost = process.env.HOST && process.env.HOST !== '0.0.0.0' && process.env.HOST !== '::'
+    ? process.env.HOST
+    : '127.0.0.1';
+  const defaultVoicePort = process.env.PORT || 3000;
+
   let executorRef = overrides.executor || null;
   const backend = overrides.backend || createVoiceBackend({
     mode: backendMode,
     cfg: config,
-    apiUrl: overrides.voiceApiUrl || config.networkWorker?.voiceApiUrl || process.env.SOGNI_VOICE_API_URL || 'http://127.0.0.1:3000',
+    apiUrl: overrides.voiceApiUrl || config.networkWorker?.voiceApiUrl || process.env.SOGNI_VOICE_API_URL || `http://${defaultVoiceHost}:${defaultVoicePort}`,
     apiKey: overrides.voiceApiKey ?? config.networkWorker?.voiceApiKey ?? process.env.SOGNI_VOICE_API_KEY ?? config.auth?.apiKey ?? '',
     allowlist,
     ownsDaemons: overrides.ownsDaemons ?? (backendMode === 'local'),

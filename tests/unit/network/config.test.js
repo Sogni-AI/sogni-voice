@@ -91,6 +91,34 @@ describe('network config', () => {
     });
   });
 
+  it('ignores "Unknown" in /proc/driver/nvidia and lowercase "processor : 0" on ARM64 GB10 containers', async () => {
+    const { probeHardwareInfo } = await import('../../../src/network/config.js');
+    const hw = await probeHardwareInfo({
+      env: {},
+      platform: 'linux',
+      arch: 'arm64',
+      totalMemBytes: 122 * (1024 ** 3),
+      cpus: [{ model: 'unknown', speed: 2808 }],
+      hostname: 'dgx-spark-01',
+      execFileImpl: async (cmd) => {
+        if (cmd === 'lscpu') return { stdout: 'Architecture: aarch64\nModel name: Cortex-X925\n' };
+        throw new Error('nvidia-smi unavailable');
+      },
+      readdirSyncImpl: () => ['0000:01:00.0'],
+      readFileSyncImpl: (path) => {
+        if (String(path).includes('/proc/driver/nvidia/gpus/')) return 'Model: \t\t Unknown\n';
+        if (path === '/proc/cpuinfo') return 'processor\t: 0\nBogoMIPS\t: 2000.00\n';
+        throw new Error('ENOENT');
+      },
+    });
+    expect(hw).toMatchObject({
+      cpuBrand: 'Cortex-X925',
+      gpuBrand: 'NVIDIA GB10',
+      ram: 122,
+      vram: 122,
+    });
+  });
+
   it('resolves backend mode from SOGNI_VOICE_BACKEND_MODE or SOGNI_VOICE_API_URL', async () => {
     const { resolveBackendMode } = await import('../../../src/network/config.js');
     expect(resolveBackendMode('', { defaultMode: 'local', apiUrl: '' })).toBe('local');

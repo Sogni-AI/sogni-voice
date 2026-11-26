@@ -175,13 +175,19 @@ export function resolveEffectiveNvidiaVramGB(gpuBrand, reportedVramGB, systemRam
   return isDgxSparkGpu(gpuBrand) ? systemRamGB : null;
 }
 
+const isUsableHardwareName = (value) => {
+  const trimmed = clean(value);
+  if (!trimmed) return false;
+  return !/^(?:unknown|\[?n\/a\]?|none|null|\d+)$/i.test(trimmed);
+};
+
 function readLinuxProcGpuBrand(readdirSyncImpl = readdirSync, readFileSyncImpl = readFileSync) {
   try {
     const dir = '/proc/driver/nvidia/gpus';
     for (const entry of readdirSyncImpl(dir)) {
       const info = readFileSyncImpl(join(dir, entry, 'information'), 'utf-8');
       const match = /^Model:\s*(.+)$/m.exec(info);
-      if (match?.[1]?.trim()) return match[1].trim();
+      if (isUsableHardwareName(match?.[1])) return match[1].trim();
     }
   } catch {
     // Ignore when /proc/driver/nvidia/gpus is unavailable.
@@ -195,15 +201,28 @@ function readLinuxProcGpuBrand(readdirSyncImpl = readdirSync, readFileSyncImpl =
   return null;
 }
 
-function readLinuxCpuBrand(cpus = os.cpus(), readFileSyncImpl = readFileSync, arch = process.arch) {
+async function readLinuxCpuBrand(
+  cpus = os.cpus(),
+  readFileSyncImpl = readFileSync,
+  arch = process.arch,
+  execFileImpl = execFileAsync,
+) {
   const fromOs = cpus?.[0]?.model?.trim();
-  if (fromOs && fromOs.toLowerCase() !== 'unknown') return fromOs;
+  if (isUsableHardwareName(fromOs)) return fromOs;
   try {
     const cpuinfo = readFileSyncImpl('/proc/cpuinfo', 'utf-8');
-    const match = /^(?:model name|Model|Processor)\s*:\s*(.+)$/im.exec(cpuinfo);
-    if (match?.[1]?.trim()) return match[1].trim();
+    // Case-sensitive: ARM64 /proc/cpuinfo starts every core stanza with lowercase `processor : 0`.
+    const match = /^(?:model name|Model|Hardware|Processor)\s*:\s*(.+)$/m.exec(cpuinfo);
+    if (isUsableHardwareName(match?.[1])) return match[1].trim();
   } catch {
     // Ignore if /proc/cpuinfo is unreadable.
+  }
+  try {
+    const { stdout } = await execFileImpl('lscpu', [], { timeout: 3000 });
+    const match = /^Model name:\s*(.+)$/m.exec(String(stdout || ''));
+    if (isUsableHardwareName(match?.[1])) return match[1].trim();
+  } catch {
+    // Ignore when lscpu is unavailable.
   }
   return `${arch || 'arm64'} CPU`;
 }
@@ -274,12 +293,12 @@ export async function probeHardwareInfo({
     const firstLine = String(stdout || '').trim().split('\n')[0] || '';
     const parts = firstLine.split(',').map((part) => part.trim());
     if (parts.length >= 2) {
-      if (!gpuBrand && parts[0]) gpuBrand = parts[0];
+      if (!gpuBrand && isUsableHardwareName(parts[0])) gpuBrand = parts[0];
       const vramMB = Number.parseInt(parts[1], 10);
       if (Number.isFinite(vramMB) && vramMB > 0) {
         reportedVramGB = Math.round(vramMB / 1024);
       }
-      if (parts[2]) nvidiaDriverVersion = parts[2];
+      if (isUsableHardwareName(parts[2])) nvidiaDriverVersion = parts[2];
     }
   } catch {
     // Sidecar containers without GPU passthrough may not carry nvidia-smi.
@@ -299,7 +318,7 @@ export async function probeHardwareInfo({
     ? Math.round(vramOverride)
     : resolveEffectiveNvidiaVramGB(gpuBrand, reportedVramGB, ram);
 
-  const cpuBrand = explicitCpuBrand || readLinuxCpuBrand(cpus, readFileSyncImpl, arch);
+  const cpuBrand = explicitCpuBrand || await readLinuxCpuBrand(cpus, readFileSyncImpl, arch, execFileImpl);
 
   return {
     hasANE: false,

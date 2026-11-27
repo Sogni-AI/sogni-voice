@@ -22,6 +22,7 @@ import {
   ensureCompleteTimings,
   estimateJobEtaSeconds,
   JobError,
+  resolveJobImageId,
   VoiceSupernetExecutor,
 } from './executor.js';
 import { SogniSocketClient } from './socketClient.js';
@@ -243,11 +244,17 @@ export class VoiceWorkerSupervisor {
     }
   }
 
-  async handleJobRequest(job) {
-    if (!job || typeof job.jobID !== 'string' || !job.jobID) {
+  async handleJobRequest(rawJob) {
+    if (!rawJob || typeof rawJob.jobID !== 'string' || !rawJob.jobID) {
       this.logger.warn?.('[voice-worker] Ignoring malformed jobRequest without jobID');
       return;
     }
+
+    // sogni-socket leaves `imageId` unset on initial dispatch so each worker
+    // mints a fresh per-attempt UUID (`imgID`) and reports that exact ID on
+    // `jobStarted`, `/v1/media/uploadUrl`, `jobResult`, and `jobCompleted`.
+    const imageId = resolveJobImageId(rawJob);
+    const job = rawJob.imageId === imageId ? rawJob : { ...rawJob, imageId };
 
     let accepted;
     try {
@@ -257,7 +264,7 @@ export class VoiceWorkerSupervisor {
       this.client.send('jobState', {
         type: 'jobStarted',
         jobID: job.jobID,
-        ...(job.imageId ? { imgID: job.imageId } : {}),
+        imgID: job.imageId,
       });
       this._sendFailureSequence(job, error, ensureCompleteTimings());
       return;
@@ -268,7 +275,7 @@ export class VoiceWorkerSupervisor {
     this.client.send('jobState', {
       type: 'jobStarted',
       jobID: job.jobID,
-      ...(job.imageId ? { imgID: job.imageId } : {}),
+      imgID: job.imageId,
     });
 
     const startedAt = Date.now();
@@ -286,7 +293,11 @@ export class VoiceWorkerSupervisor {
       // Exact 3-frame completion sequence required by sogni-socket:
       // 1. jobResult -> 2. jobState(jobCompleted) -> 3. readyToAcceptJobs(true)
       this.client.send('jobResult', result);
-      this.client.send('jobState', { type: 'jobCompleted', jobID: job.jobID });
+      this.client.send('jobState', {
+        type: 'jobCompleted',
+        jobID: job.jobID,
+        imgID: job.imageId,
+      });
       this.sendReadyToAcceptJobs(true, `job ${job.jobID} completed`);
 
       this.logger.log(

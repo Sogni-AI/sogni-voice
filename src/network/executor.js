@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { config } from '../config/index.js';
@@ -104,6 +105,12 @@ const isAbortError = (error, signal) => (
   || error?.code === 'aborted'
 );
 
+export function resolveJobImageId(job) {
+  if (typeof job?.imageId === 'string' && job.imageId.trim()) return job.imageId.trim();
+  if (typeof job?.imgID === 'string' && job.imgID.trim()) return job.imgID.trim();
+  return randomUUID().toUpperCase();
+}
+
 export class VoiceSupernetExecutor {
   constructor({
     workerModels,
@@ -190,8 +197,11 @@ export class VoiceSupernetExecutor {
       );
     }
 
+    const imageId = resolveJobImageId(job);
+    const normalizedJob = job.imageId === imageId ? job : { ...job, imageId };
     const entry = {
-      job,
+      job: normalizedJob,
+      imageId,
       model,
       controller: new AbortController(),
       aborted: false,
@@ -200,7 +210,7 @@ export class VoiceSupernetExecutor {
       timings: {},
     };
     this.activeJobs.set(job.jobID, entry);
-    return { model, entry };
+    return { model, entry, imageId };
   }
 
   _rememberTimings(jobID, timings) {
@@ -219,11 +229,12 @@ export class VoiceSupernetExecutor {
     return ensureCompleteTimings(remembered);
   }
 
-  async execute(job) {
-    const entry = this.activeJobs.get(job.jobID);
+  async execute(rawJob) {
+    const entry = this.activeJobs.get(rawJob.jobID);
     if (!entry) {
-      throw new JobError('invalidInput', `Job ${job.jobID} was not accepted`);
+      throw new JobError('invalidInput', `Job ${rawJob.jobID} was not accepted`);
     }
+    const job = entry.job;
 
     const timeoutMs = computeJobTimeout(job);
     let tempDir = null;

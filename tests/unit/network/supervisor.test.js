@@ -187,8 +187,36 @@ describe('VoiceWorkerSupervisor', () => {
       triggeredNSFWFilter: false,
       sha256: 'b'.repeat(64),
     });
-    expect(tail[1].data).toEqual({ type: 'jobCompleted', jobID: 'job-eta' });
+    expect(tail[1].data).toEqual({ type: 'jobCompleted', jobID: 'job-eta', imgID: 'img-1' });
     expect(tail[2].data).toEqual({ ready: true, reason: 'job job-eta completed' });
+  });
+
+  it('mints a consistent uppercase UUID imgID when sogni-socket omits imageId on jobRequest', async () => {
+    await supervisor.start();
+    executor.execute.mockImplementationOnce(async (job) => ({
+      jobID: job.jobID,
+      imgID: job.imageId,
+      performedStepCount: 1,
+      lastSeed: 0,
+      userCanceled: false,
+      triggeredNSFWFilter: false,
+      timings: ensureCompleteTimings({ inference: 0.5 }),
+      sha256: 'c'.repeat(64),
+    }));
+
+    await supervisor.handleJobRequest({
+      jobID: 'proj-no-img-id',
+      workflowId: 'fish_drama_3_nvfp4',
+      clientParams: { positivePrompt: 'Hello world' },
+    });
+
+    const startedFrame = client.sent.find((f) => f.type === 'jobState' && f.data.type === 'jobStarted');
+    const resultFrame = client.sent.find((f) => f.type === 'jobResult');
+    const completedFrame = client.sent.find((f) => f.type === 'jobState' && f.data.type === 'jobCompleted');
+    expect(startedFrame.data.imgID).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/);
+    expect(executor.accept.mock.calls[0][0].imageId).toBe(startedFrame.data.imgID);
+    expect(resultFrame.data.imgID).toBe(startedFrame.data.imgID);
+    expect(completedFrame.data.imgID).toBe(startedFrame.data.imgID);
   });
 
   it('sends empty jobResult + jobError(isFromWorker: true) + readyToAcceptJobs(true) on failure', async () => {

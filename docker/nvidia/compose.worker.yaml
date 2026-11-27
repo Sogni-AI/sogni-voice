@@ -22,7 +22,7 @@ services:
     network_mode: host
     restart: unless-stopped
     stop_grace_period: 130s
-    env_file: ../../.env
+    env_file: ${SOGNI_WORKER_ENV_FILE:-../../.env}
     environment:
       SOGNI_NETWORK_WORKER: "true"
       SOGNI_WORKER_ID_FILE: /app/worker-state/.sogni-worker-id

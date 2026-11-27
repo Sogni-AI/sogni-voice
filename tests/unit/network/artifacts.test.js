@@ -6,10 +6,12 @@ import { join } from 'node:path';
 import { Readable } from 'node:stream';
 import { createSyntheticTestWavBuffer } from '../../../src/utils/audioFormat.js';
 import {
+  MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
   downloadReferenceAudio,
   downloadToFile,
   fetchMediaDownloadUrl,
   fetchMediaUploadUrl,
+  readResponseBufferBounded,
   requestJsonWithBody,
   transcodeAndVerifySttAudio,
   transcodeReferenceWav,
@@ -380,6 +382,75 @@ describe('artifacts & media URL client', () => {
         'https://r2.sogni.test/out/file.mp3',
         expect.objectContaining({ method: 'PUT', redirect: 'error' }),
       );
+    });
+
+    it('sets MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES to 50 MiB and marks oversized readResponseBufferBounded / referenceAudio downloads with invalidInput', async () => {
+      expect(MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES).toBe(50 * 1024 * 1024);
+
+      await expect(
+        readResponseBufferBounded(
+          {
+            headers: new Headers({ 'content-length': String(50 * 1024 * 1024 + 1) }),
+            body: webBody('tiny'),
+          },
+          MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
+        ),
+      ).rejects.toMatchObject({
+        invalidInput: true,
+        message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+      });
+
+      await expect(
+        readResponseBufferBounded(
+          {
+            headers: new Headers(),
+            body: webBody(Buffer.alloc(2048, 0x42)),
+          },
+          1024,
+        ),
+      ).rejects.toMatchObject({
+        invalidInput: true,
+        message: expect.stringMatching(/exceeded maximum allowed 1024 bytes/),
+      });
+
+      const arrayBufRes = {
+        headers: new Headers(),
+        arrayBuffer: async () => new Uint8Array(2048).buffer,
+      };
+      await expect(readResponseBufferBounded(arrayBufRes, 1024)).rejects.toMatchObject({
+        invalidInput: true,
+        message: expect.stringMatching(/exceeded maximum allowed 1024 bytes/),
+      });
+
+      const oversizedRefFetch = vi.fn(async () => ({
+        ok: true,
+        status: 200,
+        headers: new Headers({ 'content-length': String(51 * 1024 * 1024) }),
+        body: webBody(''),
+      }));
+      await expect(
+        downloadReferenceAudio(
+          {
+            jobID: 'job-over-50mb',
+            assets: [{
+              type: 'audio',
+              jobField: 'audio',
+              signedDownloadType: 'referenceAudio',
+              url: 'https://cdn.sogni.test/oversized.wav',
+            }],
+          },
+          tempDir,
+          {
+            apiUrl: 'https://api.sogni.test',
+            fetchImpl: oversizedRefFetch,
+            maxBytes: MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
+          },
+        ),
+      ).rejects.toMatchObject({
+        invalidInput: true,
+        message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+      });
+      expect(oversizedRefFetch).toHaveBeenCalledTimes(1);
     });
 
     it('verifies decoded PCM/FLAC sample counts in transcodeReferenceWav and transcodeAndVerifySttAudio', async () => {

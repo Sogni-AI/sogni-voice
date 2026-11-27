@@ -205,6 +205,7 @@ export class VoiceSupernetExecutor {
       model,
       controller: new AbortController(),
       aborted: false,
+      silentRelease: false,
       phase: 'setup',
       startedAt: this.now(),
       timings: {},
@@ -253,7 +254,13 @@ export class VoiceSupernetExecutor {
       );
 
       if (entry.aborted) {
-        throw new JobError('aborted', `Job ${job.jobID} was cancelled`);
+        const abortCode = entry.silentRelease ? 'released' : 'aborted';
+        const abortErr = new JobError(
+          abortCode,
+          `Job ${job.jobID} was ${entry.silentRelease ? 'released' : 'cancelled'}`,
+        );
+        if (entry.silentRelease) abortErr.silentRelease = true;
+        throw abortErr;
       }
 
       this._rememberTimings(job.jobID, entry.timings);
@@ -265,7 +272,13 @@ export class VoiceSupernetExecutor {
       let mappedError;
       if (entry.aborted || isAbortError(error, entry.controller.signal)) {
         if (entry.aborted) {
-          mappedError = new JobError('aborted', `Job ${job.jobID} was cancelled`, { cause: error });
+          const abortCode = entry.silentRelease ? 'released' : 'aborted';
+          mappedError = new JobError(
+            abortCode,
+            `Job ${job.jobID} was ${entry.silentRelease ? 'released' : 'cancelled'}`,
+            { cause: error },
+          );
+          if (entry.silentRelease) mappedError.silentRelease = true;
         }
       }
       if (!mappedError) {
@@ -385,6 +398,7 @@ export class VoiceSupernetExecutor {
         text: trimmedText,
         referenceWavPath,
         referenceText: rawReferenceText,
+        language: job.clientParams?.language,
         outputFormat,
         tempDir,
         signal,
@@ -616,10 +630,13 @@ export class VoiceSupernetExecutor {
     this.activeJobs.delete(jobID);
   }
 
-  abort(jobID) {
+  abort(jobID, { silentRelease = false } = {}) {
     const entry = this.activeJobs.get(jobID);
     if (!entry) return false;
     entry.aborted = true;
+    if (silentRelease) {
+      entry.silentRelease = true;
+    }
     entry.controller.abort();
     return true;
   }

@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const MIN_ARTIFACT_UPLOAD_BYTES_PER_SEC = 128 * 1024;
 export const MAX_ARTIFACT_UPLOAD_ATTEMPT_MS = 10 * 60_000;
 export const MAX_ARTIFACT_DOWNLOAD_BYTES = 256 * 1024 * 1024;
-export const MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES = 25 * 1024 * 1024;
+export const MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES = 50 * 1024 * 1024;
 export const MAX_DOWNLOAD_REDIRECTS = 3;
 
 // Allowed single-file demuxers matching ComfyUI/worker/src/assets/mediaContainer.ts.
@@ -323,6 +323,56 @@ export async function fetchMediaUploadUrl({
   return data.uploadUrl;
 }
 
+export async function readResponseBufferBounded(
+  response,
+  maxBytes = MAX_ARTIFACT_DOWNLOAD_BYTES,
+) {
+  const contentLengthHeader = response?.headers?.get?.('content-length');
+  const declaredLength = contentLengthHeader ? Number.parseInt(contentLengthHeader, 10) : Number.NaN;
+  if (Number.isFinite(declaredLength) && declaredLength > maxBytes) {
+    await drainBody(response);
+    throw makeInvalidInputError(
+      `Input download size (${declaredLength} bytes) exceeds maximum allowed ${maxBytes} bytes`,
+    );
+  }
+
+  if (response?.body && typeof response.body.getReader === 'function') {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let totalBytes = 0;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        const buf = Buffer.from(value);
+        totalBytes += buf.length;
+        if (totalBytes > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw makeInvalidInputError(
+            `Input download exceeded maximum allowed ${maxBytes} bytes`,
+          );
+        }
+        chunks.push(buf);
+      }
+    } finally {
+      try {
+        reader.releaseLock();
+      } catch {
+        // Ignore if stream lock already released.
+      }
+    }
+    return Buffer.concat(chunks, totalBytes);
+  }
+
+  const fallbackBuffer = Buffer.from(await response.arrayBuffer());
+  if (fallbackBuffer.length > maxBytes) {
+    throw makeInvalidInputError(
+      `Input download exceeded maximum allowed ${maxBytes} bytes`,
+    );
+  }
+  return fallbackBuffer;
+}
+
 export async function downloadToFile(url, destPath, options = {}) {
   const {
     fetchImpl = fetch,
@@ -386,7 +436,7 @@ export async function downloadToFile(url, destPath, options = {}) {
 
       const sourceStream = response.body && typeof response.body.getReader === 'function'
         ? Readable.fromWeb(response.body)
-        : Readable.from(Buffer.from(await response.arrayBuffer()));
+        : Readable.from(await readResponseBufferBounded(response, maxBytes));
 
       let bytesWritten = 0;
       const limiter = new Transform({

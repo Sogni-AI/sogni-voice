@@ -31,6 +31,8 @@ def build_prompt(request):
     base_prompt = SPEAKER_PROMPT if request.get("diarize") else ASR_PROMPT
     prompt = base_prompt
     hint = str(request.get("prompt") or "").strip()
+    if request.get("diarize") and hint.startswith(SPEAKER_PROMPT):
+        hint = hint[len(SPEAKER_PROMPT):].strip()
     if hint:
         prompt = (
             f"{base_prompt} Domain and vocabulary context "

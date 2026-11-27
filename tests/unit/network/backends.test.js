@@ -8,6 +8,7 @@ import {
   HTTP_BACKEND_TIMEOUT_MS,
   HttpVoiceBackend,
   LocalVoiceBackend,
+  NEMOTRON_SPEAKER_PROMPT,
   SerialQueue,
   buildCanonicalTranscript,
   resolveLongRunningDispatcher,
@@ -69,12 +70,12 @@ describe('backends & canonical transcript builder', () => {
       });
     });
 
-    it('omits rawText and speaker labels on non-diarized Parakeet sentence transcripts', () => {
+    it('omits rawText, words, and speaker labels on non-word transcripts, and only sets diarized=true when speaker labels exist', () => {
       const canonical = buildCanonicalTranscript({
         workflowId: 'parakeet_tdt_0.6b_v3_bf16',
         rawResult: {
-          text: 'Fast transcription on DGX Spark.',
-          timestamps: [{ start: 0.1, end: 2.4, text: 'Fast transcription on DGX Spark.' }],
+          text: 'Fast transcription on GPU hardware.',
+          timestamps: [{ start: 0.1, end: 2.4, text: 'Fast transcription on GPU hardware.' }],
         },
         audioSeconds: 2.5,
         requestedTimestamps: 'sentence',
@@ -84,17 +85,31 @@ describe('backends & canonical transcript builder', () => {
       expect(canonical).toEqual({
         version: 1,
         model: 'parakeet_tdt_0.6b_v3_bf16',
-        text: 'Fast transcription on DGX Spark.',
+        text: 'Fast transcription on GPU hardware.',
         duration: 2.5,
         language: 'auto',
         diarized: false,
         timestampGranularity: 'sentence',
-        segments: [{ id: 0, start: 0.1, end: 2.4, text: 'Fast transcription on DGX Spark.' }],
-        words: [],
+        segments: [{ id: 0, start: 0.1, end: 2.4, text: 'Fast transcription on GPU hardware.' }],
         complete: true,
         finishReason: 'stop',
       });
       expect(canonical).not.toHaveProperty('rawText');
+      expect(canonical).not.toHaveProperty('words');
+
+      // When diarize: true was requested but the model emitted no speaker labels, diarized must be false
+      const unlabeledDiarize = buildCanonicalTranscript({
+        workflowId: 'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+        rawResult: {
+          text: 'Single narrator without speaker tags.',
+          timestamps: [{ start: 0.0, end: 1.9, text: 'Single narrator without speaker tags.' }],
+        },
+        audioSeconds: 2.0,
+        requestedTimestamps: 'sentence',
+        diarize: true,
+      });
+      expect(unlabeledDiarize.diarized).toBe(false);
+      expect(unlabeledDiarize).not.toHaveProperty('words');
     });
 
     it('cleans speaker tags cleanly via stripSpeakerTags', () => {
@@ -193,6 +208,34 @@ describe('backends & canonical transcript builder', () => {
       })).resolves.toBe(42);
       expect(events).toEqual(['first', 'second']);
     });
+
+    it('prefers nemotron over parakeet when auto-transcribing arabic, chinese, japanese, or korean reference audio', async () => {
+      const transcriptionService = {
+        transcribe: vi.fn(async () => ({ text: 'European reference text.' })),
+      };
+      const nemotronService = {
+        transcribe: vi.fn(async () => ({ text: '<spk:0> 日本語のリファレンス音声です。' })),
+      };
+      const backend = new LocalVoiceBackend({
+        cfg: {
+          transcription: { enabled: true },
+          nemotron: { enabled: true, backend: 'vllm' },
+        },
+        transcriptionService,
+        nemotronService,
+      });
+
+      for (const lang of ['arabic', 'Chinese', 'JAPANESE', 'korean']) {
+        const text = await backend.transcribeReferenceAudio('/tmp/ref.wav', { language: lang });
+        expect(text).toBe('日本語のリファレンス音声です。');
+      }
+      expect(nemotronService.transcribe).toHaveBeenCalledTimes(4);
+      expect(transcriptionService.transcribe).not.toHaveBeenCalled();
+
+      const enText = await backend.transcribeReferenceAudio('/tmp/ref-en.wav', { language: 'english' });
+      expect(enText).toBe('European reference text.');
+      expect(transcriptionService.transcribe).toHaveBeenCalledTimes(1);
+    });
   });
 
   describe('HttpVoiceBackend (sidecar mode)', () => {
@@ -214,6 +257,24 @@ describe('backends & canonical transcript builder', () => {
         }
         if (url.endsWith('/drama3-tts/status')) {
           return { ok: true, status: 200, json: async () => ({ model: 'drama-3-nvfp4-pruned' }) };
+        }
+        if (url.endsWith('/auth/status')) {
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              authEnabled: false,
+              apiKeyConfigured: true,
+              voiceCloning: { enabled: true, mode: 'api_key' },
+            }),
+          };
+        }
+        if (url.endsWith('/drama3-tts/generate-with-reference') && init.method === 'POST') {
+          return {
+            ok: false,
+            status: 400,
+            text: async () => JSON.stringify({ message: 'No reference audio file provided' }),
+          };
         }
         if (url.endsWith('/drama3-tts/voices')) {
           return {
@@ -507,6 +568,183 @@ describe('backends & canonical transcript builder', () => {
       });
       expect(canonical.timestampGranularity).toBe('none');
       expect(canonical.diarized).toBe(true);
+    });
+
+    it('caches 404/405 on /drama3-tts/generate-with-reference and prefixes leading-hyphen referenceText in ephemeral clone fallback', async () => {
+      const wav = createSyntheticTestWavBuffer({ durationSeconds: 1 });
+      const refPath = join(tempDir, 'ref-cache.wav');
+      await writeFile(refPath, wav);
+
+      const calls = [];
+      const capturedTranscripts = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        calls.push({ url, method: init.method });
+        if (url.endsWith('/drama3-tts/generate-with-reference')) {
+          return {
+            ok: false,
+            status: 404,
+            text: async () => JSON.stringify({ statusCode: 404, error: 'Not Found', message: 'Not Found' }),
+          };
+        }
+        if (url.endsWith('/drama3-tts/voices/clone') && init.method === 'POST') {
+          capturedTranscripts.push(init.body.get('transcript'));
+          return { ok: true, status: 200, json: async () => ({ success: true }) };
+        }
+        if (/\/drama3-tts\/voices\/clone\/__ephemeral_[a-f0-9]+\/generate$/.test(url)) {
+          return {
+            ok: true,
+            status: 200,
+            headers: new Headers({ 'x-finish-reason': 'stop' }),
+            arrayBuffer: async () => wav.buffer.slice(wav.byteOffset, wav.byteOffset + wav.byteLength),
+          };
+        }
+        if (/\/drama3-tts\/voices\/clone\/__ephemeral_[a-f0-9]+$/.test(url) && init.method === 'DELETE') {
+          return { ok: true, status: 200, json: async () => ({ success: true }) };
+        }
+        throw new Error(`Unexpected request ${init.method} ${url}`);
+      });
+
+      const backend = new HttpVoiceBackend({
+        apiUrl: 'http://127.0.0.1:3000',
+        apiKey: 'k',
+        fetchImpl,
+      });
+
+      // First job probes /drama3-tts/generate-with-reference (404), caches false, and runs fallback
+      await backend.synthesizeDrama3({
+        text: 'First zero-shot call.',
+        referenceWavPath: refPath,
+        referenceText: '- Leading hyphen dialogue line.',
+        outputFormat: 'wav',
+        tempDir,
+      });
+      expect(backend._supportsGenerateWithReference).toBe(false);
+      expect(capturedTranscripts[0]).toBe(' - Leading hyphen dialogue line.');
+
+      // Second job goes directly to ephemeral clone fallback without uploading WAV twice
+      calls.length = 0;
+      await backend.synthesizeDrama3({
+        text: 'Second zero-shot call.',
+        referenceWavPath: refPath,
+        referenceText: '--another-flag-like-transcript',
+        outputFormat: 'wav',
+        tempDir,
+      });
+      expect(calls.some((c) => c.url.endsWith('/drama3-tts/generate-with-reference'))).toBe(false);
+      expect(calls).toHaveLength(3);
+      expect(capturedTranscripts[1]).toBe(' --another-flag-like-transcript');
+    });
+
+    it('sends bounded maxNewTokens and preserves SPEAKER_PROMPT when diarize + custom prompt are passed to Nemotron over HTTP, and routes CJK/Arabic reference audio to nemotron', async () => {
+      const wav = createSyntheticTestWavBuffer({ durationSeconds: 2 });
+      const audioPath = join(tempDir, 'clip.wav');
+      await writeFile(audioPath, wav);
+
+      const submittedForms = [];
+      const fetchImpl = vi.fn(async (url, init) => {
+        if (url.endsWith('/transcribe')) {
+          submittedForms.push(init.body);
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              success: true,
+              transcript: '<spk:0> مرحبا بكم',
+              timestamps: [{ text: 'مرحبا بكم', start: 0.0, end: 1.5, speaker: 'S01' }],
+            }),
+          };
+        }
+        throw new Error(`Unexpected ${url}`);
+      });
+
+      const backend = new HttpVoiceBackend({
+        apiUrl: 'http://127.0.0.1:3000',
+        apiKey: 'k',
+        fetchImpl,
+      });
+      backend.capabilities.parakeetEnabled = true;
+      backend.capabilities.nemotronEnabled = true;
+      backend.capabilities.nemotronSupportsTimestamps = true;
+
+      await backend.transcribe({
+        engine: 'nemotron',
+        audioPath,
+        tempDir,
+        durationSeconds: 30,
+        diarize: true,
+        prompt: 'Quarterly earnings call between two hosts.',
+        hotwords: 'Sogni, Etherlink',
+      });
+
+      const form1 = submittedForms[0];
+      expect(form1.get('diarize')).toBe('true');
+      expect(form1.get('maxNewTokens')).toBe(String(Math.ceil(30 * 16 + 256)));
+      expect(form1.get('prompt')).toBe(
+        `${NEMOTRON_SPEAKER_PROMPT} Quarterly earnings call between two hosts.`,
+      );
+
+      // Non-diarized Nemotron call leaves custom prompt untouched and caps maxNewTokens at 16384
+      await backend.transcribe({
+        engine: 'nemotron',
+        audioPath,
+        tempDir,
+        durationSeconds: 3600,
+        diarize: false,
+        prompt: 'Solo lecture notes.',
+      });
+      expect(submittedForms[1].get('maxNewTokens')).toBe('16384');
+      expect(submittedForms[1].get('prompt')).toBe('Solo lecture notes.');
+
+      // Auto-transcribing reference audio in Japanese & Arabic routes to Nemotron instead of Parakeet
+      for (const language of ['japanese', 'arabic', 'chinese', 'korean']) {
+        const refTranscript = await backend.transcribeReferenceAudio(audioPath, {
+          tempDir,
+          language,
+        });
+        expect(refTranscript).toBe('مرحبا بكم');
+        expect(submittedForms[submittedForms.length - 1].get('engine')).toBe('nemotron');
+      }
+
+      // European language keeps Parakeet
+      await backend.transcribeReferenceAudio(audioPath, { tempDir, language: 'french' });
+      expect(submittedForms[submittedForms.length - 1].get('engine')).toBe('parakeet');
+    });
+
+    it('fails fast in discoverModels() when Drama 3 voice-cloning auth is blocked, missing apiKey, or rejected with 401', async () => {
+      const makeBackendForAuth = ({ voiceCloning, apiKey = '', probeStatus = 400 }) => {
+        const fetchImpl = vi.fn(async (url, init = {}) => {
+          if (url.endsWith('/transcription/models')) {
+            return { ok: true, status: 200, json: async () => ({ models: [] }) };
+          }
+          if (url.endsWith('/drama3-tts/status')) {
+            return { ok: true, status: 200, json: async () => ({ ready: true }) };
+          }
+          if (url.endsWith('/auth/status')) {
+            return { ok: true, status: 200, json: async () => ({ voiceCloning }) };
+          }
+          if (url.endsWith('/drama3-tts/generate-with-reference') && init.method === 'POST') {
+            return {
+              ok: false,
+              status: probeStatus,
+              text: async () => JSON.stringify({ message: probeStatus === 401 ? 'Unauthorized' : 'No reference audio file provided' }),
+            };
+          }
+          throw new Error(`Unexpected ${url}`);
+        });
+        return new HttpVoiceBackend({ apiUrl: 'http://127.0.0.1:3000', apiKey, fetchImpl });
+      };
+
+      await expect(
+        makeBackendForAuth({ voiceCloning: { enabled: false, mode: 'blocked' } }).discoverModels(),
+      ).rejects.toThrow(/voice cloning is disabled/);
+
+      await expect(
+        makeBackendForAuth({ voiceCloning: { enabled: true, mode: 'api_key' }, apiKey: '' }).discoverModels(),
+      ).rejects.toThrow(/requires an API key/);
+
+      await expect(
+        makeBackendForAuth({ voiceCloning: { enabled: true, mode: 'api_key' }, apiKey: 'wrong-key', probeStatus: 401 }).discoverModels(),
+      ).rejects.toThrow(/authentication failed.*401/);
     });
   });
 });

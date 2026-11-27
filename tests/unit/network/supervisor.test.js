@@ -86,7 +86,8 @@ describe('VoiceWorkerSupervisor', () => {
     });
   });
 
-  it('NEVER sends workerInfo or readyToAcceptJobs on open — ONLY on authenticated', async () => {
+  it('NEVER sends workerInfo or readyToAcceptJobs on open — ONLY on authenticated, with loadedModelID initialized to workerModels[0]', async () => {
+    expect(executor.loadedModelID).toBe('fish_drama_3_nvfp4');
     await supervisor.start();
     client.emit('open');
     expect(client.sent).toEqual([]);
@@ -94,6 +95,7 @@ describe('VoiceWorkerSupervisor', () => {
     client.emit('frame', 'authenticated', { ok: true });
     expect(client.sentTypes()).toEqual(['workerInfo', 'readyToAcceptJobs']);
     expect(client.sent[0].data).toMatchObject({
+      loadedModelID: 'fish_drama_3_nvfp4',
       workerModels: [
         'fish_drama_3_nvfp4',
         'parakeet_tdt_0.6b_v3_bf16',
@@ -291,5 +293,171 @@ describe('VoiceWorkerSupervisor', () => {
     client.emit('frame', 'jobReclaim', { reclaimed: ['j-3'], released: ['j-4'] });
 
     expect(executor.abort.mock.calls.map(([id]) => id)).toEqual(['j-1', 'j-2', 'j-4']);
+    expect(executor.abort.mock.calls[2]).toEqual(['j-4', { silentRelease: true }]);
+  });
+
+  it('buffers completed and failed outcomes while disconnected and flushes on jobReclaim.reclaimed', async () => {
+    await supervisor.start();
+    client.connected = true;
+    client.emit('open');
+
+    let finishDisconnectedJob;
+    executor.execute.mockImplementationOnce((job) => new Promise((resolve) => {
+      finishDisconnectedJob = () => resolve({
+        jobID: job.jobID,
+        imgID: job.imageId,
+        performedStepCount: 1,
+        lastSeed: 42,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        timings: ensureCompleteTimings({ inference: 1.1 }),
+        sha256: 'f'.repeat(64),
+      });
+    }));
+
+    const runPromise = supervisor.handleJobRequest(drama3Job('job-held-ok'));
+    expect(client.sentTypes()).toEqual(['jobState']);
+
+    // Disconnect mid-flight, then complete while disconnected
+    client.connected = false;
+    client.emit('close');
+    client.sent.length = 0;
+
+    finishDisconnectedJob();
+    await runPromise;
+
+    // Must NOT drop jobResult / jobCompleted onto a closed socket
+    expect(client.sent).toEqual([]);
+    expect(supervisor.pendingHeldOutcomes.has('job-held-ok')).toBe(true);
+
+    // Reconnect and authenticate: advertises heldJobs(phase='finished') and holds readiness
+    client.connected = true;
+    client.emit('open');
+    client.emit('frame', 'authenticated', { ok: true });
+
+    expect(client.sentTypes()).toEqual(['workerInfo', 'readyToAcceptJobs']);
+    expect(client.sent[0].data.heldJobs).toEqual([
+      expect.objectContaining({
+        jobID: 'job-held-ok',
+        imgID: 'img-1',
+        phase: 'finished',
+        step: 1,
+        stepCount: 1,
+      }),
+    ]);
+    expect(client.sent[1].data).toEqual({
+      ready: false,
+      reason: 'awaiting jobReclaim',
+    });
+
+    // Server reclaims the held job -> flushes jobResult + jobCompleted + readyToAcceptJobs(true)
+    client.sent.length = 0;
+    client.emit('frame', 'jobReclaim', { reclaimed: ['job-held-ok'], released: [] });
+
+    expect(client.sentTypes()).toEqual(['jobResult', 'jobState', 'readyToAcceptJobs']);
+    expect(client.sent[0].data).toMatchObject({
+      jobID: 'job-held-ok',
+      imgID: 'img-1',
+      performedStepCount: 1,
+      sha256: 'f'.repeat(64),
+    });
+    expect(client.sent[1].data).toEqual({
+      type: 'jobCompleted',
+      jobID: 'job-held-ok',
+      imgID: 'img-1',
+    });
+    expect(client.sent[2].data).toEqual({
+      ready: true,
+      reason: 'job job-held-ok completed',
+      postDisconnectCleanupComplete: true,
+      readinessSessionId: sessionId,
+    });
+    supervisor.stopReadinessRefreshLoop();
+  });
+
+  it('silently drops buffered or in-flight held jobs on jobReclaim.released and on 5s reclaim timeout without emitting artistCanceled', async () => {
+    vi.useFakeTimers();
+    try {
+      await supervisor.start();
+      client.connected = true;
+      client.emit('open');
+
+      // 1) In-flight job released via jobReclaim.released must NOT send artistCanceled
+      let rejectAborted;
+      executor.activeRequests = 1;
+      executor.getHeldJobs.mockReturnValue([{
+        jobID: 'job-in-flight-rel',
+        imgID: 'img-1',
+        phase: 'running',
+        step: 0,
+        stepCount: 1,
+        heldForMs: 500,
+      }]);
+      executor.execute.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectAborted = reject;
+      }));
+      executor.abort.mockImplementationOnce((_jobID, opts) => {
+        executor.activeRequests = 0;
+        executor.getHeldJobs.mockReturnValue([]);
+        const err = new JobError(opts?.silentRelease ? 'released' : 'aborted', 'Released');
+        if (opts?.silentRelease) err.silentRelease = true;
+        rejectAborted(err);
+        return true;
+      });
+
+      const inFlightPromise = supervisor.handleJobRequest(drama3Job('job-in-flight-rel'));
+      client.connected = false;
+      client.emit('close');
+      client.connected = true;
+      client.emit('open');
+      client.sent.length = 0;
+
+      client.emit('frame', 'authenticated', { ok: true });
+      expect(client.sent[1].data).toEqual({ ready: false, reason: 'awaiting jobReclaim' });
+
+      client.sent.length = 0;
+      client.emit('frame', 'jobReclaim', { reclaimed: [], released: ['job-in-flight-rel'] });
+      await inFlightPromise;
+
+      expect(client.sent.filter((f) => f.type === 'jobResult' || f.type === 'jobError')).toEqual([]);
+      expect(client.sent.filter((f) => f.type === 'readyToAcceptJobs').pop().data).toEqual({
+        ready: true,
+        reason: 'held job released',
+        postDisconnectCleanupComplete: true,
+        readinessSessionId: sessionId,
+      });
+
+      // 2) Buffered failure held across disconnect expires after 5,000ms without jobReclaim
+      executor.execute.mockRejectedValueOnce(new JobError('genfailure', 'Transient backend crash'));
+      client.connected = false;
+      client.emit('close');
+      await supervisor.handleJobRequest(drama3Job('job-timeout-drop'));
+      expect(supervisor.pendingHeldOutcomes.has('job-timeout-drop')).toBe(true);
+
+      client.connected = true;
+      client.emit('open');
+      client.sent.length = 0;
+      client.emit('frame', 'authenticated', { ok: true });
+      expect(client.sent[1].data).toEqual({ ready: false, reason: 'awaiting jobReclaim' });
+
+      client.sent.length = 0;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(supervisor.pendingHeldOutcomes.size).toBe(0);
+      expect(client.sent).toEqual([
+        {
+          type: 'readyToAcceptJobs',
+          data: {
+            ready: true,
+            reason: 'reclaim timeout',
+            postDisconnectCleanupComplete: true,
+            readinessSessionId: sessionId,
+          },
+        },
+      ]);
+      supervisor.stopReadinessRefreshLoop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

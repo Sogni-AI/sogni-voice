@@ -117,10 +117,10 @@ describe('VoiceSupernetExecutor STT (Parakeet & Nemotron)', () => {
       diarized: false,
       timestampGranularity: 'sentence',
       segments: [{ id: 0, start: 0, end: 2.1, text: 'Parakeet clean transcript.' }],
-      words: [],
       complete: true,
       finishReason: 'stop',
     });
+    expect(transcriptJson).not.toHaveProperty('words');
     expect(result).toMatchObject({
       jobID: 'stt-parakeet-1',
       imgID: 'img-p1',

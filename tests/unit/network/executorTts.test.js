@@ -131,7 +131,7 @@ describe('VoiceSupernetExecutor TTS (Fish Drama 3 NVFP4)', () => {
     expect(artifacts.downloadReferenceAudio).toHaveBeenCalledWith(
       job,
       tempDir,
-      expect.objectContaining({ maxBytes: 25 * 1024 * 1024 }),
+      expect.objectContaining({ maxBytes: 50 * 1024 * 1024 }),
     );
     expect(artifacts.validateAndProbeAudio).toHaveBeenCalledWith(
       expect.any(String),
@@ -143,6 +143,47 @@ describe('VoiceSupernetExecutor TTS (Fish Drama 3 NVFP4)', () => {
       referenceWavPath: expect.stringMatching(/reference-44k\.wav$/),
       referenceText: '',
       outputFormat: 'mp3',
+    }));
+  });
+
+  it('maps >50 MB referenceAudio download rejections to invalidInput and forwards clientParams.language for reference auto-transcription', async () => {
+    const { executor, backend, artifacts } = makeSetup();
+    const overLimitErr = new Error(
+      `Input download size (${51 * 1024 * 1024} bytes) exceeds maximum allowed ${50 * 1024 * 1024} bytes`,
+    );
+    overLimitErr.invalidInput = true;
+    artifacts.downloadReferenceAudio.mockRejectedValueOnce(overLimitErr);
+
+    const oversizedJob = {
+      jobID: 'tts-clone-over50mb',
+      imageId: 'img-over50mb',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'mp3',
+      clientParams: { tags: 'Oversized clone clip.' },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+    executor.accept(oversizedJob);
+    await expect(executor.execute(oversizedJob)).rejects.toMatchObject({
+      code: 'invalidInput',
+      message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+    });
+
+    const jaJob = {
+      jobID: 'tts-clone-ja',
+      imageId: 'img-ja',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'wav',
+      clientParams: {
+        tags: 'こんにちは',
+        language: 'japanese',
+      },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+    executor.accept(jaJob);
+    await executor.execute(jaJob);
+    expect(backend.synthesizeDrama3).toHaveBeenLastCalledWith(expect.objectContaining({
+      language: 'japanese',
+      outputFormat: 'wav',
     }));
   });
 

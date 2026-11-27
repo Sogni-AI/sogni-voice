@@ -29,6 +29,7 @@ import { SogniSocketClient } from './socketClient.js';
 
 export const READINESS_REFRESH_INTERVAL_MS = 5 * 60_000;
 export const DEFAULT_ETA_INTERVAL_MS = 1_000;
+export const DEFAULT_RECLAIM_TIMEOUT_MS = 5_000;
 const UNKNOWN_FRAME_TYPE_LOG_LIMIT = 50;
 
 export class VoiceWorkerSupervisor {
@@ -42,18 +43,24 @@ export class VoiceWorkerSupervisor {
     readinessSessionId = randomUUID(),
     etaIntervalMs = DEFAULT_ETA_INTERVAL_MS,
     readinessRefreshIntervalMs = READINESS_REFRESH_INTERVAL_MS,
+    reclaimTimeoutMs = DEFAULT_RECLAIM_TIMEOUT_MS,
     drainTimeoutMs = config.networkWorker?.drainTimeoutMs || 120_000,
     logger = console,
   }) {
     this.client = client;
     this.executor = executor;
     this.workerModels = workerModels || [];
+    if (this.workerModels.length > 0 && this.executor && !this.executor.loadedModelID) {
+      const firstModel = this.workerModels[0];
+      this.executor.loadedModelID = typeof firstModel === 'string' ? firstModel : firstModel?.id || null;
+    }
     this.hardwareRating = hardwareRating;
     this.hardwareInfo = hardwareInfo;
     this.image = image;
     this.readinessSessionId = readinessSessionId;
     this.etaIntervalMs = etaIntervalMs;
     this.readinessRefreshIntervalMs = readinessRefreshIntervalMs;
+    this.reclaimTimeoutMs = reclaimTimeoutMs;
     this.drainTimeoutMs = drainTimeoutMs;
     this.logger = logger;
 
@@ -62,20 +69,106 @@ export class VoiceWorkerSupervisor {
     this.advertisedReady = false;
     this.pendingCleanupEvidence = false;
     this.readinessRefreshTimer = null;
+    this.reclaimDeadlineTimer = null;
+    this.awaitingJobReclaim = false;
+    this.socketOpen = undefined;
+    this.pendingHeldOutcomes = new Map();
+    this.silentlyReleasedReasons = new Map();
     this.inFlight = new Set();
     this.loggedUnknownFrameTypes = new Set();
+  }
+
+  _isClientConnected() {
+    if (typeof this.client?.connected === 'boolean') {
+      return this.client.connected;
+    }
+    return this.socketOpen !== false;
+  }
+
+  _hasHeldOrActiveWork() {
+    return (
+      this.executor.activeRequests >= this.executor.maxConcurrentJobs
+      || this.pendingHeldOutcomes.size > 0
+      || this.awaitingJobReclaim
+    );
+  }
+
+  getCombinedHeldJobs() {
+    const activeHeld = [...(this.executor.getHeldJobs() || [])];
+    const seen = new Set(activeHeld.map((entry) => entry.jobID));
+    const current = Date.now();
+    for (const outcome of this.pendingHeldOutcomes.values()) {
+      if (seen.has(outcome.jobID)) continue;
+      seen.add(outcome.jobID);
+      activeHeld.push({
+        jobID: outcome.jobID,
+        ...(outcome.imgID ? { imgID: outcome.imgID } : {}),
+        phase: 'finished',
+        step: 1,
+        stepCount: 1,
+        heldForMs: Math.max(0, current - outcome.heldAt),
+      });
+    }
+    return activeHeld;
+  }
+
+  _clearReclaimDeadline() {
+    if (this.reclaimDeadlineTimer) {
+      clearTimeout(this.reclaimDeadlineTimer);
+      this.reclaimDeadlineTimer = null;
+    }
+  }
+
+  _startReclaimDeadline() {
+    this._clearReclaimDeadline();
+    this.reclaimDeadlineTimer = setTimeout(() => {
+      this._onReclaimTimeout();
+    }, this.reclaimTimeoutMs);
+    if (typeof this.reclaimDeadlineTimer.unref === 'function') {
+      this.reclaimDeadlineTimer.unref();
+    }
+  }
+
+  _onReclaimTimeout() {
+    this.reclaimDeadlineTimer = null;
+    if (!this.awaitingJobReclaim) return;
+    this.awaitingJobReclaim = false;
+
+    this.logger.warn?.(
+      `[voice-worker] No jobReclaim received within ${this.reclaimTimeoutMs}ms after authenticated; releasing held job(s)`,
+    );
+    this.pendingHeldOutcomes.clear();
+
+    const activeHeld = this.executor.getHeldJobs() || [];
+    for (const entry of activeHeld) {
+      const jobID = typeof entry === 'string' ? entry : entry?.jobID;
+      if (!jobID) continue;
+      this.silentlyReleasedReasons.set(jobID, 'reclaim timeout');
+      const aborted = this.executor.abort(jobID, { silentRelease: true });
+      if (!aborted) {
+        this.silentlyReleasedReasons.delete(jobID);
+      }
+    }
+
+    if (this._isClientConnected() && !this._hasHeldOrActiveWork()) {
+      this.sendReadyToAcceptJobs(true, 'reclaim timeout');
+    }
   }
 
   start() {
     // CRITICAL: NEVER send workerInfo or readyToAcceptJobs on 'open'!
     // Wait strictly for the broker's 'authenticated' frame.
     this.client.on('open', () => {
+      this.socketOpen = true;
       this.advertisedReady = false;
       this.startReadinessRefreshLoop();
     });
     this.client.on('frame', (type, data) => this.handleFrame(type, data));
     this.client.on('close', () => {
+      this.socketOpen = false;
       this.advertisedReady = false;
+      this.awaitingJobReclaim = false;
+      this._clearReclaimDeadline();
       this.stopReadinessRefreshLoop();
     });
     return this.client.start();
@@ -113,14 +206,14 @@ export class VoiceWorkerSupervisor {
       if (
         this.readinessHolds.size === 0
         && !this.executor.draining
-        && this.executor.activeRequests < this.executor.maxConcurrentJobs
+        && !this._hasHeldOrActiveWork()
       ) {
         this.sendReadyToAcceptJobs(true, releaseReason);
       }
     };
   }
 
-  sendWorkerInfo() {
+  sendWorkerInfo(heldJobs = this.getCombinedHeldJobs()) {
     const workerInfo = buildWorkerInfo({
       workerModels: this.workerModels,
       loadedModelID: this.executor.loadedModelID,
@@ -128,7 +221,7 @@ export class VoiceWorkerSupervisor {
       hardwareInfo: this.hardwareInfo,
       image: this.image,
       readinessSessionId: this.readinessSessionId,
-      heldJobs: this.executor.getHeldJobs(),
+      heldJobs,
     });
     this.client.send('workerInfo', workerInfo);
     this.logger.log(
@@ -140,12 +233,14 @@ export class VoiceWorkerSupervisor {
     const holdReason = this.readinessHolds.size > 0
       ? [...this.readinessHolds.values()].join(', ')
       : null;
-    const atCapacity = this.executor.activeRequests >= this.executor.maxConcurrentJobs;
+    const busyWithActiveJob = this.executor.activeRequests >= this.executor.maxConcurrentJobs;
+    const holdingOutcomes = this.pendingHeldOutcomes.size > 0 || this.awaitingJobReclaim;
     const effectiveReady = Boolean(
       ready
       && !this.executor.draining
       && this.readinessHolds.size === 0
-      && !atCapacity,
+      && !busyWithActiveJob
+      && !holdingOutcomes,
     );
 
     if (!effectiveReady && evidence.postDisconnectCleanupComplete === true) {
@@ -167,7 +262,9 @@ export class VoiceWorkerSupervisor {
         ? (reason || '')
         : (holdReason
           || (this.executor.draining ? 'draining' : '')
-          || (atCapacity ? 'job in progress' : '')
+          || (this.awaitingJobReclaim ? (reason || 'awaiting jobReclaim') : '')
+          || (busyWithActiveJob ? 'job in progress' : '')
+          || (holdingOutcomes ? (reason || 'awaiting jobReclaim') : '')
           || reason
           || 'worker readiness held'),
       ...(includeCleanupEvidence
@@ -183,8 +280,16 @@ export class VoiceWorkerSupervisor {
     switch (type) {
       case 'authenticated': {
         this.logger.log('[voice-worker] Authenticated with Sogni socket');
-        this.sendWorkerInfo();
-        if (this.executor.activeRequests >= this.executor.maxConcurrentJobs) {
+        this._clearReclaimDeadline();
+        const heldJobs = this.getCombinedHeldJobs();
+        this.awaitingJobReclaim = heldJobs.length > 0;
+        this.sendWorkerInfo(heldJobs);
+        if (heldJobs.length > 0) {
+          this.sendReadyToAcceptJobs(false, 'awaiting jobReclaim', {
+            postDisconnectCleanupComplete: true,
+          });
+          this._startReclaimDeadline();
+        } else if (this.executor.activeRequests >= this.executor.maxConcurrentJobs) {
           this.sendReadyToAcceptJobs(false, 'job in progress', {
             postDisconnectCleanupComplete: true,
           });
@@ -210,12 +315,7 @@ export class VoiceWorkerSupervisor {
         break;
       }
       case 'jobReclaim': {
-        const released = Array.isArray(data?.released) ? data.released : [];
-        for (const jobID of released) {
-          if (typeof jobID === 'string') {
-            this.executor.abort(jobID);
-          }
-        }
+        this.handleJobReclaim(data);
         break;
       }
       case 'modelDownloadSuggest':
@@ -236,9 +336,64 @@ export class VoiceWorkerSupervisor {
     );
   }
 
+  handleJobReclaim(data) {
+    const wasAwaitingReclaim = this.awaitingJobReclaim;
+    this._clearReclaimDeadline();
+    this.awaitingJobReclaim = false;
+
+    const reclaimed = Array.isArray(data?.reclaimed) ? data.reclaimed : [];
+    const released = Array.isArray(data?.released) ? data.released : [];
+
+    let discardedAny = false;
+    for (const jobID of released) {
+      if (typeof jobID !== 'string' || !jobID) continue;
+      if (this.pendingHeldOutcomes.delete(jobID)) {
+        discardedAny = true;
+      }
+      this.silentlyReleasedReasons.set(jobID, 'held job released');
+      const aborted = this.executor.abort(jobID, { silentRelease: true });
+      if (!aborted) {
+        this.silentlyReleasedReasons.delete(jobID);
+      } else {
+        discardedAny = true;
+      }
+    }
+
+    let flushedAny = false;
+    let lastFlushedReason = '';
+    for (const jobID of reclaimed) {
+      if (typeof jobID !== 'string' || !jobID) continue;
+      const outcome = this.pendingHeldOutcomes.get(jobID);
+      if (!outcome) continue;
+      this.pendingHeldOutcomes.delete(jobID);
+
+      if (outcome.kind === 'completed') {
+        this._emitCompletionFrames(outcome.job, outcome.result, outcome.startedAt);
+        flushedAny = true;
+        lastFlushedReason = `job ${outcome.jobID} completed`;
+      } else {
+        this._emitFailureFrames(outcome.job, outcome.error, outcome.timings);
+        flushedAny = true;
+        lastFlushedReason = `job ${outcome.jobID} failed`;
+      }
+    }
+
+    if (
+      this._isClientConnected()
+      && !this._hasHeldOrActiveWork()
+      && (flushedAny || discardedAny || wasAwaitingReclaim)
+    ) {
+      this.sendReadyToAcceptJobs(
+        true,
+        flushedAny ? lastFlushedReason : 'held job released',
+      );
+    }
+  }
+
   handleCancel(data) {
     const jobID = data?.jobID;
     if (!jobID || typeof jobID !== 'string') return;
+    this.pendingHeldOutcomes.delete(jobID);
     if (this.executor.abort(jobID)) {
       this.logger.log(`[voice-worker] Cancelled in-flight job ${jobID}`);
     }
@@ -280,6 +435,7 @@ export class VoiceWorkerSupervisor {
 
     const startedAt = Date.now();
     const etaTimer = setInterval(() => {
+      if (!this._isClientConnected() || this.awaitingJobReclaim) return;
       const elapsedSec = (Date.now() - startedAt) / 1000;
       const etaSeconds = estimateJobEtaSeconds(job, model, elapsedSec);
       this.client.send('jobETA', { jobID: job.jobID, etaSeconds });
@@ -290,28 +446,90 @@ export class VoiceWorkerSupervisor {
       const result = await this.executor.execute(job);
       clearInterval(etaTimer);
 
-      // Exact 3-frame completion sequence required by sogni-socket:
-      // 1. jobResult -> 2. jobState(jobCompleted) -> 3. readyToAcceptJobs(true)
-      this.client.send('jobResult', result);
-      this.client.send('jobState', {
-        type: 'jobCompleted',
-        jobID: job.jobID,
-        imgID: job.imageId,
-      });
-      this.sendReadyToAcceptJobs(true, `job ${job.jobID} completed`);
-
-      this.logger.log(
-        `[voice-worker] Completed ${job.workflowId} job ${job.jobID} in ${((Date.now() - startedAt) / 1000).toFixed(2)}s`,
-      );
-    } catch (error) {
-      clearInterval(etaTimer);
-      const timings = error?.timings || this.executor.getTimings(job.jobID);
-      if (error instanceof JobError && error.code === 'aborted') {
-        this._sendCancelSequence(job, timings);
+      const silentReleaseReason = this.silentlyReleasedReasons.get(job.jobID);
+      if (silentReleaseReason) {
+        this.silentlyReleasedReasons.delete(job.jobID);
+        if (this._isClientConnected() && !this._hasHeldOrActiveWork() && !this.advertisedReady) {
+          this.sendReadyToAcceptJobs(true, silentReleaseReason);
+        }
         return;
       }
+
+      if (!this._isClientConnected() || this.awaitingJobReclaim) {
+        this.pendingHeldOutcomes.set(job.jobID, {
+          jobID: job.jobID,
+          imgID: job.imageId,
+          kind: 'completed',
+          job,
+          result,
+          startedAt,
+          heldAt: Date.now(),
+        });
+        this.logger.log(
+          `[voice-worker] Held completed ${job.workflowId} job ${job.jobID} awaiting jobReclaim`,
+        );
+        return;
+      }
+
+      this._emitCompletionFrames(job, result, startedAt);
+      this.sendReadyToAcceptJobs(true, `job ${job.jobID} completed`);
+    } catch (error) {
+      clearInterval(etaTimer);
+      const silentReleaseReason = this.silentlyReleasedReasons.get(job.jobID);
+      const wasSilentlyReleased = Boolean(
+        silentReleaseReason
+        || error?.silentRelease
+        || (error instanceof JobError && error.code === 'released'),
+      );
+      if (wasSilentlyReleased) {
+        this.silentlyReleasedReasons.delete(job.jobID);
+        if (this._isClientConnected() && !this._hasHeldOrActiveWork() && !this.advertisedReady) {
+          this.sendReadyToAcceptJobs(true, silentReleaseReason || 'held job released');
+        }
+        return;
+      }
+
+      const timings = error?.timings || this.executor.getTimings(job.jobID);
+      if (error instanceof JobError && error.code === 'aborted') {
+        if (this._isClientConnected() && !this.awaitingJobReclaim) {
+          this._sendCancelSequence(job, timings);
+        }
+        return;
+      }
+
+      if (!this._isClientConnected() || this.awaitingJobReclaim) {
+        this.pendingHeldOutcomes.set(job.jobID, {
+          jobID: job.jobID,
+          imgID: job.imageId,
+          kind: 'failed',
+          job,
+          error,
+          timings,
+          startedAt,
+          heldAt: Date.now(),
+        });
+        this.logger.warn?.(
+          `[voice-worker] Held failed ${job.workflowId} job ${job.jobID} awaiting jobReclaim`,
+        );
+        return;
+      }
+
       this._sendFailureSequence(job, error, timings);
     }
+  }
+
+  _emitCompletionFrames(job, result, startedAt) {
+    // Exact completion frames required by sogni-socket before readyToAcceptJobs(true):
+    // 1. jobResult -> 2. jobState(jobCompleted)
+    this.client.send('jobResult', result);
+    this.client.send('jobState', {
+      type: 'jobCompleted',
+      jobID: job.jobID,
+      imgID: job.imageId,
+    });
+    this.logger.log(
+      `[voice-worker] Completed ${job.workflowId} job ${job.jobID} in ${((Date.now() - startedAt) / 1000).toFixed(2)}s`,
+    );
   }
 
   _sendCancelSequence(job, timings) {
@@ -334,7 +552,7 @@ export class VoiceWorkerSupervisor {
     this.sendReadyToAcceptJobs(true, `job ${job.jobID} cancelled`);
   }
 
-  _sendFailureSequence(job, error, timings) {
+  _emitFailureFrames(job, error, timings) {
     const rawCode = error instanceof JobError ? error.code : 'genfailure';
     const errorCode = ['invalidInput', 'imgUploadFailure', 'sensitiveContent'].includes(rawCode)
       ? rawCode
@@ -357,7 +575,6 @@ export class VoiceWorkerSupervisor {
       error_message: message,
       isFromWorker: true,
     });
-    this.sendReadyToAcceptJobs(true, `job ${job.jobID} failed`);
 
     this.logger.error(`[voice-worker] Job ${job.jobID} failed (${errorCode}): ${message}`);
     if (error?.cause) {
@@ -365,8 +582,15 @@ export class VoiceWorkerSupervisor {
     }
   }
 
+  _sendFailureSequence(job, error, timings) {
+    this._emitFailureFrames(job, error, timings);
+    this.sendReadyToAcceptJobs(true, `job ${job.jobID} failed`);
+  }
+
   async shutdown() {
     this.executor.startDrain();
+    this._clearReclaimDeadline();
+    this.awaitingJobReclaim = false;
     this.stopReadinessRefreshLoop();
     if (this.advertisedReady) {
       this.sendReadyToAcceptJobs(false, 'worker shutting down');

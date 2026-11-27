@@ -23,6 +23,18 @@ const SPEAKER_TAG_DETECT_RE = /<spk:\d+>/i;
 const SENTENCE_TERMINATOR_RE = /[.!?。！？…]["'”’)\]]*$/;
 const HTTP_UPLOAD_RECOMPRESS_THRESHOLD_BYTES = 24 * 1024 * 1024;
 export const HTTP_BACKEND_TIMEOUT_MS = 3_700_000;
+export const NEMOTRON_SPEAKER_PROMPT = (
+  'Transcribe this audio with punctuation and capitalization. '
+  + 'Include all spoken words and verbal fillers. '
+  + 'Write numbers in their standard written form. '
+  + 'Put speaker tags <spk:0> <spk:1> <spk:2> <spk:3> on the transcription.'
+);
+const NEMOTRON_PREFERRED_REF_LANGUAGES = new Set([
+  'arabic', 'ar',
+  'chinese', 'zh',
+  'japanese', 'ja',
+  'korean', 'ko',
+]);
 
 let sharedLongRunningDispatcherPromise = null;
 
@@ -236,7 +248,9 @@ export function buildCanonicalTranscript({
   const complete = rawResult?.complete !== undefined
     ? Boolean(rawResult.complete)
     : finishReason === 'stop';
-  const diarized = Boolean(diarize && segments.length > 0);
+  const diarized = Boolean(
+    diarize && (segments.some((s) => Boolean(s.speaker)) || words.some((w) => Boolean(w.speaker))),
+  );
 
   return {
     version: 1,
@@ -248,7 +262,7 @@ export function buildCanonicalTranscript({
     diarized,
     timestampGranularity: granularity,
     segments,
-    words,
+    ...(granularity === 'word' ? { words } : {}),
     complete,
     finishReason,
   };
@@ -359,9 +373,23 @@ export class LocalVoiceBackend {
     throw new Error(`Unsupported local STT engine: "${engine}"`);
   }
 
-  async transcribeReferenceAudio(wavPath, { signal } = {}) {
+  async transcribeReferenceAudio(wavPath, { language, signal } = {}) {
+    const normalizedLanguage = String(language || '').trim().toLowerCase();
+    const preferNemotron = NEMOTRON_PREFERRED_REF_LANGUAGES.has(normalizedLanguage);
+    const parakeetReady = Boolean(this.cfg?.transcription?.enabled && this.transcriptionService);
+    const nemotronReady = Boolean(this.cfg?.nemotron?.enabled && this.nemotronService);
+
     let rawResult;
-    if (this.cfg?.transcription?.enabled && this.transcriptionService) {
+    if (preferNemotron && nemotronReady) {
+      rawResult = await this.transcribe({
+        engine: 'nemotron',
+        audioPath: wavPath,
+        timestamps: false,
+        wordTimestamps: false,
+        diarize: false,
+        signal,
+      });
+    } else if (parakeetReady) {
       rawResult = await this.transcribe({
         engine: 'parakeet',
         audioPath: wavPath,
@@ -369,7 +397,7 @@ export class LocalVoiceBackend {
         wordTimestamps: false,
         signal,
       });
-    } else if (this.cfg?.nemotron?.enabled && this.nemotronService) {
+    } else if (nemotronReady) {
       rawResult = await this.transcribe({
         engine: 'nemotron',
         audioPath: wavPath,
@@ -397,6 +425,7 @@ export class LocalVoiceBackend {
     text,
     referenceWavPath = null,
     referenceText = '',
+    language = undefined,
     outputFormat = 'mp3',
     tempDir,
     signal = undefined,
@@ -408,7 +437,11 @@ export class LocalVoiceBackend {
       if (referenceWavPath) {
         let resolvedText = String(referenceText || '').trim();
         if (!resolvedText) {
-          resolvedText = await this.transcribeReferenceAudio(referenceWavPath, { signal });
+          resolvedText = await this.transcribeReferenceAudio(referenceWavPath, {
+            tempDir,
+            language,
+            signal,
+          });
         }
         // Drama 3 uses engine-configured generation defaults.
         synthesisResult = await this.drama3Service.generateWithReference(text, {
@@ -485,6 +518,7 @@ export class HttpVoiceBackend {
       nemotronSupportsTimestamps: config.nemotron?.backend !== 'mlx',
       drama3Enabled: false,
     };
+    this._supportsGenerateWithReference = null;
   }
 
   async _fetch(url, init = {}) {
@@ -546,6 +580,10 @@ export class HttpVoiceBackend {
       this.capabilities.drama3Enabled = false;
     }
 
+    if (this.capabilities.drama3Enabled) {
+      await this._verifyDrama3CloneAuth();
+    }
+
     if (this.capabilities.drama3Enabled && Number(this.getActiveRequests?.() ?? 0) === 0) {
       await this.sweepStaleEphemeralClones();
     }
@@ -563,6 +601,66 @@ export class HttpVoiceBackend {
     }
 
     return filterModelsByAllowlist(discovered.filter(Boolean), this.allowlist);
+  }
+
+  async _verifyDrama3CloneAuth() {
+    let authRes = null;
+    try {
+      authRes = await this.fetchImpl(`${this.apiUrl}/auth/status`, {
+        method: 'GET',
+        redirect: 'error',
+        headers: this._authHeaders({ Accept: 'application/json' }),
+      });
+    } catch {
+      authRes = null;
+    }
+
+    if (authRes?.ok) {
+      const authStatus = await authRes.json().catch(() => ({}));
+      if (authStatus?.voiceCloning?.enabled === false) {
+        throw new Error(
+          `Drama 3 voice cloning is disabled on ${this.apiUrl} (voiceCloning.mode="${authStatus.voiceCloning.mode || 'blocked'}"); configure AUTH_API_KEY + SOGNI_VOICE_API_KEY or set DANGEROUSLY_ALLOW_VOICE_CLONING=1`,
+        );
+      }
+      if (authStatus?.voiceCloning?.mode === 'api_key' && !this.apiKey) {
+        throw new Error(
+          `Drama 3 voice cloning on ${this.apiUrl} requires an API key (voiceCloning.mode="api_key"), but SOGNI_VOICE_API_KEY / AUTH_API_KEY is not configured`,
+        );
+      }
+    }
+
+    // Read-only authorization preflight against POST /drama3-tts/generate-with-reference:
+    // Hapi runs `checkCloneAuthorized` in `pre` before handler code, and without an uploaded
+    // file the handler returns 400 before creating any temp directory or calling any daemon.
+    let probeRes = null;
+    try {
+      const probeForm = new FormData();
+      probeForm.append('text', 'probe');
+      probeRes = await this.fetchImpl(`${this.apiUrl}/drama3-tts/generate-with-reference`, {
+        method: 'POST',
+        redirect: 'error',
+        headers: this._authHeaders(),
+        body: probeForm,
+      });
+    } catch {
+      probeRes = null;
+    }
+
+    if (!probeRes) return;
+    if (probeRes.status === 401 || probeRes.status === 403) {
+      const msg = await this._parseErrorMessage(probeRes, `HTTP ${probeRes.status}`);
+      throw new Error(
+        `Drama 3 voice cloning authentication failed on ${this.apiUrl} (${probeRes.status}): ${msg}`,
+      );
+    }
+    if (probeRes.status === 404 || probeRes.status === 405) {
+      const msg = await this._parseErrorMessage(probeRes, 'Not Found');
+      if (!(probeRes.status === 404 && /not enabled/i.test(msg))) {
+        this._supportsGenerateWithReference = false;
+      }
+    } else if (probeRes.status === 400 || probeRes.ok) {
+      this._supportsGenerateWithReference = true;
+    }
   }
 
   async sweepStaleEphemeralClones() {
@@ -692,8 +790,23 @@ export class HttpVoiceBackend {
     if (engine === 'nemotron') {
       // Explicitly pass 'true' or 'false': omitting `diarize` on `/transcribe` defaults to true!
       form.append('diarize', diarize ? 'true' : 'false');
+      const maxNewTokens = Math.min(
+        16384,
+        Math.max(256, Math.ceil((Number(durationSeconds) || 60) * 16 + 256)),
+      );
+      form.append('maxNewTokens', String(maxNewTokens));
       if (hotwords) form.append('hotwords', hotwords);
-      if (prompt) form.append('prompt', prompt);
+      if (prompt) {
+        const trimmedPrompt = String(prompt).trim();
+        if (trimmedPrompt) {
+          const effectivePrompt = diarize
+            && !trimmedPrompt.includes(NEMOTRON_SPEAKER_PROMPT)
+            && !SPEAKER_TAG_DETECT_RE.test(trimmedPrompt)
+            ? `${NEMOTRON_SPEAKER_PROMPT} ${trimmedPrompt}`.slice(0, 2000)
+            : trimmedPrompt.slice(0, 2000);
+          form.append('prompt', effectivePrompt);
+        }
+      }
     } else {
       form.append('diarize', 'false');
     }
@@ -733,12 +846,19 @@ export class HttpVoiceBackend {
     };
   }
 
-  async transcribeReferenceAudio(wavPath, { tempDir, signal } = {}) {
-    const engine = this.capabilities.parakeetEnabled
-      ? 'parakeet'
-      : this.capabilities.nemotronEnabled
-        ? 'nemotron'
-        : 'parakeet';
+  async transcribeReferenceAudio(wavPath, { tempDir, language, signal } = {}) {
+    const normalizedLanguage = String(language || '').trim().toLowerCase();
+    const preferNemotron = NEMOTRON_PREFERRED_REF_LANGUAGES.has(normalizedLanguage);
+    let engine;
+    if (preferNemotron && this.capabilities.nemotronEnabled) {
+      engine = 'nemotron';
+    } else if (this.capabilities.parakeetEnabled) {
+      engine = 'parakeet';
+    } else if (this.capabilities.nemotronEnabled) {
+      engine = 'nemotron';
+    } else {
+      engine = 'parakeet';
+    }
 
     const result = await this.transcribe({
       engine,
@@ -776,11 +896,14 @@ export class HttpVoiceBackend {
 
   async _generateViaEphemeralCloneFallback({ text, refWavBuffer, referenceText, signal }) {
     const cloneId = `__ephemeral_${randomUUID().replaceAll('-', '')}`;
+    const safeTranscript = (
+      referenceText.startsWith('-') ? ` ${referenceText}` : referenceText
+    ).slice(0, 2000);
     let created = false;
     try {
       const createForm = new FormData();
       createForm.append('audio', new Blob([refWavBuffer], { type: 'audio/wav' }), 'reference.wav');
-      createForm.append('transcript', referenceText);
+      createForm.append('transcript', safeTranscript);
       createForm.append('cloneId', cloneId);
 
       const createRes = await this._fetch(`${this.apiUrl}/drama3-tts/voices/clone`, {
@@ -849,6 +972,7 @@ export class HttpVoiceBackend {
     text,
     referenceWavPath = null,
     referenceText = '',
+    language = undefined,
     outputFormat = 'mp3',
     tempDir,
     signal = undefined,
@@ -878,35 +1002,13 @@ export class HttpVoiceBackend {
       if (!resolvedReferenceText) {
         resolvedReferenceText = await this.transcribeReferenceAudio(referenceWavPath, {
           tempDir,
+          language,
           signal,
         });
       }
 
       const refWavBuffer = await readFile(referenceWavPath);
-      const form = new FormData();
-      form.append('file', new Blob([refWavBuffer], { type: 'audio/wav' }), 'reference.wav');
-      form.append('text', text);
-      form.append('referenceText', resolvedReferenceText);
-      form.append('format', 'wav');
-
-      const response = await this._fetch(`${this.apiUrl}/drama3-tts/generate-with-reference`, {
-        method: 'POST',
-        redirect: 'error',
-        headers: this._authHeaders(),
-        body: form,
-        signal,
-      });
-
-      if (response.ok) {
-        wavBytes = Buffer.from(await response.arrayBuffer());
-        finishReason = response.headers?.get?.('x-finish-reason') || 'stop';
-      } else if (response.status === 404) {
-        const msg = await this._parseErrorMessage(response, 'Not Found');
-        if (/not enabled/i.test(msg)) {
-          throw new Error(`Drama 3 TTS is not enabled on ${this.apiUrl}: ${msg}`);
-        }
-        // Target server predates /drama3-tts/generate-with-reference: use zero-downtime
-        // ephemeral clone fallback and delete in `finally`.
+      if (this._supportsGenerateWithReference === false) {
         const fallback = await this._generateViaEphemeralCloneFallback({
           text,
           refWavBuffer,
@@ -916,9 +1018,45 @@ export class HttpVoiceBackend {
         wavBytes = fallback.wavBytes;
         finishReason = fallback.finishReason;
       } else {
-        const msg = await this._parseErrorMessage(response, `HTTP ${response.status}`);
-        if (response.status === 400 || response.status === 415) throw tagInvalidInput(msg);
-        throw new Error(`HTTP /drama3-tts/generate-with-reference failed (${response.status}): ${msg}`);
+        const form = new FormData();
+        form.append('file', new Blob([refWavBuffer], { type: 'audio/wav' }), 'reference.wav');
+        form.append('text', text);
+        form.append('referenceText', resolvedReferenceText);
+        form.append('format', 'wav');
+
+        const response = await this._fetch(`${this.apiUrl}/drama3-tts/generate-with-reference`, {
+          method: 'POST',
+          redirect: 'error',
+          headers: this._authHeaders(),
+          body: form,
+          signal,
+        });
+
+        if (response.ok) {
+          this._supportsGenerateWithReference = true;
+          wavBytes = Buffer.from(await response.arrayBuffer());
+          finishReason = response.headers?.get?.('x-finish-reason') || 'stop';
+        } else if (response.status === 404 || response.status === 405) {
+          const msg = await this._parseErrorMessage(response, 'Not Found');
+          if (response.status === 404 && /not enabled/i.test(msg)) {
+            throw new Error(`Drama 3 TTS is not enabled on ${this.apiUrl}: ${msg}`);
+          }
+          // Target server predates /drama3-tts/generate-with-reference: cache false and use
+          // zero-downtime ephemeral clone fallback deleted in `finally`.
+          this._supportsGenerateWithReference = false;
+          const fallback = await this._generateViaEphemeralCloneFallback({
+            text,
+            refWavBuffer,
+            referenceText: resolvedReferenceText,
+            signal,
+          });
+          wavBytes = fallback.wavBytes;
+          finishReason = fallback.finishReason;
+        } else {
+          const msg = await this._parseErrorMessage(response, `HTTP ${response.status}`);
+          if (response.status === 400 || response.status === 415) throw tagInvalidInput(msg);
+          throw new Error(`HTTP /drama3-tts/generate-with-reference failed (${response.status}): ${msg}`);
+        }
       }
     }
 

@@ -17,7 +17,7 @@ const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 export const MIN_ARTIFACT_UPLOAD_BYTES_PER_SEC = 128 * 1024;
 export const MAX_ARTIFACT_UPLOAD_ATTEMPT_MS = 10 * 60_000;
 export const MAX_ARTIFACT_DOWNLOAD_BYTES = 256 * 1024 * 1024;
-export const MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES = 50 * 1024 * 1024;
+export const MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES = 100 * 1024 * 1024;
 export const MAX_DOWNLOAD_REDIRECTS = 3;
 
 // Allowed single-file demuxers matching ComfyUI/worker/src/assets/mediaContainer.ts.

@@ -384,20 +384,20 @@ describe('artifacts & media URL client', () => {
       );
     });
 
-    it('sets MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES to 50 MiB and marks oversized readResponseBufferBounded / referenceAudio downloads with invalidInput', async () => {
-      expect(MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES).toBe(50 * 1024 * 1024);
+    it('sets MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES to 100 MiB and marks oversized readResponseBufferBounded / referenceAudio downloads with invalidInput', async () => {
+      expect(MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES).toBe(100 * 1024 * 1024);
 
       await expect(
         readResponseBufferBounded(
           {
-            headers: new Headers({ 'content-length': String(50 * 1024 * 1024 + 1) }),
+            headers: new Headers({ 'content-length': String(100 * 1024 * 1024 + 1) }),
             body: webBody('tiny'),
           },
           MAX_REFERENCE_AUDIO_DOWNLOAD_BYTES,
         ),
       ).rejects.toMatchObject({
         invalidInput: true,
-        message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+        message: expect.stringMatching(/exceeds maximum allowed 104857600 bytes/),
       });
 
       await expect(
@@ -425,13 +425,13 @@ describe('artifacts & media URL client', () => {
       const oversizedRefFetch = vi.fn(async () => ({
         ok: true,
         status: 200,
-        headers: new Headers({ 'content-length': String(51 * 1024 * 1024) }),
+        headers: new Headers({ 'content-length': String(101 * 1024 * 1024) }),
         body: webBody(''),
       }));
       await expect(
         downloadReferenceAudio(
           {
-            jobID: 'job-over-50mb',
+            jobID: 'job-over-100mb',
             assets: [{
               type: 'audio',
               jobField: 'audio',
@@ -448,7 +448,7 @@ describe('artifacts & media URL client', () => {
         ),
       ).rejects.toMatchObject({
         invalidInput: true,
-        message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+        message: expect.stringMatching(/exceeds maximum allowed 104857600 bytes/),
       });
       expect(oversizedRefFetch).toHaveBeenCalledTimes(1);
     });

@@ -1,0 +1,39 @@
+# Zero-downtime Sogni Supernet Worker sidecar for Linux + NVIDIA (e.g. worker-host-1 / worker-host-2).
+# Runs outbound WebSocket jobs against the already-running sogni-voice API (:3000)
+# WITHOUT restarting drama3, fish-s2, nemotron, or api containers!
+#
+# Running 2+ DGX Spark hosts on the Supernet (e.g. worker-host-1 and worker-host-2):
+#   - Give each host its own Fast-network NFT token ID (`SOGNI_NFT_TOKEN_ID`) and its own
+#     persistent `.sogni-worker-id` (`worker-state` volume or host `DATA_DIR` bind mount)
+#     so worker sessions never evict each other on sogni-socket.
+#   - Zero-shot voice cloning is 100% stateless across workers via S3/R2 signed URLs.
+#
+# Usage from the repo root:
+#   docker compose -f docker/nvidia/compose.worker.yaml up -d worker
+# (or combined with the stack overlays:
+#   docker compose -f docker/nvidia/compose.yaml -f docker/nvidia/compose.tensorfold.yaml \
+#     -f docker/nvidia/compose.nemotron.yaml -f docker/nvidia/compose.worker.yaml up -d --no-deps worker)
+name: sogni-voice
+
+services:
+  worker:
+    image: ${SOGNI_VOICE_WORKER_IMAGE:-sogni-voice-tensorfold:latest}
+    pull_policy: never
+    network_mode: host
+    restart: unless-stopped
+    stop_grace_period: 130s
+    env_file: ${SOGNI_WORKER_ENV_FILE:-../../.env}
+    environment:
+      SOGNI_NETWORK_WORKER: "true"
+      SOGNI_WORKER_ID_FILE: /app/worker-state/.sogni-worker-id
+    command:
+      - node
+      - scripts/sogni-voice-worker.mjs
+    volumes:
+      - ../../src:/app/src:ro
+      - ../../scripts:/app/scripts:ro
+      - ../../package.json:/app/package.json:ro
+      - ${DATA_DIR:-worker-state}:/app/worker-state
+
+volumes:
+  worker-state:

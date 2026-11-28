@@ -1,13 +1,9 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { EventEmitter } from 'node:events';
-import { SpeechWorkerSupervisor } from '../../../src/network/supervisor.js';
-import { JobError } from '../../../src/network/executor.js';
+import { VoiceWorkerSupervisor } from '../../../src/network/supervisor.js';
+import { JobError, ensureCompleteTimings } from '../../../src/network/executor.js';
+import { VOICE_SUPERNET_MODELS } from '../../../src/network/capabilities.js';
 import { waitFor } from '../../utils/mockSogniSocket.js';
-
-const MODELS = [
-  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
-];
 
 const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
 
@@ -15,7 +11,7 @@ class FakeClient extends EventEmitter {
   constructor() {
     super();
     this.sent = [];
-    this.connect = vi.fn();
+    this.start = vi.fn(async () => {});
     this.close = vi.fn();
   }
 
@@ -29,258 +25,439 @@ class FakeClient extends EventEmitter {
   }
 }
 
-const sttJob = (jobID = 'job-1') => ({
+const drama3Job = (jobID = 'job-1') => ({
   jobID,
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'stt',
-  modelID: 'parakeet-tdt-0.6b-v3',
-  params: {},
-  input: { url: 'https://s3.test/in/clip.wav' },
-  output: null,
-  timeoutMs: 60000,
+  imageId: 'img-1',
+  workflowId: 'fish_drama_3_nvfp4',
+  outputFormat: 'mp3',
+  clientParams: { seed: 42, tags: '[warmly] Welcome to Sogni Voice.' },
+  assets: [],
 });
 
-describe('SpeechWorkerSupervisor', () => {
+describe('VoiceWorkerSupervisor', () => {
   let client;
   let executor;
   let supervisor;
+  const sessionId = '11111111-2222-4333-8444-555555555555';
 
   beforeEach(() => {
     client = new FakeClient();
     executor = {
       activeRequests: 0,
-      accept: vi.fn(),
+      maxConcurrentJobs: 1,
+      draining: false,
+      loadedModelID: null,
+      getHeldJobs: vi.fn(() => []),
+      getTimings: vi.fn(() => ensureCompleteTimings()),
+      accept: vi.fn((job) => ({
+        model: VOICE_SUPERNET_MODELS.find((m) => m.id === job.workflowId),
+      })),
       execute: vi.fn(async (job) => ({
         jobID: job.jobID,
-        transcript: 'hi',
-        transcriptDetails: { text: 'hi', rawOutput: '' },
-        meta: { audioSeconds: 1.2, durationMs: 900 },
+        imgID: job.imageId,
+        performedStepCount: 1,
+        lastSeed: 42,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        timings: ensureCompleteTimings({ inference: 1.25, assetUpload: 0.1 }),
+        sha256: 'a'.repeat(64),
       })),
       abort: vi.fn(() => true),
-      startDrain: vi.fn(),
+      startDrain: vi.fn(function () { this.draining = true; }),
     };
-    supervisor = new SpeechWorkerSupervisor({
+
+    supervisor = new VoiceWorkerSupervisor({
       client,
       executor,
-      speechModels: MODELS,
-      maxConcurrentJobs: 2,
-      capacityIntervalMs: 20,
+      workerModels: VOICE_SUPERNET_MODELS,
+      hardwareRating: 70,
+      hardwareInfo: {
+        cpuBrand: 'ARM Cortex-X925',
+        gpuBrand: 'NVIDIA GB10',
+        vram: 120,
+        ram: 120,
+      },
+      image: 'comfy/1.0.260',
+      readinessSessionId: sessionId,
+      etaIntervalMs: 15,
+      readinessRefreshIntervalMs: 25,
       drainTimeoutMs: 2000,
       logger: silentLogger,
     });
   });
 
-  it('connects and registers workerInfo on open', () => {
-    supervisor.start();
-    expect(client.connect).toHaveBeenCalled();
-
+  it('NEVER sends workerInfo or readyToAcceptJobs on open — ONLY on authenticated, with loadedModelID initialized to workerModels[0]', async () => {
+    expect(executor.loadedModelID).toBe('fish_drama_3_nvfp4');
+    await supervisor.start();
     client.emit('open');
-    expect(client.sent[0]).toEqual({
-      type: 'workerInfo',
-      data: {
-        speechModels: [
-          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-          { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-        ],
-        loadedModelIDs: [],
-        maxConcurrentJobs: 2,
-      },
-    });
-    supervisor.stopCapacityLoop();
-  });
+    expect(client.sent).toEqual([]);
 
-  it('re-registers when the broker sends authenticated', () => {
-    supervisor.start();
     client.emit('frame', 'authenticated', { ok: true });
-    expect(client.sentTypes()).toEqual(['workerInfo']);
-  });
-
-  // A broker that streams an unrecognized type would otherwise write a log line
-  // per frame for as long as it keeps sending them.
-  it('logs an unknown frame type once, however many arrive', () => {
-    const logger = { log: vi.fn(), warn: vi.fn(), error: vi.fn() };
-    const quiet = new SpeechWorkerSupervisor({
-      client,
-      executor,
-      speechModels: MODELS,
-      maxConcurrentJobs: 2,
-      logger,
+    expect(client.sentTypes()).toEqual(['workerInfo', 'readyToAcceptJobs']);
+    expect(client.sent[0].data).toMatchObject({
+      loadedModelID: 'fish_drama_3_nvfp4',
+      workerModels: [
+        'fish_drama_3_nvfp4',
+        'parakeet_tdt_0.6b_v3_bf16',
+        'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+      ],
+      hardwareRating: 70,
+      hardwareInfo: expect.objectContaining({
+        gpuBrand: 'NVIDIA GB10',
+        vram: 120,
+        ram: 120,
+      }),
+      inputPreparationProtocol: 1,
+      postDisconnectCleanupReadinessProtocol: 1,
+      readinessSessionId: sessionId,
+      jobHoldProtocol: 1,
+      heldJobs: [],
     });
-    quiet.start();
-
-    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
-    client.emit('frame', 'speechModelDownload', { modelID: 'x' });
-    client.emit('frame', 'speechModelDownload', { modelID: 'y' });
-
-    const ignored = logger.log.mock.calls
-      .filter(([line]) => line.includes('Ignoring frame type speechModelDownload'));
-    expect(ignored).toHaveLength(1);
-
-    // A different unknown type still gets its own line.
-    client.emit('frame', 'someOtherFrame', {});
-    expect(logger.log.mock.calls
-      .filter(([line]) => line.includes('Ignoring frame type someOtherFrame'))).toHaveLength(1);
+    expect(client.sent[1].data).toEqual({
+      ready: true,
+      reason: 'authenticated',
+      postDisconnectCleanupComplete: true,
+      readinessSessionId: sessionId,
+    });
+    supervisor.stopReadinessRefreshLoop();
   });
 
-  it('emits capacity updates on the configured interval', async () => {
-    supervisor.start();
+  it('refreshes readyToAcceptJobs(false) on cadence while a readiness hold is active and carries cleanup evidence on release', async () => {
+    await supervisor.start();
     client.emit('open');
-    executor.activeRequests = 1;
 
-    await new Promise((resolve) => setTimeout(resolve, 70));
-    supervisor.stopCapacityLoop();
+    const release = supervisor.holdReadiness('paused for maintenance');
+    client.emit('frame', 'authenticated', { ok: true });
 
-    const capacity = client.sent.filter((frame) => frame.type === 'speechCapacityUpdate');
-    expect(capacity.length).toBeGreaterThanOrEqual(2);
-    expect(capacity[0].data).toEqual({ activeRequests: 1 });
+    expect(client.sent.filter((f) => f.type === 'readyToAcceptJobs').pop().data).toEqual({
+      ready: false,
+      reason: 'paused for maintenance',
+    });
+
+    const beforeRefreshCount = client.sent.filter((f) => f.type === 'readyToAcceptJobs').length;
+    await waitFor(() => client.sent.filter((f) => f.type === 'readyToAcceptJobs').length > beforeRefreshCount);
+
+    release('maintenance complete');
+    supervisor.stopReadinessRefreshLoop();
+
+    expect(client.sent.filter((f) => f.type === 'readyToAcceptJobs').pop().data).toEqual({
+      ready: true,
+      reason: 'maintenance complete',
+      postDisconnectCleanupComplete: true,
+      readinessSessionId: sessionId,
+    });
   });
 
-  it('runs a job and emits accepted, started, then jobResult', async () => {
-    supervisor.start();
-    await supervisor.handleJobRequest(sttJob());
+  it('emits jobStarted, 1s jobETA heartbeats, then jobResult -> jobCompleted -> readyToAcceptJobs(true)', async () => {
+    await supervisor.start();
+    let finishJob;
+    executor.execute.mockImplementationOnce((job) => new Promise((resolve) => {
+      finishJob = () => resolve({
+        jobID: job.jobID,
+        imgID: job.imageId,
+        performedStepCount: 1,
+        lastSeed: 42,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        timings: ensureCompleteTimings({ inference: 0.8 }),
+        sha256: 'b'.repeat(64),
+      });
+    }));
 
-    expect(client.sentTypes()).toEqual(['jobState', 'jobState', 'jobResult']);
-    expect(client.sent[0].data).toEqual({ jobID: 'job-1', type: 'accepted' });
-    expect(client.sent[1].data).toEqual({ jobID: 'job-1', type: 'started' });
+    const runPromise = supervisor.handleJobRequest(drama3Job('job-eta'));
+    await waitFor(() => client.sentTypes().includes('jobETA'));
+
+    expect(client.sent[0]).toEqual({
+      type: 'jobState',
+      data: { type: 'jobStarted', jobID: 'job-eta', imgID: 'img-1' },
+    });
+    const etaFrame = client.sent.find((f) => f.type === 'jobETA');
+    expect(etaFrame.data.jobID).toBe('job-eta');
+    expect(etaFrame.data.etaSeconds).toBeGreaterThanOrEqual(1);
+
+    finishJob();
+    await runPromise;
+
+    const tail = client.sent.filter((f) => f.type !== 'jobETA').slice(1);
+    expect(tail.map((f) => f.type)).toEqual(['jobResult', 'jobState', 'readyToAcceptJobs']);
+    expect(tail[0].data).toMatchObject({
+      jobID: 'job-eta',
+      imgID: 'img-1',
+      performedStepCount: 1,
+      lastSeed: 42,
+      userCanceled: false,
+      triggeredNSFWFilter: false,
+      sha256: 'b'.repeat(64),
+    });
+    expect(tail[1].data).toEqual({ type: 'jobCompleted', jobID: 'job-eta', imgID: 'img-1' });
+    expect(tail[2].data).toEqual({ ready: true, reason: 'job job-eta completed' });
+  });
+
+  it('mints a consistent uppercase UUID imgID when sogni-socket omits imageId on jobRequest', async () => {
+    await supervisor.start();
+    executor.execute.mockImplementationOnce(async (job) => ({
+      jobID: job.jobID,
+      imgID: job.imageId,
+      performedStepCount: 1,
+      lastSeed: 0,
+      userCanceled: false,
+      triggeredNSFWFilter: false,
+      timings: ensureCompleteTimings({ inference: 0.5 }),
+      sha256: 'c'.repeat(64),
+    }));
+
+    await supervisor.handleJobRequest({
+      jobID: 'proj-no-img-id',
+      workflowId: 'fish_drama_3_nvfp4',
+      clientParams: { positivePrompt: 'Hello world' },
+    });
+
+    const startedFrame = client.sent.find((f) => f.type === 'jobState' && f.data.type === 'jobStarted');
+    const resultFrame = client.sent.find((f) => f.type === 'jobResult');
+    const completedFrame = client.sent.find((f) => f.type === 'jobState' && f.data.type === 'jobCompleted');
+    expect(startedFrame.data.imgID).toMatch(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/);
+    expect(executor.accept.mock.calls[0][0].imageId).toBe(startedFrame.data.imgID);
+    expect(resultFrame.data.imgID).toBe(startedFrame.data.imgID);
+    expect(completedFrame.data.imgID).toBe(startedFrame.data.imgID);
+  });
+
+  it('sends empty jobResult + jobError(isFromWorker: true) + readyToAcceptJobs(true) on failure', async () => {
+    await supervisor.start();
+    executor.execute.mockRejectedValueOnce(new JobError('invalidInput', 'Reference audio must be at most 30 seconds long, got 45.0s'));
+
+    await supervisor.handleJobRequest(drama3Job('job-bad'));
+
+    expect(client.sentTypes()).toEqual(['jobState', 'jobResult', 'jobError', 'readyToAcceptJobs']);
+    expect(client.sent[1].data).toMatchObject({
+      jobID: 'job-bad',
+      imgID: 'img-1',
+      performedStepCount: 0,
+      userCanceled: false,
+    });
     expect(client.sent[2].data).toEqual({
-      jobID: 'job-1',
-      transcript: 'hi',
-      transcriptDetails: { text: 'hi', rawOutput: '' },
-      meta: { audioSeconds: 1.2, durationMs: 900 },
+      jobID: 'job-bad',
+      imgID: 'img-1',
+      error: 'invalidInput',
+      error_message: 'Reference audio must be at most 30 seconds long, got 45.0s',
+      isFromWorker: true,
     });
+    expect(client.sent[3].data).toEqual({ ready: true, reason: 'job job-bad failed' });
   });
 
-  it('emits jobError without jobState when the job is rejected at accept', async () => {
-    executor.accept.mockImplementationOnce(() => {
-      throw new JobError('capacity_exceeded', 'Worker is at capacity (2 concurrent jobs)');
+  it('sends userCanceled jobResult + artistCanceled jobError + readyToAcceptJobs(true) on cancellation with captured timings', async () => {
+    await supervisor.start();
+    const cancelErr = new JobError('aborted', 'Job cancelled');
+    cancelErr.timings = ensureCompleteTimings({ assetDownload: 0.42, inference: 1.15 });
+    executor.execute.mockRejectedValueOnce(cancelErr);
+
+    await supervisor.handleJobRequest(drama3Job('job-cancel'));
+
+    expect(client.sentTypes()).toEqual(['jobState', 'jobResult', 'jobError', 'readyToAcceptJobs']);
+    expect(client.sent[1].data).toMatchObject({
+      jobID: 'job-cancel',
+      userCanceled: true,
+      performedStepCount: 0,
+      timings: expect.objectContaining({ assetDownload: 0.42, inference: 1.15 }),
     });
-    supervisor.start();
-
-    await supervisor.handleJobRequest(sttJob('job-2'));
-
-    expect(client.sentTypes()).toEqual(['jobError']);
-    expect(client.sent[0].data).toEqual({
-      jobID: 'job-2',
-      code: 'capacity_exceeded',
-      message: 'Worker is at capacity (2 concurrent jobs)',
+    expect(client.sent[2].data).toEqual({
+      jobID: 'job-cancel',
+      imgID: 'img-1',
+      error: 'artistCanceled',
+      error_message: 'Job cancelled',
+      isFromWorker: true,
     });
-    expect(executor.execute).not.toHaveBeenCalled();
+    expect(client.sent[3].data).toEqual({ ready: true, reason: 'job job-cancel cancelled' });
   });
 
-  it('reports an execution failure as jobError', async () => {
-    executor.execute.mockRejectedValueOnce(new JobError('stt_failed', 'daemon died'));
-    supervisor.start();
+  it('never advertises readyToAcceptJobs(true) while activeRequests >= maxConcurrentJobs', async () => {
+    await supervisor.start();
+    executor.activeRequests = 1;
+    executor.maxConcurrentJobs = 1;
 
-    await supervisor.handleJobRequest(sttJob('job-3'));
-
-    expect(client.sent[2]).toEqual({
-      type: 'jobError',
-      data: { jobID: 'job-3', code: 'stt_failed', message: 'daemon died' },
+    supervisor.sendReadyToAcceptJobs(true, 'attempted ready while busy');
+    expect(client.sent.pop().data).toEqual({
+      ready: false,
+      reason: 'job in progress',
     });
-  });
 
-  it('labels an unexpected error internal_error', async () => {
-    executor.execute.mockRejectedValueOnce(new TypeError('undefined is not a function'));
-    supervisor.start();
-
-    await supervisor.handleJobRequest(sttJob('job-4'));
-
-    expect(client.sent[2].data.code).toBe('internal_error');
-  });
-
-  it('stays silent after an aborted job', async () => {
-    executor.execute.mockRejectedValueOnce(new JobError('aborted', 'Job job-5 was aborted'));
-    supervisor.start();
-
-    await supervisor.handleJobRequest(sttJob('job-5'));
-
-    expect(client.sentTypes()).toEqual(['jobState', 'jobState']);
-  });
-
-  it('treats an inbound jobError as an abort', () => {
-    supervisor.start();
-    client.emit('frame', 'jobError', { jobID: 'job-6', code: 'cancelled', message: 'user cancel' });
-    expect(executor.abort).toHaveBeenCalledWith('job-6');
-  });
-
-  it('also handles a defensive jobCancel', () => {
-    supervisor.start();
-    client.emit('frame', 'jobCancel', { jobID: 'job-7' });
-    expect(executor.abort).toHaveBeenCalledWith('job-7');
-  });
-
-  it('ignores unknown frame types', () => {
-    supervisor.start();
-    expect(() => client.emit('frame', 'supportedModels', { models: [] })).not.toThrow();
+    const release = supervisor.holdReadiness('temporary hold');
+    client.sent.length = 0;
+    release('hold lifted while job still running');
     expect(client.sent).toEqual([]);
   });
 
-  it('tolerates dataless broker frames', () => {
-    supervisor.start();
-    expect(() => client.emit('frame', 'jobCancel', null)).not.toThrow();
-    expect(executor.abort).not.toHaveBeenCalled();
+  it('aborts released jobs on jobReclaim and inbound jobCancel / jobError', async () => {
+    await supervisor.start();
+    client.emit('frame', 'jobCancel', { jobID: 'j-1' });
+    client.emit('frame', 'jobError', { jobID: 'j-2', error: 'artistCanceled' });
+    client.emit('frame', 'jobReclaim', { reclaimed: ['j-3'], released: ['j-4'] });
+
+    expect(executor.abort.mock.calls.map(([id]) => id)).toEqual(['j-1', 'j-2', 'j-4']);
+    expect(executor.abort.mock.calls[2]).toEqual(['j-4', { silentRelease: true }]);
   });
 
-  it('sends the last jobResult before closing the socket on shutdown', async () => {
-    supervisor.start();
+  it('buffers completed and failed outcomes while disconnected and flushes on jobReclaim.reclaimed', async () => {
+    await supervisor.start();
+    client.connected = true;
     client.emit('open');
 
-    let releaseJob;
-    executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseJob = () => resolve({
-        jobID: 'job-8',
-        transcript: 'late',
-        transcriptDetails: { text: 'late', rawOutput: '' },
-        meta: { audioSeconds: 1, durationMs: 5 },
+    let finishDisconnectedJob;
+    executor.execute.mockImplementationOnce((job) => new Promise((resolve) => {
+      finishDisconnectedJob = () => resolve({
+        jobID: job.jobID,
+        imgID: job.imageId,
+        performedStepCount: 1,
+        lastSeed: 42,
+        userCanceled: false,
+        triggeredNSFWFilter: false,
+        timings: ensureCompleteTimings({ inference: 1.1 }),
+        sha256: 'f'.repeat(64),
       });
     }));
 
-    client.emit('frame', 'jobRequest', sttJob('job-8'));
-    await waitFor(() => client.sentTypes().includes('jobState'));
+    const runPromise = supervisor.handleJobRequest(drama3Job('job-held-ok'));
+    expect(client.sentTypes()).toEqual(['jobState']);
 
-    const draining = supervisor.shutdown();
-    expect(executor.startDrain).toHaveBeenCalled();
-    expect(client.close).not.toHaveBeenCalled();
+    // Disconnect mid-flight, then complete while disconnected
+    client.connected = false;
+    client.emit('close');
+    client.sent.length = 0;
 
-    releaseJob();
-    await draining;
+    finishDisconnectedJob();
+    await runPromise;
 
-    const meaningful = client.sentTypes().filter((type) => type !== 'speechCapacityUpdate');
-    expect(meaningful).toEqual(['workerInfo', 'jobState', 'jobState', 'jobResult']);
-    expect(client.close).toHaveBeenCalled();
-    expect(supervisor.capacityTimer).toBeNull();
-    expect(supervisor.inFlight.size).toBe(0);
+    // Must NOT drop jobResult / jobCompleted onto a closed socket
+    expect(client.sent).toEqual([]);
+    expect(supervisor.pendingHeldOutcomes.has('job-held-ok')).toBe(true);
+
+    // Reconnect and authenticate: advertises heldJobs(phase='finished') and holds readiness
+    client.connected = true;
+    client.emit('open');
+    client.emit('frame', 'authenticated', { ok: true });
+
+    expect(client.sentTypes()).toEqual(['workerInfo', 'readyToAcceptJobs']);
+    expect(client.sent[0].data.heldJobs).toEqual([
+      expect.objectContaining({
+        jobID: 'job-held-ok',
+        imgID: 'img-1',
+        phase: 'finished',
+        step: 1,
+        stepCount: 1,
+      }),
+    ]);
+    expect(client.sent[1].data).toEqual({
+      ready: false,
+      reason: 'awaiting jobReclaim',
+    });
+
+    // Server reclaims the held job -> flushes jobResult + jobCompleted + readyToAcceptJobs(true)
+    client.sent.length = 0;
+    client.emit('frame', 'jobReclaim', { reclaimed: ['job-held-ok'], released: [] });
+
+    expect(client.sentTypes()).toEqual(['jobResult', 'jobState', 'readyToAcceptJobs']);
+    expect(client.sent[0].data).toMatchObject({
+      jobID: 'job-held-ok',
+      imgID: 'img-1',
+      performedStepCount: 1,
+      sha256: 'f'.repeat(64),
+    });
+    expect(client.sent[1].data).toEqual({
+      type: 'jobCompleted',
+      jobID: 'job-held-ok',
+      imgID: 'img-1',
+    });
+    expect(client.sent[2].data).toEqual({
+      ready: true,
+      reason: 'job job-held-ok completed',
+      postDisconnectCleanupComplete: true,
+      readinessSessionId: sessionId,
+    });
+    supervisor.stopReadinessRefreshLoop();
   });
 
-  it('emits jobProgress keepalives while a job is in flight and stops after the terminal frame', async () => {
-    supervisor.progressIntervalMs = 10;
-    supervisor.start();
-    let releaseJob;
-    executor.execute.mockImplementationOnce(() => new Promise((resolve) => {
-      releaseJob = () => resolve({
-        jobID: 'job-9',
-        transcript: 'slow',
-        transcriptDetails: { text: 'slow', rawOutput: '' },
-        meta: { audioSeconds: 1, durationMs: 5 },
+  it('silently drops buffered or in-flight held jobs on jobReclaim.released and on 5s reclaim timeout without emitting artistCanceled', async () => {
+    vi.useFakeTimers();
+    try {
+      await supervisor.start();
+      client.connected = true;
+      client.emit('open');
+
+      // 1) In-flight job released via jobReclaim.released must NOT send artistCanceled
+      let rejectAborted;
+      executor.activeRequests = 1;
+      executor.getHeldJobs.mockReturnValue([{
+        jobID: 'job-in-flight-rel',
+        imgID: 'img-1',
+        phase: 'running',
+        step: 0,
+        stepCount: 1,
+        heldForMs: 500,
+      }]);
+      executor.execute.mockImplementationOnce(() => new Promise((_resolve, reject) => {
+        rejectAborted = reject;
+      }));
+      executor.abort.mockImplementationOnce((_jobID, opts) => {
+        executor.activeRequests = 0;
+        executor.getHeldJobs.mockReturnValue([]);
+        const err = new JobError(opts?.silentRelease ? 'released' : 'aborted', 'Released');
+        if (opts?.silentRelease) err.silentRelease = true;
+        rejectAborted(err);
+        return true;
       });
-    }));
 
-    client.emit('frame', 'jobRequest', sttJob('job-9'));
-    await waitFor(() => client.sentTypes().includes('jobProgress'));
+      const inFlightPromise = supervisor.handleJobRequest(drama3Job('job-in-flight-rel'));
+      client.connected = false;
+      client.emit('close');
+      client.connected = true;
+      client.emit('open');
+      client.sent.length = 0;
 
-    const pulse = client.sent.find((frame) => frame.type === 'jobProgress');
-    expect(pulse.data.jobID).toBe('job-9');
-    expect(pulse.data.progress).toBeGreaterThanOrEqual(0);
-    expect(pulse.data.progress).toBeLessThanOrEqual(0.95);
+      client.emit('frame', 'authenticated', { ok: true });
+      expect(client.sent[1].data).toEqual({ ready: false, reason: 'awaiting jobReclaim' });
 
-    releaseJob();
-    await waitFor(() => client.sentTypes().includes('jobResult'));
-    const framesAtCompletion = client.sent.length;
-    await new Promise((resolve) => setTimeout(resolve, 40));
-    const framesAfterWait = client.sent
-      .slice(framesAtCompletion)
-      .filter((frame) => frame.type === 'jobProgress');
-    expect(framesAfterWait).toEqual([]); // timer cleared with the job
+      client.sent.length = 0;
+      client.emit('frame', 'jobReclaim', { reclaimed: [], released: ['job-in-flight-rel'] });
+      await inFlightPromise;
+
+      expect(client.sent.filter((f) => f.type === 'jobResult' || f.type === 'jobError')).toEqual([]);
+      expect(client.sent.filter((f) => f.type === 'readyToAcceptJobs').pop().data).toEqual({
+        ready: true,
+        reason: 'held job released',
+        postDisconnectCleanupComplete: true,
+        readinessSessionId: sessionId,
+      });
+
+      // 2) Buffered failure held across disconnect expires after 5,000ms without jobReclaim
+      executor.execute.mockRejectedValueOnce(new JobError('genfailure', 'Transient backend crash'));
+      client.connected = false;
+      client.emit('close');
+      await supervisor.handleJobRequest(drama3Job('job-timeout-drop'));
+      expect(supervisor.pendingHeldOutcomes.has('job-timeout-drop')).toBe(true);
+
+      client.connected = true;
+      client.emit('open');
+      client.sent.length = 0;
+      client.emit('frame', 'authenticated', { ok: true });
+      expect(client.sent[1].data).toEqual({ ready: false, reason: 'awaiting jobReclaim' });
+
+      client.sent.length = 0;
+      await vi.advanceTimersByTimeAsync(5_000);
+
+      expect(supervisor.pendingHeldOutcomes.size).toBe(0);
+      expect(client.sent).toEqual([
+        {
+          type: 'readyToAcceptJobs',
+          data: {
+            ready: true,
+            reason: 'reclaim timeout',
+            postDisconnectCleanupComplete: true,
+            readinessSessionId: sessionId,
+          },
+        },
+      ]);
+      supervisor.stopReadinessRefreshLoop();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

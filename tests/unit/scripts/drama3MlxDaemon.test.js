@@ -60,10 +60,20 @@ plain = daemon.generate("The author sentence.", "unused.wav")
 with tempfile.TemporaryDirectory() as directory:
     reference_path = Path(directory) / "reference.wav"
     reference_path.touch()
+    ephemeral_path = Path(directory) / "ephemeral.wav"
+    ephemeral_path.touch()
     daemon._reference_path = lambda clone_id: str(reference_path)
     daemon._read_transcript = lambda clone_id: "Exact original words."
     cloned = daemon.generate_with_clone("A cloned sentence.", "Marvin", "unused.wav")
-print(json.dumps({"plain": plain, "cloned": cloned, "calls": calls, "reference_calls": reference_calls}))
+    ephemeral = daemon.handle_request(json.dumps({
+        "id": "ref-1",
+        "type": "generate_with_reference",
+        "text": "Stateless reference line.",
+        "reference_audio_path": str(ephemeral_path),
+        "reference_text": "Stateless transcript.",
+        "output_path": "unused.wav",
+    }))
+print(json.dumps({"plain": plain, "cloned": cloned, "ephemeral": ephemeral, "calls": calls, "reference_calls": reference_calls}))
 `;
   const result = spawnSync(python, ['-c', script], {
     input: JSON.stringify({ expert_format: expertFormat, override }),
@@ -84,10 +94,15 @@ describe('Drama 3 MLX guidance selection', () => {
     const result = generateThroughDaemon(format, override);
     expect(result.plain.success).toBe(true);
     expect(result.cloned.success).toBe(true);
+    expect(result.ephemeral).toMatchObject({ id: 'ref-1', success: true });
     expect(result.calls).toEqual([
       { text: 'The author sentence.', cfg_gamma: expected, references: [] },
       { text: 'A cloned sentence.', cfg_gamma: expected, references: [{ original_reference: 'Exact original words.' }] },
+      { text: 'Stateless reference line.', cfg_gamma: expected, references: [{ original_reference: 'Stateless transcript.' }] },
     ]);
-    expect(result.reference_calls).toEqual([['mono original', 44100, 'Exact original words.']]);
+    expect(result.reference_calls).toEqual([
+      ['mono original', 44100, 'Exact original words.'],
+      ['mono original', 44100, 'Stateless transcript.'],
+    ]);
   });
 });

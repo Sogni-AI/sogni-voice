@@ -21,6 +21,7 @@ Protocol:
 - Input (stdin): one JSON object per line with a "type" field:
   {"id","type":"generate","text","output_path","max_tokens?","temperature?"}
   {"id","type":"generate_voice_clone","text","clone_id","output_path"}
+  {"id","type":"generate_with_reference","text","reference_audio_path","reference_text","output_path","max_tokens?","temperature?"}
   {"id","type":"create_voice_clone","audio_path","transcript","clone_id"}
   {"id","type":"delete_voice_clone","clone_id"}
   {"id","type":"rename_voice_clone","old_clone_id","new_clone_id"}
@@ -70,6 +71,7 @@ MLX_CACHE_LIMIT_BYTES = 2 * 1024**3
 MLX_MEMORY_REQUEST_TYPES = frozenset({
     "generate",
     "generate_voice_clone",
+    "generate_with_reference",
     "create_voice_clone",
 })
 
@@ -202,12 +204,39 @@ class FishTTSDaemon:
         self._mx = None
         self._np = None
         os.makedirs(VOICE_CLONES_DIR, exist_ok=True)
+        self._sweep_stale_ephemeral_clones()
 
     @staticmethod
     def _validate_clone_id(clone_id) -> bool:
-        if not clone_id or "/" in clone_id or "\\" in clone_id or ".." in clone_id:
-            return False
-        return True
+        return isinstance(clone_id, str) and bool(re.fullmatch(r"[A-Za-z0-9_-]{1,100}", clone_id))
+
+    def _sweep_stale_ephemeral_clones(self, max_age_seconds: float = 900.0) -> int:
+        """Remove orphaned __ephemeral_* clone directories older than max_age_seconds."""
+        if not os.path.isdir(VOICE_CLONES_DIR):
+            return 0
+        cutoff = time.time() - max_age_seconds
+        swept = 0
+        try:
+            entries = list(os.scandir(VOICE_CLONES_DIR))
+        except OSError:
+            return 0
+        for entry in entries:
+            if not entry.is_dir(follow_symlinks=False):
+                continue
+            if not entry.name.startswith("__ephemeral_") or not self._validate_clone_id(entry.name):
+                continue
+            try:
+                mtime = entry.stat(follow_symlinks=False).st_mtime
+                meta_path = os.path.join(entry.path, "metadata.json")
+                if os.path.exists(meta_path):
+                    mtime = max(mtime, os.path.getmtime(meta_path))
+                if mtime < cutoff:
+                    shutil.rmtree(entry.path, ignore_errors=True)
+                    swept += 1
+                    _log(f"Swept stale ephemeral clone '{entry.name}'")
+            except OSError:
+                continue
+        return swept
 
     def _configure_mlx_memory(self, mx) -> None:
         """Bound MLX's free-buffer cache without evicting model weights."""
@@ -533,6 +562,44 @@ class FishTTSDaemon:
             traceback.print_exc(file=sys.stderr)
             return {"success": False, "error": str(e)}
 
+    def generate_with_reference(
+        self, text, reference_audio_path, reference_text, output_path, max_tokens=None, temperature=None
+    ) -> dict:
+        if self.model is None:
+            return {"success": False, "error": "Model not loaded"}
+        if not reference_audio_path or not os.path.exists(reference_audio_path):
+            return {"success": False, "error": f"Reference audio not found: {reference_audio_path}"}
+        if not reference_text or not str(reference_text).strip():
+            return {"success": False, "error": "A transcript of the reference audio is required"}
+        try:
+            ref_audio = self._load_audio(reference_audio_path, self.sample_rate)
+            ref_text = str(reference_text).strip()
+            text_chunks = prepare_text_chunks(text)
+            if not text_chunks:
+                raise ValueError("Text is empty after normalization")
+            if len(text_chunks) > 1:
+                _log(f"Generating {len(text_chunks)} ephemeral reference-voice text chunks")
+            started = time.perf_counter()
+            rendered_chunks = [
+                self._synthesize_with_reference(
+                    chunk, ref_audio, ref_text, max_tokens, temperature
+                )
+                for chunk in text_chunks
+            ]
+            audio_np = self._join_audio_chunks(rendered_chunks)
+            duration = self._write_wav(audio_np, output_path)
+            elapsed = time.perf_counter() - started
+            return {
+                "success": True,
+                "output_path": output_path,
+                "duration": duration,
+                "rtf": elapsed / duration if duration > 0 else None,
+            }
+        except Exception as e:  # noqa: BLE001
+            _log(f"generate_with_reference error: {e}")
+            traceback.print_exc(file=sys.stderr)
+            return {"success": False, "error": str(e)}
+
     def create_voice_clone(self, audio_path, transcript, clone_id) -> dict:
         if self.model is None:
             return {"success": False, "error": "Model not loaded"}
@@ -599,6 +666,7 @@ class FishTTSDaemon:
             return {"success": False, "error": str(e)}
 
     def list_voices(self) -> dict:
+        self._sweep_stale_ephemeral_clones()
         clones = []
         if os.path.isdir(VOICE_CLONES_DIR):
             for name in sorted(os.listdir(VOICE_CLONES_DIR)):
@@ -666,6 +734,18 @@ class FishTTSDaemon:
             result = self.generate_with_clone(
                 request["text"], request["clone_id"], request["output_path"],
                 request.get("max_tokens"), request.get("temperature"),
+            )
+        elif request_type == "generate_with_reference":
+            missing = require("text", "output_path", "reference_audio_path")
+            if missing:
+                return {"id": request_id, "success": False, "error": missing}
+            result = self.generate_with_reference(
+                request["text"],
+                request["reference_audio_path"],
+                request.get("reference_text", ""),
+                request["output_path"],
+                request.get("max_tokens"),
+                request.get("temperature"),
             )
         elif request_type == "create_voice_clone":
             missing = require("audio_path", "clone_id")

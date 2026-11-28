@@ -1,219 +1,257 @@
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import http from 'node:http';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { createSyntheticTestWavBuffer } from '../../../src/utils/audioFormat.js';
+import { HttpVoiceBackend } from '../../../src/network/backends.js';
+import { VoiceSupernetExecutor } from '../../../src/network/executor.js';
 import { SogniSocketClient } from '../../../src/network/socketClient.js';
-import { SpeechExecutor } from '../../../src/network/executor.js';
-import { SpeechWorkerSupervisor } from '../../../src/network/supervisor.js';
+import { VoiceWorkerSupervisor } from '../../../src/network/supervisor.js';
 import { startMockSogniSocket, waitFor } from '../../utils/mockSogniSocket.js';
-
-const MODELS = [
-  { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
-];
 
 const silentLogger = { log: () => {}, warn: () => {}, error: () => {} };
 
-describe('speech worker end to end', () => {
-  let server;
+describe('Sogni Voice Supernet Worker end-to-end (WebSocket + HTTP sidecar + GET-with-body media API)', () => {
+  let wsServer;
+  let mediaAndVoiceServer;
+  let apiUrl;
+  let uploadedArtifacts;
+  let mediaRequests;
   let supervisor;
   let client;
-  let executor;
-  let transcriptionService;
-  let ttsService;
-  let artifacts;
+  let tempRoot;
 
   beforeEach(async () => {
-    server = await startMockSogniSocket();
+    tempRoot = await mkdtemp(`${tmpdir()}/sogni-e2e-`);
+    uploadedArtifacts = new Map();
+    mediaRequests = [];
+    wsServer = await startMockSogniSocket();
 
-    transcriptionService = {
-      transcribe: vi.fn(async () => ({
-        text: 'network transcript',
-        rawOutput: '',
-        timestamps: [{ start: 0, end: 3.5, text: 'network transcript' }],
-      })),
-    };
-    ttsService = {
-      generate: vi.fn(async (text, options) => ({ outputPath: options.outputPath, duration: 1 })),
-    };
-    artifacts = {
-      downloadToFile: vi.fn(async (url, destPath) => ({ path: destPath, bytes: 2048 })),
-      uploadFile: vi.fn(async () => ({ uploadedKey: 'speech/out/e2e.wav', bytes: 4096 })),
-    };
+    const sampleWav = createSyntheticTestWavBuffer({ durationSeconds: 2, sampleRate: 44100 });
 
-    executor = new SpeechExecutor({
-      speechModels: MODELS,
-      maxConcurrentJobs: 1,
-      transcriptionService,
-      ttsService,
-      tempFiles: {
-        createTempDir: vi.fn(async () => '/tmp/sogni-e2e'),
-        cleanup: vi.fn(async () => {}),
+    mediaAndVoiceServer = http.createServer((req, res) => {
+      const chunks = [];
+      req.on('data', (c) => chunks.push(c));
+      req.on('end', () => {
+        const rawBody = Buffer.concat(chunks);
+        const port = mediaAndVoiceServer.address().port;
+        const base = `http://127.0.0.1:${port}`;
+
+        if (req.url === '/v1/client/key' && req.method === 'POST') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+          return;
+        }
+        if (req.url === '/v1/media/downloadUrl' && req.method === 'GET') {
+          const parsed = JSON.parse(rawBody.toString('utf-8'));
+          mediaRequests.push({ endpoint: req.url, method: req.method, body: parsed });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: { downloadUrl: `${base}/r2/in/${parsed.id}.wav` } }));
+          return;
+        }
+        if (req.url?.startsWith('/r2/in/') && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'audio/wav', 'Content-Length': sampleWav.length });
+          res.end(sampleWav);
+          return;
+        }
+        if (req.url === '/v1/media/uploadUrl' && req.method === 'GET') {
+          const parsed = JSON.parse(rawBody.toString('utf-8'));
+          mediaRequests.push({ endpoint: req.url, method: req.method, body: parsed });
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ data: { uploadUrl: `${base}/r2/out/${parsed.id}` } }));
+          return;
+        }
+        if (req.url?.startsWith('/r2/out/') && req.method === 'PUT') {
+          const id = req.url.split('/').pop();
+          uploadedArtifacts.set(id, {
+            contentType: req.headers['content-type'],
+            buffer: rawBody,
+          });
+          res.writeHead(200);
+          res.end();
+          return;
+        }
+        if (req.url === '/transcription/models' && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            models: [
+              { id: 'parakeet', enabled: true, timestamps: ['sentence', 'word'] },
+              { id: 'nemotron', enabled: true, timestamps: ['sentence', 'word'] },
+            ],
+          }));
+          return;
+        }
+        if (req.url === '/drama3-tts/status' && req.method === 'GET') {
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ model: 'drama-3-nvfp4-pruned', ready: true }));
+          return;
+        }
+        if (req.url === '/transcribe' && req.method === 'POST') {
+          const bodyStr = rawBody.toString('utf-8');
+          const isNemotron = bodyStr.includes('nemotron');
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          if (isNemotron) {
+            res.end(JSON.stringify({
+              success: true,
+              transcript: '<spk:0> Hello Spark. <spk:1> Ready for Supernet.',
+              finishReason: 'stop',
+              complete: true,
+              timestamps: [
+                { text: 'Hello Spark.', start: 0.1, end: 1.0, speaker: 'S01' },
+                { text: 'Ready for Supernet.', start: 1.1, end: 2.0, speaker: 'S02' },
+              ],
+            }));
+          } else {
+            res.end(JSON.stringify({
+              success: true,
+              transcript: 'Reference voice transcript.',
+              timestamps: [{ text: 'Reference voice transcript.', start: 0.0, end: 1.8 }],
+            }));
+          }
+          return;
+        }
+        if (req.url === '/drama3-tts' && req.method === 'POST') {
+          res.writeHead(200, { 'Content-Type': 'audio/wav', 'X-Finish-Reason': 'stop' });
+          res.end(sampleWav);
+          return;
+        }
+        res.writeHead(404);
+        res.end('Not found');
+      });
+    });
+
+    await new Promise((resolve) => mediaAndVoiceServer.listen(0, '127.0.0.1', resolve));
+    apiUrl = `http://127.0.0.1:${mediaAndVoiceServer.address().port}`;
+
+    const backend = new HttpVoiceBackend({
+      apiUrl,
+      apiKey: 'voice-api-key',
+      logger: silentLogger,
+    });
+    const workerModels = await backend.discoverModels();
+
+    const executor = new VoiceSupernetExecutor({
+      workerModels,
+      backend,
+      apiUrl,
+      sogniEnv: 'local',
+      artifacts: {
+        downloadReferenceAudio: (await import('../../../src/network/artifacts.js')).downloadReferenceAudio,
+        validateAndProbeAudio: async () => ({ duration: 2.0, formatName: 'wav' }),
+        transcodeAndVerifySttAudio: async (inPath) => ({ path: inPath, duration: 2.0 }),
+        transcodeReferenceWav: async (inPath) => inPath,
+        uploadJobArtifact: (await import('../../../src/network/artifacts.js')).uploadJobArtifact,
       },
-      artifacts,
     });
 
     client = new SogniSocketClient({
-      url: server.url,
-      apiKey: 'e2e-key',
-      workerId: 'E2E-WORKER',
-      userAgent: 'Sogni/3.0.118 (Darwin) | Speech:MLX | speech-worker/1.0.0',
-      reconnectInitialDelayMs: 50,
-      reconnectMaxDelayMs: 100,
+      url: wsServer.url,
+      socketApiUrl: apiUrl,
+      origin: wsServer.url,
+      sogniEnv: 'local',
+      apiKey: 'supernet-key',
+      nftTokenId: '101',
+      workerId: 'VOICE-WORKER-01',
+      userAgent: 'Sogni/3.0.0129 (linux) | IMG:COMFY | comfy-worker/1.0.260',
+      validateClientKey: true,
       logger: silentLogger,
     });
 
-    supervisor = new SpeechWorkerSupervisor({
+    supervisor = new VoiceWorkerSupervisor({
       client,
       executor,
-      speechModels: MODELS,
-      maxConcurrentJobs: 1,
-      capacityIntervalMs: 30,
-      drainTimeoutMs: 3000,
+      workerModels,
+      hardwareRating: 70,
+      hardwareInfo: {
+        cpuBrand: 'ARM Cortex-X925',
+        gpuBrand: 'NVIDIA GB10',
+        vram: 120,
+        ram: 120,
+      },
+      etaIntervalMs: 50,
       logger: silentLogger,
     });
   });
 
   afterEach(async () => {
-    supervisor.stopCapacityLoop();
-    client.close();
-    await server.close();
+    await supervisor?.shutdown();
+    await wsServer?.close();
+    await new Promise((resolve) => mediaAndVoiceServer.close(resolve));
+    await rm(tempRoot, { recursive: true, force: true });
   });
 
-  const framesOfType = (type) => server.received.filter((frame) => frame.type === type);
+  const framesOfType = (type) => wsServer.received.filter((f) => f.type === type);
 
-  it('registers, runs an STT job, and reports capacity', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
+  it('waits for authenticated before registering, then executes Nemotron STT and Drama 3 TTS end-to-end', async () => {
+    await supervisor.start();
+    await waitFor(() => client.connected);
 
-    expect(framesOfType('workerInfo')[0].data).toEqual({
-      speechModels: [
-        { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-        { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-      ],
-      loadedModelIDs: [],
-      maxConcurrentJobs: 1,
-    });
+    // Must NOT have sent workerInfo on 'open' alone!
+    expect(wsServer.received).toEqual([]);
 
-    server.send('jobRequest', {
-      jobID: 'e2e-stt',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
-    });
+    wsServer.send('authenticated', { workerId: 'VOICE-WORKER-01' });
+    await waitFor(() => framesOfType('readyToAcceptJobs').length === 1);
 
-    await waitFor(() => framesOfType('jobResult').length === 1);
-    const result = framesOfType('jobResult')[0].data;
-    expect(result.jobID).toBe('e2e-stt');
-    expect(result.transcript).toBe('network transcript');
-    expect(result.transcriptDetails.timestamps).toEqual([
-      { start: 0, end: 3.5, text: 'network transcript' },
+    expect(framesOfType('workerInfo')[0].data.workerModels).toEqual([
+      'fish_drama_3_nvfp4',
+      'parakeet_tdt_0.6b_v3_bf16',
+      'nemotron_3.5_transcribe_30b_a4b_nvfp4',
     ]);
-    expect(result.meta.audioSeconds).toBe(3.5);
-    expect(typeof result.meta.durationMs).toBe('number');
 
-    expect(framesOfType('jobState').map((frame) => frame.data.type))
-      .toEqual(['accepted', 'started']);
-
-    await waitFor(
-      () => framesOfType('speechCapacityUpdate').some((frame) => frame.data.activeRequests === 0),
-    );
-  });
-
-  it('runs a TTS job and reports the uploaded key', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
-
-    server.send('jobRequest', {
-      jobID: 'e2e-tts',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'tts',
-      modelID: 'kokoro-82m',
-      params: { text: 'Twelve chars', voice: 'af_heart' },
-      input: null,
-      output: { uploadUrl: 'https://bucket.s3.test/speech/out/e2e.wav?sig=1' },
-      timeoutMs: 30000,
+    // Dispatch Nemotron diarized STT job requiring GET-with-body downloadUrl & uploadUrl
+    wsServer.send('jobRequest', {
+      jobID: 'e2e-nemotron-1',
+      imageId: 'artifact-nemotron-1',
+      workflowId: 'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+      outputFormat: 'json',
+      clientParams: { seed: 11, duration: 10, timestamps: 'sentence', diarize: true },
+      assets: [{
+        type: 'audio',
+        jobField: 'audio',
+        signedDownloadType: 'referenceAudio',
+        metadata: { assetId: 'input-nemotron-1', contentType: 'audio/wav' },
+      }],
     });
 
     await waitFor(() => framesOfType('jobResult').length === 1);
-    expect(framesOfType('jobResult')[0].data).toMatchObject({
-      jobID: 'e2e-tts',
-      uploadedKey: 'speech/out/e2e.wav',
-      meta: { charCount: 12 },
+    await waitFor(() => framesOfType('readyToAcceptJobs').length === 2);
+
+    const uploadedStt = uploadedArtifacts.get('artifact-nemotron-1');
+    expect(uploadedStt.contentType).toBe('application/json');
+    const sttPayload = JSON.parse(uploadedStt.buffer.toString('utf-8'));
+    expect(sttPayload).toMatchObject({
+      version: 1,
+      model: 'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+      text: 'Hello Spark. Ready for Supernet.',
+      rawText: '<spk:0> Hello Spark. <spk:1> Ready for Supernet.',
+      diarized: true,
     });
-    expect(artifacts.uploadFile).toHaveBeenCalledTimes(1);
-  });
-
-  it('rejects a second concurrent job with capacity_exceeded', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
-
-    let releaseFirst;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => { releaseFirst = () => resolve({ text: 'slow', rawOutput: '' }); }),
-    );
-
-    const request = (jobID) => ({
-      jobID,
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
+    expect(mediaRequests[0]).toMatchObject({
+      endpoint: '/v1/media/downloadUrl',
+      method: 'GET',
+      body: { type: 'referenceAudio', jobId: 'e2e-nemotron-1', id: 'input-nemotron-1' },
+    });
+    expect(mediaRequests[1]).toMatchObject({
+      endpoint: '/v1/media/uploadUrl',
+      method: 'GET',
+      body: { type: 'complete', jobId: 'e2e-nemotron-1', id: 'artifact-nemotron-1', contentType: 'application/json' },
     });
 
-    server.send('jobRequest', request('busy-1'));
-    await waitFor(() => framesOfType('jobState').length === 2);
-
-    server.send('jobRequest', request('busy-2'));
-    await waitFor(() => framesOfType('jobError').length === 1);
-
-    expect(framesOfType('jobError')[0].data).toMatchObject({
-      jobID: 'busy-2',
-      code: 'capacity_exceeded',
+    // Dispatch Drama 3 WAV TTS job
+    wsServer.send('jobRequest', {
+      jobID: 'e2e-drama3-1',
+      imageId: 'artifact-drama3-1',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'wav',
+      clientParams: { seed: 22, tags: '[laughs] Hello from Drama 3!' },
+      assets: [],
     });
 
-    releaseFirst();
-    await waitFor(() => framesOfType('jobResult').length === 1);
-  });
+    await waitFor(() => framesOfType('jobResult').length === 2);
+    await waitFor(() => framesOfType('readyToAcceptJobs').length === 3);
 
-  it('drains an in-flight job on shutdown before closing the socket', async () => {
-    supervisor.start();
-    await waitFor(() => framesOfType('workerInfo').length === 1);
-
-    let releaseJob;
-    transcriptionService.transcribe.mockImplementationOnce(
-      () => new Promise((resolve) => {
-        releaseJob = () => resolve({ text: 'drained', rawOutput: '' });
-      }),
-    );
-
-    server.send('jobRequest', {
-      jobID: 'drain-1',
-      projectID: 'proj-e2e',
-      jobType: 'speech',
-      task: 'stt',
-      modelID: 'parakeet-tdt-0.6b-v3',
-      params: {},
-      input: { url: 'https://s3.test/in/e2e.wav' },
-      output: null,
-      timeoutMs: 30000,
-    });
-    await waitFor(() => framesOfType('jobState').length === 2);
-
-    const draining = supervisor.shutdown();
-    expect(executor.draining).toBe(true);
-
-    releaseJob();
-    await draining;
-
-    await waitFor(() => framesOfType('jobResult').length === 1);
-    expect(framesOfType('jobResult')[0].data.transcript).toBe('drained');
+    const uploadedTts = uploadedArtifacts.get('artifact-drama3-1');
+    expect(uploadedTts.contentType).toBe('audio/wav');
+    expect(uploadedTts.buffer.subarray(0, 4).toString()).toBe('RIFF');
   });
 });

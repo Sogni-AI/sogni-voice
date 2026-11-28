@@ -142,4 +142,43 @@ describe('fish_tts_daemon MLX memory cleanup', () => {
   itWithPython('responds before reclaiming memory, then cleans before another request', () => {
     expect(runHarness().order).toEqual(['handle', 'respond', 'cleanup:generate']);
   });
+
+  itWithPython('includes generate_with_reference in MLX memory cleanup request types', () => {
+    const check = spawnSync(python, [
+      '-c',
+      `import sys; sys.path.insert(0, ${JSON.stringify(join(repoRoot, 'scripts'))}); import fish_tts_daemon as m; assert 'generate_with_reference' in m.MLX_MEMORY_REQUEST_TYPES`,
+    ]);
+    expect(check.status).toBe(0);
+  });
+
+  itWithPython('validates clone IDs strictly and sweeps stale __ephemeral_ clone directories', () => {
+    const check = spawnSync(python, [
+      '-c',
+      `
+import os, pathlib, sys, tempfile, time
+with tempfile.TemporaryDirectory() as d:
+    os.environ['FISH_TTS_VOICE_CLONES_DIR'] = d
+    stale = pathlib.Path(d) / '__ephemeral_oldclone'
+    stale.mkdir()
+    fresh = pathlib.Path(d) / '__ephemeral_newclone'
+    fresh.mkdir()
+    saved = pathlib.Path(d) / 'Marvin'
+    saved.mkdir()
+    old_ts = time.time() - 1200
+    os.utime(stale, (old_ts, old_ts))
+    os.utime(saved, (old_ts, old_ts))
+    sys.path.insert(0, ${JSON.stringify(join(repoRoot, 'scripts'))})
+    import fish_tts_daemon as m
+    daemon = m.FishTTSDaemon()
+    assert not daemon._validate_clone_id('../etc')
+    assert not daemon._validate_clone_id('bad space')
+    assert not daemon._validate_clone_id('a' * 101)
+    assert not daemon._validate_clone_id(None)
+    assert daemon._validate_clone_id('__ephemeral_newclone')
+    assert sorted(os.listdir(d)) == ['Marvin', '__ephemeral_newclone']
+`,
+    ], { encoding: 'utf8' });
+    if (check.status !== 0) throw new Error(check.stderr);
+    expect(check.status).toBe(0);
+  });
 });

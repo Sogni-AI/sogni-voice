@@ -1,61 +1,119 @@
 import { describe, it, expect } from 'vitest';
 import {
-  buildSpeechModels,
+  VOICE_SUPERNET_MODELS,
+  buildLocalWorkerModels,
   buildWorkerInfo,
-  findSpeechModel,
+  findWorkerModel,
 } from '../../../src/network/capabilities.js';
 
 const cfg = (overrides = {}) => ({
+  drama3Tts: { enabled: true },
   transcription: { enabled: true },
-  tts: { enabled: true },
-  qwenTts: { enabled: false },
+  nemotron: { enabled: true },
   ...overrides,
 });
 
-describe('capabilities', () => {
-  it('advertises Parakeet and Kokoro when both are enabled', () => {
-    expect(buildSpeechModels(cfg())).toEqual([
-      { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1, engine: 'parakeet' },
-      { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
+describe('Voice Supernet capabilities', () => {
+  it('defines the three canonical Sogni voice model IDs', () => {
+    expect(VOICE_SUPERNET_MODELS.map((m) => m.id)).toEqual([
+      'fish_drama_3_nvfp4',
+      'parakeet_tdt_0.6b_v3_bf16',
+      'nemotron_3.5_transcribe_30b_a4b_nvfp4',
     ]);
   });
 
-  it('adds the Qwen preset model only when its env flag is on', () => {
-    const models = buildSpeechModels(cfg({ qwenTts: { enabled: true } }));
-    expect(models.map((model) => model.id))
-      .toEqual(['parakeet-tdt-0.6b-v3', 'kokoro-82m', 'qwen3-tts-preset']);
+  it('advertises enabled local engines in canonical order', () => {
+    const models = buildLocalWorkerModels(cfg({ nemotron: { enabled: false } }));
+    expect(models.map((m) => m.id)).toEqual([
+      'fish_drama_3_nvfp4',
+      'parakeet_tdt_0.6b_v3_bf16',
+    ]);
   });
 
-  it('omits disabled engines', () => {
-    const models = buildSpeechModels(cfg({ transcription: { enabled: false } }));
-    expect(models.map((model) => model.id)).toEqual(['kokoro-82m']);
-  });
-
-  it('returns an empty list when nothing is enabled', () => {
-    const models = buildSpeechModels({
-      transcription: { enabled: false },
-      tts: { enabled: false },
-      qwenTts: { enabled: false },
+  it('filters local models by an optional allowlist of IDs or short selectors', () => {
+    const models = buildLocalWorkerModels(cfg(), {
+      allowlist: new Set(['drama3', 'nemotron_3.5_transcribe_30b_a4b_nvfp4']),
     });
-    expect(models).toEqual([]);
+    expect(models.map((m) => m.id)).toEqual([
+      'fish_drama_3_nvfp4',
+      'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+    ]);
   });
 
-  it('builds the frozen workerInfo payload without internal engine keys', () => {
-    expect(buildWorkerInfo({ speechModels: buildSpeechModels(cfg()), maxConcurrentJobs: 2 }))
-      .toEqual({
-        speechModels: [
-          { id: 'parakeet-tdt-0.6b-v3', task: 'stt', maxConcurrent: 1 },
-          { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2 },
-        ],
-        loadedModelIDs: [],
-        maxConcurrentJobs: 2,
-      });
+  it('returns an empty list when no voice engine is enabled', () => {
+    expect(buildLocalWorkerModels({
+      drama3Tts: { enabled: false },
+      transcription: { enabled: false },
+      nemotron: { enabled: false },
+    })).toEqual([]);
   });
 
-  it('matches a model by id and task, and rejects a task mismatch', () => {
-    const models = buildSpeechModels(cfg());
-    expect(findSpeechModel(models, 'kokoro-82m', 'tts').engine).toBe('kokoro');
-    expect(findSpeechModel(models, 'kokoro-82m', 'stt')).toBeNull();
-    expect(findSpeechModel(models, 'whisper-large', 'stt')).toBeNull();
+  it('builds exact sogni-socket workerInfo payload with GB10 hardware and protocols', () => {
+    const models = buildLocalWorkerModels(cfg());
+    const info = buildWorkerInfo({
+      workerModels: models,
+      loadedModelID: 'fish_drama_3_nvfp4',
+      hardwareRating: 70,
+      hardwareInfo: {
+        cpuBrand: 'ARM Cortex-X925',
+        gpuBrand: 'NVIDIA GB10',
+        vram: 120,
+        ram: 120,
+      },
+      image: 'comfy/1.0.260',
+      readinessSessionId: '11111111-2222-4333-8444-555555555555',
+      heldJobs: [],
+    });
+
+    expect(info).toEqual({
+      workerModels: [
+        'fish_drama_3_nvfp4',
+        'parakeet_tdt_0.6b_v3_bf16',
+        'nemotron_3.5_transcribe_30b_a4b_nvfp4',
+      ],
+      loadedModelID: 'fish_drama_3_nvfp4',
+      hardwareRating: 70,
+      hardwareInfo: {
+        cpuBrand: 'ARM Cortex-X925',
+        gpuBrand: 'NVIDIA GB10',
+        vram: 120,
+        ram: 120,
+        supportedControlnets: {},
+      },
+      image: 'comfy/1.0.260',
+      cooldownEveryXJobsCount: 0,
+      cooldownEveryXJobsSec: 0,
+      cooldownRenderSec: 0,
+      cooldownRestSec: 0,
+      installedModelFiles: [],
+      loadedLoras: [],
+      excludedLoraIds: [],
+      modelDownloadsEnabled: false,
+      loraDownloadsEnabled: false,
+      hostsSpicyModels: true,
+      inputPreparationProtocol: 1,
+      postDisconnectCleanupReadinessProtocol: 1,
+      readinessSessionId: '11111111-2222-4333-8444-555555555555',
+      jobHoldProtocol: 1,
+      heldJobs: [],
+    });
+  });
+
+  it('clears loadedModelID when it is not in workerModels', () => {
+    const info = buildWorkerInfo({
+      workerModels: ['parakeet_tdt_0.6b_v3_bf16'],
+      loadedModelID: 'fish_drama_3_nvfp4',
+      hardwareRating: 70,
+      hardwareInfo: { cpuBrand: 'CPU', gpuBrand: 'NVIDIA GB10', vram: 120, ram: 120 },
+      image: 'comfy/1.0.260',
+      readinessSessionId: '11111111-2222-4333-8444-555555555555',
+    });
+    expect(info.loadedModelID).toBeNull();
+  });
+
+  it('finds a model by canonical workflowId', () => {
+    const models = buildLocalWorkerModels(cfg());
+    expect(findWorkerModel(models, 'fish_drama_3_nvfp4')?.engine).toBe('drama3');
+    expect(findWorkerModel(models, 'unknown_model')).toBeNull();
   });
 });

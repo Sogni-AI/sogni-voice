@@ -17,16 +17,25 @@ import { drama3TtsService } from './services/drama3Tts.js';
 import { mossTranscribeDiarizeService } from './services/mossTranscribeDiarize.js';
 import { config } from './config/index.js';
 import { preWarmDaemon } from './utils/preWarm.js';
+import { startVoiceSupernetWorker } from './network/supervisor.js';
 
 // On a DGX Spark, the NVIDIA driver can refuse a new GPU context when free memory
 // is short, even with plenty of file cache it could reclaim. Parakeet hit this
 // while starting beside the other daemons, and the same load worked 21 s later.
 const TRANSCRIPTION_PREWARM_RETRY_MS = 20000;
+let inProcessWorker = null;
 
 const gracefulShutdown = async (signal) => {
   console.log(`\nShutting down gracefully... (received ${signal})`);
   console.log('Stack trace at shutdown:');
   console.trace();
+  if (inProcessWorker) {
+    try {
+      await inProcessWorker.supervisor.shutdown();
+    } catch (error) {
+      console.error('Failed to drain in-process Sogni Supernet worker:', error);
+    }
+  }
   await Promise.all([
     tempFileManager.cleanupAll(),
     transcriptionService.shutdown(),
@@ -140,6 +149,15 @@ startServer()
     }
 
     await Promise.all(preWarmPromises);
+
+    if (config.networkWorker.enabled) {
+      console.log('Starting in-process Sogni Supernet worker (local daemon mode)...');
+      inProcessWorker = await startVoiceSupernetWorker({
+        defaultBackendMode: 'local',
+        ownsDaemons: false,
+        preWarm: false,
+      });
+    }
   })
   .catch((err) => {
     console.error('Failed to start server:', err);

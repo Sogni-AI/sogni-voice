@@ -130,4 +130,40 @@ describe('FishTTSService', () => {
     expect(result.finishReason).toBe('length');
     expect(result.rtf).toBe(0.9);
   });
+
+  it('sends a stateless generate_with_reference request without max_tokens or temperature unless provided', async () => {
+    await initReady();
+    const promise = service.generateWithReference('[warmly] hello reference', {
+      referenceAudioPath: '/tmp/ephemeral.wav',
+      referenceText: '  spoken reference words  ',
+      outputPath: '/tmp/ref-out.wav',
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    const request = JSON.parse(mockStdin.lastWrite);
+    expect(request).toEqual({
+      id: request.id,
+      type: 'generate_with_reference',
+      text: '[warmly] hello reference',
+      reference_audio_path: '/tmp/ephemeral.wav',
+      reference_text: 'spoken reference words',
+      output_path: '/tmp/ref-out.wav',
+    });
+    mockStdout.push(`{"id":"${request.id}","success":true,"output_path":"/tmp/ref-out.wav","duration":2.1,"rtf":0.7,"finish_reason":"stop"}\n`);
+    await expect(promise).resolves.toMatchObject({
+      outputPath: '/tmp/ref-out.wav',
+      duration: 2.1,
+      rtf: 0.7,
+      finishReason: 'stop',
+    });
+  });
+
+  it('validates required parameters on generateWithReference', async () => {
+    await initReady();
+    await expect(service.generateWithReference('hi', { referenceAudioPath: '/tmp/a.wav', referenceText: 'ok' }))
+      .rejects.toThrow('outputPath is required');
+    await expect(service.generateWithReference('hi', { outputPath: '/tmp/o.wav', referenceText: 'ok' }))
+      .rejects.toThrow('referenceAudioPath is required');
+    await expect(service.generateWithReference('hi', { outputPath: '/tmp/o.wav', referenceAudioPath: '/tmp/a.wav', referenceText: '   ' }))
+      .rejects.toThrow('referenceText is required');
+  });
 });

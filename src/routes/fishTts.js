@@ -5,13 +5,18 @@ import { createWriteStream } from 'node:fs';
 import { open, readFile, stat } from 'node:fs/promises';
 import { pipeline } from 'node:stream/promises';
 import { execFile } from 'node:child_process';
+import { resolve as resolvePath } from 'node:path';
 import { promisify } from 'node:util';
 import { randomBytes } from 'node:crypto';
 import { config } from '../config/index.js';
+import { MEDIA_DEMUXERS } from '../network/artifacts.js';
 import { fishTtsService } from '../services/fishTts.js';
 import { drama3TtsService } from '../services/drama3Tts.js';
+import { transcriptionService } from '../services/transcription.js';
+import { nemotronService } from '../services/nemotron.js';
 import { tempFileManager } from '../utils/tempFile.js';
 import { requestHasValidApiKey } from '../utils/apiKey.js';
+import { convertWavFile } from '../utils/audioFormat.js';
 import {
   ALLOWED_AUDIO_EXTENSIONS,
   getExtension,
@@ -20,6 +25,41 @@ import {
 
 const execFileAsync = promisify(execFile);
 const cloneIdSchema = Joi.string().min(1).max(100).pattern(/^[A-Za-z0-9_-]+$/);
+const OUTPUT_FORMAT_VALUES = ['wav', 'mp3', 'flac', 'opus', 'buffer'];
+const SPEAKER_TAG_RE = /\s*<spk:\d+>\s*/gi;
+
+const stripSpeakerTags = (value) => (
+  String(value || '').replace(SPEAKER_TAG_RE, ' ').replace(/\s+/g, ' ').trim()
+);
+
+const autoTranscribeReference = async (wavPath, signal) => {
+  let result;
+  if (config.transcription?.enabled) {
+    result = await transcriptionService.transcribe(wavPath, {
+      timestamps: false,
+      wordTimestamps: false,
+    });
+  } else if (config.nemotron?.enabled) {
+    result = await nemotronService.transcribe(wavPath, {
+      timestamps: false,
+      wordTimestamps: false,
+      diarize: false,
+      signal,
+    });
+  } else {
+    throw Boom.badRequest(
+      'A transcript of the reference audio is required when no transcription engine is enabled',
+    );
+  }
+
+  const text = stripSpeakerTags(result?.text);
+  if (!text) {
+    throw Boom.badRequest(
+      'Could not auto-transcribe reference audio: no speech detected. Provide transcript or referenceText explicitly.',
+    );
+  }
+  return text;
+};
 
 const hasCloneAccess = (request) => (
   config.auth.dangerouslyAllowVoiceCloning
@@ -47,8 +87,8 @@ const throwMappedError = (error) => {
 };
 
 const sendAudio = async ({ signal, h, outputPath, format, result, filename }) => {
-  const wavBuffer = await readFile(outputPath, { signal });
   if (format === 'buffer') {
+    const wavBuffer = await readFile(outputPath, { signal });
     return {
       success: true,
       audio: wavBuffer.toString('base64'),
@@ -62,23 +102,21 @@ const sendAudio = async ({ signal, h, outputPath, format, result, filename }) =>
       } : {}),
     };
   }
-  if (format === 'opus') {
-    const opusPath = outputPath.replace(/\.wav$/, '.opus');
-    await execFileAsync('ffmpeg', [
-      '-nostdin', '-y', '-loglevel', 'error',
-      '-i', outputPath, '-c:a', 'libopus', '-b:a', '64k', opusPath,
-    ], { timeout: 300000, signal });
-    const opusBuffer = await readFile(opusPath, { signal });
-    const response = h.response(opusBuffer)
-      .type('audio/opus')
-      .header('Content-Disposition', `attachment; filename="${filename}.opus"`);
-    if (result.finishReason) response.header('X-Finish-Reason', result.finishReason);
-    return response;
+  const targetFormat = (format || 'wav').toLowerCase();
+  const converted = await convertWavFile(outputPath, targetFormat, {
+    signal,
+    timeoutMs: 300000,
+    execFileImpl: execFileAsync,
+  });
+  const audioBuffer = await readFile(converted.outputPath, { signal });
+  const response = h.response(audioBuffer)
+    .type(converted.contentType)
+    .header('Content-Disposition', `attachment; filename="${filename}.${converted.extension}"`);
+  if (targetFormat === 'wav') {
+    response.header('X-RTF', result.rtf == null ? '' : String(result.rtf));
+  } else if (result.rtf != null) {
+    response.header('X-RTF', String(result.rtf));
   }
-  const response = h.response(wavBuffer)
-    .type('audio/wav')
-    .header('X-RTF', result.rtf == null ? '' : String(result.rtf))
-    .header('Content-Disposition', `attachment; filename="${filename}.wav"`);
   if (result.finishReason) response.header('X-Finish-Reason', result.finishReason);
   return response;
 };
@@ -109,31 +147,60 @@ const decodeReference = async (audio, tempDir) => {
     await file.close();
   }
 
+  const resolvedUploadPath = resolvePath(uploadedPath);
+  let probedDuration = Number.NaN;
   try {
     const probe = await execFileAsync('ffprobe', [
-      '-v', 'error', '-show_entries', 'format=duration',
-      '-of', 'default=noprint_wrappers=1:nokey=1', uploadedPath,
+      '-v', 'error',
+      '-protocol_whitelist', 'file,pipe',
+      '-format_whitelist', MEDIA_DEMUXERS,
+      '-show_entries', 'format=duration',
+      '-of', 'default=noprint_wrappers=1:nokey=1',
+      '--',
+      resolvedUploadPath,
     ], { timeout: 30000 });
-    const duration = Number.parseFloat(typeof probe === 'string' ? probe : probe.stdout);
-    if (!Number.isFinite(duration)) throw new Error('ffprobe did not return a duration');
-    if (duration < 1 || duration > 30) {
+    const rawOut = String(typeof probe === 'string' ? probe : probe.stdout).trim();
+    probedDuration = Number.parseFloat(rawOut);
+    if (Number.isFinite(probedDuration) && (probedDuration < 1 || probedDuration > 30)) {
       throw Boom.badRequest(
-        `Reference audio must be between 1 and 30 seconds; received ${duration.toFixed(1)} seconds`,
+        `Reference audio must be between 1 and 30 seconds; received ${probedDuration.toFixed(1)} seconds`,
       );
     }
   } catch (error) {
     if (error.isBoom) throw error;
-    throw Boom.badRequest(`Reference audio could not be inspected: ${error.stderr || error.message}`);
+    console.error('decodeReference ffprobe failed:', error.stderr || error.message);
+    throw Boom.badRequest('Reference audio could not be decoded');
   }
 
-  const wavPath = await tempFileManager.createTempFile(tempDir, 'wav');
+  const wavPath = resolvePath(await tempFileManager.createTempFile(tempDir, 'wav'));
   try {
     await execFileAsync('ffmpeg', [
       '-nostdin', '-y', '-loglevel', 'error',
-      '-i', uploadedPath, '-vn', '-ar', '44100', '-ac', '1', '-c:a', 'pcm_s16le', wavPath,
+      '-protocol_whitelist', 'file,pipe',
+      '-format_whitelist', MEDIA_DEMUXERS,
+      '-t', '31',
+      '-i', resolvedUploadPath,
+      '-vn', '-ar', '44100', '-ac', '1', '-c:a', 'pcm_s16le',
+      '--',
+      wavPath,
     ], { timeout: 300000 });
   } catch (error) {
-    throw Boom.badRequest(`Reference audio could not be decoded: ${error.stderr || error.message}`);
+    console.error('decodeReference ffmpeg failed:', error.stderr || error.message);
+    throw Boom.badRequest('Reference audio could not be decoded');
+  }
+
+  // Browser WebM recordings often report Duration: N/A in container headers, and
+  // container headers can also under-report real sample length. Verify the decoded
+  // 44.1 kHz mono PCM16 WAV byte length directly whenever sample data is present
+  // or when ffprobe could not read a finite header duration.
+  const { size: wavSize } = await stat(wavPath);
+  if (!Number.isFinite(probedDuration) || wavSize > 44) {
+    const decodedDuration = Math.max(0, (wavSize - 44) / (44100 * 2));
+    if (decodedDuration < 1 || decodedDuration > 30.5) {
+      throw Boom.badRequest(
+        `Reference audio must be between 1 and 30 seconds; received ${decodedDuration.toFixed(1)} seconds`,
+      );
+    }
   }
   return wavPath;
 };
@@ -158,11 +225,11 @@ const createFishTtsRoutes = ({
       options: {
         pre: [{ method: checkEnabled }],
         validate: {
-          query: Joi.object({ format: Joi.string().valid('wav', 'opus', 'buffer') }).unknown(true),
+          query: Joi.object({ format: Joi.string().valid(...OUTPUT_FORMAT_VALUES) }).unknown(true),
           payload: Joi.object({
             text: Joi.string().trim().min(1).max(5000).required()
               .description('Text to synthesize, with the engine\'s inline tags'),
-            format: Joi.string().valid('wav', 'opus', 'buffer').default('wav'),
+            format: Joi.string().valid(...OUTPUT_FORMAT_VALUES).default('wav'),
             maxTokens: Joi.number().integer().min(8).max(4096),
             temperature: Joi.number().min(0).max(1.5),
           }),
@@ -197,15 +264,102 @@ const createFishTtsRoutes = ({
     },
     {
       method: 'POST',
+      path: `${basePath}/generate-with-reference`,
+      options: {
+        pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
+        payload: {
+          output: 'stream',
+          parse: true,
+          multipart: true,
+          maxBytes: config.upload.transcribeMaxBytes || config.upload.maxFileSizeBytes,
+          allow: 'multipart/form-data',
+        },
+        validate: {
+          query: Joi.object({ format: Joi.string().valid(...OUTPUT_FORMAT_VALUES) }).unknown(true),
+          payload: Joi.object({
+            file: Joi.any().optional().description('A 1-30 second voice reference'),
+            audio: Joi.any().optional().description('Alias for file'),
+            text: Joi.string().trim().min(1).max(5000).required()
+              .description('Script to synthesize in the reference voice'),
+            transcript: Joi.string().allow('').max(2000).optional()
+              .description('Optional transcript spoken in the reference audio (auto-transcribed if omitted)'),
+            referenceText: Joi.string().allow('').max(2000).optional()
+              .description('Alias for transcript'),
+            format: Joi.string().valid(...OUTPUT_FORMAT_VALUES).default('wav'),
+            maxTokens: Joi.number().integer().min(8).max(4096).optional(),
+            temperature: Joi.number().min(0).max(1.5).optional(),
+          }),
+        },
+        description: `Stateless one-shot ${label} voice cloning from ephemeral reference audio`,
+        tags: ['api', tag, 'voice-cloning'],
+      },
+      handler: async (request, h) => {
+        const cancellation = requestCancellation(request);
+        const { signal } = cancellation;
+        let tempDir = null;
+        try {
+          const {
+            file,
+            audio,
+            text,
+            transcript,
+            referenceText,
+            format: payloadFormat,
+            maxTokens,
+            temperature,
+          } = request.payload;
+          const uploadedAudio = file || audio;
+          if (!uploadedAudio?.hapi) {
+            throw Boom.badRequest('No reference audio file provided');
+          }
+
+          tempDir = await tempFileManager.createTempDir(`${tag}-ref-`);
+          const wavPath = await decodeReference(uploadedAudio, tempDir);
+
+          let resolvedReferenceText = String(transcript ?? referenceText ?? '').trim();
+          if (!resolvedReferenceText) {
+            resolvedReferenceText = await autoTranscribeReference(wavPath, signal);
+          }
+
+          const outputPath = await tempFileManager.createTempFile(tempDir, 'wav');
+          const result = await service.generateWithReference(text, {
+            signal,
+            referenceAudioPath: wavPath,
+            referenceText: resolvedReferenceText,
+            outputPath,
+            maxTokens,
+            temperature,
+          });
+          return await sendAudio({
+            signal,
+            h,
+            outputPath,
+            format: request.query.format || payloadFormat,
+            result,
+            filename: `${filePrefix}-reference`,
+          });
+        } catch (error) {
+          if (signal.aborted && error.name === 'AbortError') return h.abandon;
+          if (!error.isBoom) console.error(`${label} ephemeral reference generation error:`, error);
+          throwMappedError(error);
+          throw Boom.badImplementation(`${label} reference generation failed`);
+        } finally {
+          cancellation.dispose();
+          if (tempDir) await tempFileManager.cleanup(tempDir);
+        }
+      },
+    },
+    {
+      method: 'POST',
       path: `${basePath}/voices/clone/{cloneId}/generate`,
       options: {
         pre: [{ method: checkEnabled }, { method: checkCloneAuthorized }],
         validate: {
           params: Joi.object({ cloneId: cloneIdSchema.required() }),
-          query: Joi.object({ format: Joi.string().valid('wav', 'opus', 'buffer') }).unknown(true),
+          query: Joi.object({ format: Joi.string().valid(...OUTPUT_FORMAT_VALUES) }).unknown(true),
           payload: Joi.object({
             text: Joi.string().trim().min(1).max(5000).required(),
-            format: Joi.string().valid('wav', 'opus', 'buffer').default('wav'),
+            format: Joi.string().valid(...OUTPUT_FORMAT_VALUES).default('wav'),
             maxTokens: Joi.number().integer().min(8).max(4096),
             temperature: Joi.number().min(0).max(1.5),
           }),

@@ -1,282 +1,264 @@
-import { describe, it, expect, vi } from 'vitest';
-import { SpeechExecutor } from '../../../src/network/executor.js';
-import { config } from '../../../src/config/index.js';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { mkdtemp, rm } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { VOICE_SUPERNET_MODELS } from '../../../src/network/capabilities.js';
+import { VoiceSupernetExecutor } from '../../../src/network/executor.js';
 
-const MODELS = [
-  { id: 'kokoro-82m', task: 'tts', maxConcurrent: 2, engine: 'kokoro' },
-  { id: 'qwen3-tts-preset', task: 'tts', maxConcurrent: 1, engine: 'qwen-preset' },
-];
+describe('VoiceSupernetExecutor TTS (Fish Drama 3 NVFP4)', () => {
+  let tempDir;
 
-const job = (overrides = {}) => ({
-  jobID: 'job-tts-1',
-  projectID: 'proj-1',
-  jobType: 'speech',
-  task: 'tts',
-  modelID: 'kokoro-82m',
-  params: { text: 'Hello from Sogni.', voice: 'am_puck', speed: 1.1 },
-  input: null,
-  output: { uploadUrl: 'https://bucket.s3.test/speech/out/job-tts-1.wav?sig=1' },
-  timeoutMs: 60000,
-  ...overrides,
-});
-
-const setup = (overrides = {}) => {
-  const ttsService = {
-    generate: vi.fn(async (text, options) => ({
-      outputPath: options.outputPath,
-      duration: 1.8,
-      voice: options.voice,
-      speed: options.speed,
-    })),
-  };
-  const qwenTtsService = {
-    generate: vi.fn(async (text, options) => ({
-      outputPath: options.outputPath,
-      duration: 2.1,
-      voice: options.voice,
-      language: options.language,
-    })),
-  };
-  const artifacts = {
-    downloadToFile: vi.fn(),
-    uploadFile: vi.fn(async () => ({ uploadedKey: 'speech/out/job-tts-1.wav', bytes: 44100 })),
-  };
-  const tempFiles = {
-    createTempDir: vi.fn(async () => '/tmp/sogni-speech-job-xyz'),
-    cleanup: vi.fn(async () => {}),
-  };
-  let clock = 5000;
-  const executor = new SpeechExecutor({
-    speechModels: MODELS,
-    maxConcurrentJobs: 2,
-    transcriptionService: { transcribe: vi.fn() },
-    ttsService,
-    qwenTtsService,
-    tempFiles,
-    artifacts,
-    now: () => {
-      clock += 400;
-      return clock;
-    },
-    ...overrides,
+  beforeEach(async () => {
+    tempDir = await mkdtemp(join(tmpdir(), 'sogni-exec-tts-'));
   });
-  return { executor, ttsService, qwenTtsService, artifacts, tempFiles };
-};
 
-describe('SpeechExecutor TTS', () => {
-  it('synthesizes with Kokoro, uploads, and returns uploadedKey plus meta', async () => {
-    const { executor, ttsService, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
+  afterEach(async () => {
+    await rm(tempDir, { recursive: true, force: true });
+  });
 
-    const result = await executor.execute(request);
+  const makeSetup = () => {
+    const uploadedPayloads = [];
+    const backend = {
+      transcribe: vi.fn(),
+      synthesizeDrama3: vi.fn(async ({ outputFormat }) => ({
+        buffer: Buffer.from(`audio-${outputFormat}`),
+        contentType: outputFormat === 'flac' ? 'audio/flac' : outputFormat === 'wav' ? 'audio/wav' : 'audio/mpeg',
+        extension: outputFormat,
+        duration: 2.5,
+        finishReason: 'stop',
+      })),
+    };
 
-    expect(ttsService.generate).toHaveBeenCalledWith('Hello from Sogni.', {
-      voice: 'am_puck',
-      speed: 1.1,
-      outputPath: '/tmp/sogni-speech-job-xyz/output.wav',
+    const artifacts = {
+      downloadReferenceAudio: vi.fn(async (_job, dir) => ({
+        path: join(dir, 'ref-in.mp3'),
+        bytes: 8192,
+        detectedFormat: 'mp3',
+      })),
+      validateAndProbeAudio: vi.fn(async () => ({ duration: 8.2, formatName: 'mp3' })),
+      transcodeReferenceWav: vi.fn(async (_inPath, outPath) => outPath),
+      uploadJobArtifact: vi.fn(async (req) => {
+        uploadedPayloads.push(req);
+        return {
+          uploadUrl: `https://r2.sogni.test/out.${req.contentType}`,
+          uploadedKey: 'out',
+          bytes: req.buffer.length,
+          sha256: 'd'.repeat(64),
+        };
+      }),
+    };
+
+    let clock = 2000;
+    const executor = new VoiceSupernetExecutor({
+      workerModels: VOICE_SUPERNET_MODELS,
+      backend,
+      apiUrl: 'https://api.sogni.test',
+      tempFiles: {
+        createTempDir: vi.fn(async () => tempDir),
+        cleanup: vi.fn(async () => {}),
+      },
+      artifacts,
+      now: () => {
+        clock += 150;
+        return clock;
+      },
     });
-    expect(artifacts.uploadFile).toHaveBeenCalledWith(
-      'https://bucket.s3.test/speech/out/job-tts-1.wav?sig=1',
-      '/tmp/sogni-speech-job-xyz/output.wav',
+
+    return { executor, backend, artifacts, uploadedPayloads };
+  };
+
+  it('synthesizes default-voice Drama 3 in mp3/wav/flac without passing creativity or maxTokens', async () => {
+    for (const [format, expectedMime] of [['mp3', 'audio/mpeg'], ['wav', 'audio/wav'], ['flac', 'audio/flac']]) {
+      const { executor, backend, artifacts, uploadedPayloads } = makeSetup();
+      const job = {
+        jobID: `tts-d3-${format}`,
+        imageId: `img-${format}`,
+        workflowId: 'fish_drama_3_nvfp4',
+        outputFormat: format,
+        clientParams: {
+          seed: 99,
+          tags: '[sighs] <whisper>Keep your voice down.</whisper>',
+          creativity: 0.4,
+          maxTokens: 512,
+        },
+        assets: [],
+      };
+
+      executor.accept(job);
+      const result = await executor.execute(job);
+
+      expect(artifacts.downloadReferenceAudio).not.toHaveBeenCalled();
+      expect(backend.synthesizeDrama3).toHaveBeenCalledTimes(1);
+      const callArgs = backend.synthesizeDrama3.mock.calls[0][0];
+      expect(callArgs).toMatchObject({
+        text: '[sighs] <whisper>Keep your voice down.</whisper>',
+        referenceWavPath: null,
+        outputFormat: format,
+      });
+      expect(callArgs).not.toHaveProperty('temperature');
+      expect(callArgs).not.toHaveProperty('creativity');
+      expect(callArgs).not.toHaveProperty('maxTokens');
+
+      expect(uploadedPayloads[0].contentType).toBe(expectedMime);
+      expect(result).toMatchObject({
+        jobID: `tts-d3-${format}`,
+        imgID: `img-${format}`,
+        performedStepCount: 1,
+        lastSeed: 99,
+        sha256: 'd'.repeat(64),
+      });
+    }
+  });
+
+  it('downloads, validates 1..30s, and transcodes referenceAudio to 44.1kHz mono WAV for Drama 3 cloning', async () => {
+    const { executor, backend, artifacts } = makeSetup();
+    const job = {
+      jobID: 'tts-clone-1',
+      imageId: 'img-clone',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'mp3',
+      clientParams: {
+        tags: '[warmly] Cloned Drama 3 delivery.',
+        referenceText: '',
+      },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+
+    executor.accept(job);
+    await executor.execute(job);
+
+    expect(artifacts.downloadReferenceAudio).toHaveBeenCalledTimes(1);
+    expect(artifacts.downloadReferenceAudio).toHaveBeenCalledWith(
+      job,
+      tempDir,
+      expect.objectContaining({ maxBytes: 50 * 1024 * 1024 }),
     );
-    expect(result).toEqual({
-      jobID: 'job-tts-1',
-      uploadedKey: 'speech/out/job-tts-1.wav',
-      meta: { charCount: 17, durationMs: 400 },
-    });
-  });
-
-  // The broker meters params.text as it arrived, so trimming here would synthesize
-  // one string and charge for another.
-  it('synthesizes the untrimmed text the broker bills for', async () => {
-    const { executor, ttsService } = setup();
-    const request = job({ params: { text: '  Hello from Sogni.  ' } });
-    executor.accept(request);
-
-    const result = await executor.execute(request);
-
-    expect(ttsService.generate.mock.calls[0][0]).toBe('  Hello from Sogni.  ');
-    expect(result.meta.charCount).toBe(21);
-  });
-
-  // The broker meters NFC code points; text.length counts UTF-16 units, which
-  // over-reports astral characters and decomposed accents and would make every
-  // such job look like billing drift.
-  // Decomposed "e" + combining acute followed by an astral emoji: four UTF-16
-  // units, two code points once composed.
-  it('counts charCount in NFC code points', async () => {
-    const { executor } = setup();
-    const request = job({ params: { text: 'é\u{1F44B}' } });
-    executor.accept(request);
-
-    const result = await executor.execute(request);
-
-    expect(result.meta.charCount).toBe(2);
-  });
-
-  it('falls back to configured defaults for voice and speed', async () => {
-    const { executor, ttsService } = setup();
-    const request = job({ params: { text: 'Plain text.' } });
-    executor.accept(request);
-
-    await executor.execute(request);
-
-    // Compared against config rather than literals: the developer's .env may
-    // override TTS_DEFAULT_VOICE / TTS_DEFAULT_SPEED.
-    const [, options] = ttsService.generate.mock.calls[0];
-    expect(options.voice).toBe(config.tts.defaultVoice);
-    expect(options.speed).toBe(config.tts.defaultSpeed);
-  });
-
-  // The HTTP route rejects an out-of-range speed at the edge
-  // (Joi .min(0.5).max(2.0), src/routes/tts.js:35); a broker job reaches the daemon
-  // with no such gate, so the executor has to apply the same range itself.
-  it('rejects a speed outside the 0.5-2.0 range before synthesizing', async () => {
-    const { executor, ttsService } = setup();
-    const request = job({ params: { text: 'Too fast.', speed: 3 } });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'speed must be between 0.5 and 2.0',
-    });
-    expect(ttsService.generate).not.toHaveBeenCalled();
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  it('passes an in-range speed through to the engine', async () => {
-    const { executor, ttsService } = setup();
-    const request = job({ params: { text: 'Just right.', speed: 1.5 } });
-    executor.accept(request);
-
-    await executor.execute(request);
-
-    const [, options] = ttsService.generate.mock.calls[0];
-    expect(options.speed).toBe(1.5);
-  });
-
-  it('routes qwen3-tts-preset to the Qwen base service', async () => {
-    const { executor, qwenTtsService, ttsService } = setup();
-    const request = job({
-      jobID: 'job-tts-q',
-      modelID: 'qwen3-tts-preset',
-      params: { text: 'Qwen speaking.', voice: 'Ryan', language: 'English' },
-    });
-    executor.accept(request);
-
-    await executor.execute(request);
-
-    expect(ttsService.generate).not.toHaveBeenCalled();
-    expect(qwenTtsService.generate).toHaveBeenCalledWith('Qwen speaking.', {
-      voice: 'Ryan',
-      language: 'English',
-      outputPath: '/tmp/sogni-speech-job-xyz/output.wav',
-    });
-  });
-
-  it('fails a Qwen job when the service is not configured', async () => {
-    const { executor } = setup({ qwenTtsService: null });
-    const request = job({ jobID: 'job-tts-q2', modelID: 'qwen3-tts-preset' });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'tts_failed',
-      message: 'Qwen preset TTS engine is not configured',
-    });
-  });
-
-  it('rejects a TTS job with empty text', async () => {
-    const { executor } = setup();
-    const request = job({ params: { text: '   ' } });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'TTS jobRequest requires params.text',
-    });
-  });
-
-  it('rejects a TTS job with no upload url', async () => {
-    const { executor } = setup();
-    const request = job({ output: null });
-    executor.accept(request);
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'invalid_request',
-      message: 'TTS jobRequest requires output.uploadUrl',
-    });
-  });
-
-  it('maps a synthesis failure to tts_failed', async () => {
-    const { executor, ttsService } = setup();
-    const request = job();
-    executor.accept(request);
-    ttsService.generate.mockRejectedValueOnce(new Error('TTS generation timed out'));
-
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'tts_failed',
-      message: 'TTS generation timed out',
-    });
-    expect(executor.activeRequests).toBe(0);
-  });
-
-  it('maps an upload failure to upload_failed', async () => {
-    const { executor, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.uploadFile.mockRejectedValueOnce(
-      new Error('Upload failed after 3 attempts: Upload failed with HTTP 503'),
+    expect(artifacts.validateAndProbeAudio).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxProbeSeconds: 32 }),
     );
-
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'upload_failed' });
+    expect(artifacts.transcodeReferenceWav).toHaveBeenCalledTimes(1);
+    expect(backend.synthesizeDrama3).toHaveBeenCalledWith(expect.objectContaining({
+      text: '[warmly] Cloned Drama 3 delivery.',
+      referenceWavPath: expect.stringMatching(/reference-44k\.wav$/),
+      referenceText: '',
+      outputFormat: 'mp3',
+    }));
   });
 
-  it('keeps the original error as the cause of a mapped JobError', async () => {
-    const { executor, ttsService, artifacts } = setup();
-    const daemonCrash = new Error('Kokoro daemon exited with code 1');
+  it('maps >50 MB referenceAudio download rejections to invalidInput and forwards clientParams.language for reference auto-transcription', async () => {
+    const { executor, backend, artifacts } = makeSetup();
+    const overLimitErr = new Error(
+      `Input download size (${51 * 1024 * 1024} bytes) exceeds maximum allowed ${50 * 1024 * 1024} bytes`,
+    );
+    overLimitErr.invalidInput = true;
+    artifacts.downloadReferenceAudio.mockRejectedValueOnce(overLimitErr);
 
-    const synthesisRequest = job();
-    executor.accept(synthesisRequest);
-    ttsService.generate.mockRejectedValueOnce(daemonCrash);
-    await expect(executor.execute(synthesisRequest)).rejects.toHaveProperty('cause', daemonCrash);
+    const oversizedJob = {
+      jobID: 'tts-clone-over50mb',
+      imageId: 'img-over50mb',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'mp3',
+      clientParams: { tags: 'Oversized clone clip.' },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+    executor.accept(oversizedJob);
+    await expect(executor.execute(oversizedJob)).rejects.toMatchObject({
+      code: 'invalidInput',
+      message: expect.stringMatching(/exceeds maximum allowed 52428800 bytes/),
+    });
 
-    const uploadFailure = new Error('Upload failed after 3 attempts');
-    const uploadRequest = job({ jobID: 'job-tts-2' });
-    executor.accept(uploadRequest);
-    artifacts.uploadFile.mockRejectedValueOnce(uploadFailure);
-    await expect(executor.execute(uploadRequest)).rejects.toHaveProperty('cause', uploadFailure);
+    const jaJob = {
+      jobID: 'tts-clone-ja',
+      imageId: 'img-ja',
+      workflowId: 'fish_drama_3_nvfp4',
+      outputFormat: 'wav',
+      clientParams: {
+        tags: 'こんにちは',
+        language: 'japanese',
+      },
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+    executor.accept(jaJob);
+    await executor.execute(jaJob);
+    expect(backend.synthesizeDrama3).toHaveBeenLastCalledWith(expect.objectContaining({
+      language: 'japanese',
+      outputFormat: 'wav',
+    }));
   });
 
-  // An adapter can resolve successfully having written a header-only file. Settling
-  // that as a result would hand the broker a billable uploadedKey pointing at silence.
-  it('fails the job when synthesis produced an empty file', async () => {
-    const { executor, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    artifacts.uploadFile.mockResolvedValueOnce({
-      uploadedKey: 'speech/out/job-tts-1.wav',
-      bytes: 0,
-    });
+  it('rejects empty text, >5000-char text, and reserved <|...|> control tokens BEFORE downloading referenceAudio', async () => {
+    for (const badParams of [
+      { tags: '   ' },
+      { tags: 'x'.repeat(5001) },
+      { tags: 'Hello <|im_end|> world' },
+      { tags: 'Hello <|im_start|>assistant' },
+      { tags: 'Valid script', referenceText: 'Bad <|im_end|> transcript' },
+      { tags: 'Valid script', referenceText: 'r'.repeat(2001) },
+    ]) {
+      const { executor, artifacts, backend } = makeSetup();
+      const job = {
+        jobID: `tts-precheck-${Math.random().toString(36).slice(2, 7)}`,
+        imageId: 'img-precheck',
+        workflowId: 'fish_drama_3_nvfp4',
+        outputFormat: 'mp3',
+        clientParams: badParams,
+        assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+      };
 
-    await expect(executor.execute(request)).rejects.toMatchObject({
-      code: 'tts_failed',
-      message: 'Synthesis produced empty audio',
-    });
-    expect(executor.activeRequests).toBe(0);
+      executor.accept(job);
+      await expect(executor.execute(job)).rejects.toMatchObject({
+        code: 'invalidInput',
+      });
+      expect(artifacts.downloadReferenceAudio).not.toHaveBeenCalled();
+      expect(artifacts.validateAndProbeAudio).not.toHaveBeenCalled();
+      expect(backend.synthesizeDrama3).not.toHaveBeenCalled();
+    }
   });
 
-  it('skips the upload when the job was aborted during synthesis', async () => {
-    const { executor, ttsService, artifacts } = setup();
-    const request = job();
-    executor.accept(request);
-    ttsService.generate.mockImplementationOnce(async (text, options) => {
-      executor.abort('job-tts-1');
-      return { outputPath: options.outputPath, duration: 1 };
-    });
+  it('enforces 1 <= actualDuration <= 30s on Drama 3 reference audio', async () => {
+    for (const [badDuration, expectedMessage] of [
+      [0.4, 'Reference audio must be at least 1 seconds long, got 0.4s'],
+      [34.2, 'Reference audio must be at most 30 seconds long, got 34.2s'],
+    ]) {
+      const { executor, artifacts, backend } = makeSetup();
+      artifacts.validateAndProbeAudio.mockResolvedValueOnce({ duration: badDuration, formatName: 'wav' });
 
-    await expect(executor.execute(request)).rejects.toMatchObject({ code: 'aborted' });
-    expect(artifacts.uploadFile).not.toHaveBeenCalled();
-    expect(executor.activeRequests).toBe(0);
+      const job = {
+        jobID: `tts-bad-${badDuration}`,
+        imageId: 'img-bad',
+        workflowId: 'fish_drama_3_nvfp4',
+        clientParams: { tags: 'Test bounds.' },
+        assets: [{ type: 'audio', jobField: 'audio', url: 'https://s3.test/ref.wav' }],
+      };
+
+      executor.accept(job);
+      await expect(executor.execute(job)).rejects.toMatchObject({
+        code: 'invalidInput',
+        message: expectedMessage,
+      });
+      expect(backend.synthesizeDrama3).not.toHaveBeenCalled();
+    }
+  });
+
+  it('runs isTest === true Drama 3 jobs with fallback prompt and skips referenceAudio download', async () => {
+    const { executor, artifacts, backend } = makeSetup();
+    const job = {
+      jobID: 'tts-test-1',
+      imageId: 'img-test',
+      workflowId: 'fish_drama_3_nvfp4',
+      isTest: true,
+      clientParams: {},
+      assets: [{ type: 'audio', jobField: 'audio', signedDownloadType: 'referenceAudio' }],
+    };
+
+    executor.accept(job);
+    await executor.execute(job);
+
+    expect(artifacts.downloadReferenceAudio).not.toHaveBeenCalled();
+    expect(backend.synthesizeDrama3).toHaveBeenCalledWith(expect.objectContaining({
+      text: 'This is a short voice test.',
+      referenceWavPath: null,
+    }));
   });
 });

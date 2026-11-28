@@ -237,6 +237,42 @@ quant was derived from original revision `e0a9218aa48888270f06ef1ed9ea67622c0e17
 whose weights, codec, configuration and tokenizer match the original revision
 pinned above; the upstream revision difference is in the model card.
 
+## Sogni Supernet Worker Sidecar (`compose.worker.yaml`)
+
+To attach a DGX Spark (`worker-host-1`) to the Sogni Supernet **without restarting** any of the resident `drama3`, `fish-s2`, `nemotron`, or `api` GPU containers, run the lightweight outbound WebSocket worker sidecar in `http` backend mode.
+
+1. Set the worker credentials in `.env` (or pass them in the shell environment):
+
+```bash
+SOGNI_ENV=staging                        # production | staging | local
+SOGNI_API_KEY=your_sogni_worker_api_key
+SOGNI_NFT_TOKEN_ID=your_fast_worker_nft_id
+SOGNI_VOICE_BACKEND_MODE=http
+SOGNI_VOICE_API_URL=http://127.0.0.1:3000
+SOGNI_VOICE_API_KEY=${AUTH_API_KEY}
+```
+
+2. Verify discovered capabilities without opening a socket, or start the sidecar container:
+
+```bash
+# Optional dry-run capability check from the host:
+npm run worker -- --check
+
+# Launch ONLY the sidecar container (resident GPU containers remain untouched):
+docker compose -f docker/nvidia/compose.worker.yaml up -d worker
+docker compose -f docker/nvidia/compose.worker.yaml logs -f worker
+```
+
+The sidecar queries `GET /transcription/models` and `GET /drama3-tts/status` on `SOGNI_VOICE_API_URL` and advertises whichever canonical Sogni models are enabled (`fish_drama_3_nvfp4`, `parakeet_tdt_0.6b_v3_bf16`, `nemotron_3.5_transcribe_30b_a4b_nvfp4`). Ephemeral Drama 3 reference-voice jobs use stateless `POST /drama3-tts/generate-with-reference` (falling back automatically to a random `__ephemeral_<uuid>` clone created and deleted in `finally` if the target API container has not been restarted yet), and auto-transcribe `referenceAudio` via Parakeet when `referenceText` is omitted.
+
+### Running 2+ DGX Spark Workers on the Supernet
+
+When scaling horizontally across multiple DGX Spark nodes (for example `worker-host-1` and `worker-host-2`):
+
+- **Unique Fast Worker NFT per Spark**: Assign each host its own `SOGNI_NFT_TOKEN_ID` (for example NFT `#101` on `worker-host-1` and NFT `#102` on `worker-host-2`). Sharing one `SOGNI_NFT_TOKEN_ID` across two active hosts causes the Sogni socket broker to treat one connection as superseding the other.
+- **Distinct Worker Identity (`DATA_DIR` / `.sogni-worker-id`)**: Each worker generates and persists its own UUID in `.sogni-worker-id` (stored in the per-host `worker-state` Docker volume or a host-local `DATA_DIR=/var/lib/sogni-voice-worker` directory; `.sogni-worker-id` is gitignored so cloning or syncing the repo never copies another host's `app-id`). Never copy `.sogni-worker-id` between `worker-host-1` and `worker-host-2`.
+- **100% Stateless Reference Voice Cloning**: Supernet reference-audio jobs download the artist's clip per job from S3/R2 signed URLs, encode VQ codes into an in-memory content-addressed `(sha256, transcript)` LRU cache inside each host's daemon, and upload the rendered output directly to S3/R2. Any job can land on `worker-host-1` or `worker-host-2` with zero shared filesystem state required.
+
 ## License
 
 Fish S2 Pro is under the Fish Audio Research License (non-commercial). Drama 3

@@ -1,9 +1,11 @@
 {
-  "version": 1,
-  "frames": ["workerInfo", "speechCapacityUpdate", "jobRequest", "jobState", "jobProgress", "jobResult", "jobError"],
+  "version": 2,
+  "protocol": "sogni-media-worker",
+  "frames": ["workerInfo", "readyToAcceptJobs", "jobRequest", "jobCancel", "jobState", "jobETA", "jobResult", "jobError"],
   "jobStateField": "type",
-  "jobStateValues": ["accepted", "started"],
-  "modelIds": { "stt": ["parakeet-tdt-0.6b-v3"], "tts": ["kokoro-82m", "qwen3-tts-preset"] },
-  "transcriptType": "string",
-  "parakeetAllowedParams": []
+  "jobStateValues": ["jobStarted", "jobCompleted"],
+  "modelIds": {
+    "stt": ["parakeet_tdt_0.6b_v3_bf16", "nemotron_3.5_transcribe_30b_a4b_nvfp4"],
+    "tts": ["fish_drama_3_nvfp4"]
+  }
 }

@@ -116,7 +116,7 @@ export const config = {
   },
   upload: {
     maxFileSizeBytes: (parseInt(process.env.MAX_FILE_SIZE_MB, 10) || 100) * 1024 * 1024,
-    transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 25) * 1024 * 1024,
+    transcribeMaxBytes: (parseInt(process.env.TRANSCRIBE_MAX_UPLOAD_MB, 10) || 64) * 1024 * 1024,
   },
   pocketTts: {
     enabled: parseEnvBool(process.env.POCKET_TTS_ENABLED, false),
@@ -228,17 +228,29 @@ export const config = {
       || (drama3Backend === 'mlx' ? 600000 : 1860000),
     preWarmDaemon: parseEnvBool(process.env.PREWARM_DRAMA3_TTS, false),
   },
-  // Outbound Sogni network worker (src/network/). Runs as its own process; the
-  // local REST API is unaffected when this is disabled.
+  // Outbound Sogni Supernet media worker (src/network/). Can run in-process
+  // alongside the REST API (`SOGNI_NETWORK_WORKER=true` in src/index.js, defaulting
+  // to `local` daemon mode) or as a zero-downtime HTTP sidecar (`npm run worker` /
+  // `docker/nvidia/compose.worker.yaml`, `SOGNI_VOICE_BACKEND_MODE=http`).
   networkWorker: {
     enabled: parseEnvBool(process.env.SOGNI_NETWORK_WORKER, false),
     sogniEnv: process.env.SOGNI_ENV || 'staging',
-    apiKey: process.env.SOGNI_WORKER_API_KEY || null,
-    maxConcurrentJobs: parseInt(process.env.SPEECH_WORKER_MAX_CONCURRENT, 10) || 2,
-    capacityIntervalMs: parseInt(process.env.SPEECH_WORKER_CAPACITY_INTERVAL_MS, 10) || 30000,
-    reconnectInitialDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_DELAY_MS, 10) || 5000,
-    reconnectMaxDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_MAX_DELAY_MS, 10) || 60000,
-    defaultJobTimeoutMs: parseInt(process.env.SPEECH_WORKER_JOB_TIMEOUT_MS, 10) || 300000,
+    apiKey: process.env.SOGNI_API_KEY
+      || process.env.API_KEY
+      || process.env.SOGNI_WORKER_API_KEY
+      || null,
+    nftTokenId: process.env.SOGNI_NFT_TOKEN_ID || process.env.NFT_TOKEN_ID || '',
+    backendMode: process.env.SOGNI_VOICE_BACKEND_MODE || '',
+    voiceApiUrl: process.env.SOGNI_VOICE_API_URL || '',
+    voiceApiKey: process.env.SOGNI_VOICE_API_KEY || process.env.AUTH_API_KEY || '',
+    workerNetwork: process.env.SOGNI_WORKER_NETWORK || '',
+    workerType: process.env.SOGNI_WORKER_TYPE || '',
+    validateClientKey: parseEnvBool(process.env.SOGNI_VALIDATE_CLIENT_KEY, true),
+    // Sogni socket tracks one activeWorkerJob per media worker connection; clamp to 1.
+    maxConcurrentJobs: 1,
+    reconnectInitialDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_DELAY_MS, 10) || 2000,
+    reconnectMaxDelayMs: parseInt(process.env.SPEECH_WORKER_RECONNECT_MAX_DELAY_MS, 10) || 30000,
+    defaultJobTimeoutMs: parseInt(process.env.SPEECH_WORKER_JOB_TIMEOUT_MS, 10) || 600000,
     drainTimeoutMs: parseInt(process.env.SPEECH_WORKER_DRAIN_TIMEOUT_MS, 10) || 120000,
     preWarm: parseEnvBool(process.env.SPEECH_WORKER_PREWARM, true),
     workerIdFile: process.env.SOGNI_WORKER_ID_FILE || '.sogni-worker-id',

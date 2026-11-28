@@ -195,7 +195,13 @@ export class TranscriptionService {
     }
   }
 
-  async _sendRawRequest(payload, timeout = config.transcription.timeout) {
+  async _sendRawRequest(payload, timeout = config.transcription.timeout, signal = undefined) {
+    if (signal?.aborted) {
+      const abortErr = new Error('The operation was aborted');
+      abortErr.name = 'AbortError';
+      throw abortErr;
+    }
+
     await this._ensureDaemon();
 
     if (!daemonProcess || !daemonReady) {
@@ -204,18 +210,31 @@ export class TranscriptionService {
 
     const requestId = `req-${++requestIdCounter}`;
     return new Promise((resolve, reject) => {
+      const onAbort = () => {
+        pendingRequests.delete(requestId);
+        clearTimeout(timeoutId);
+        const abortErr = new Error('The operation was aborted');
+        abortErr.name = 'AbortError';
+        reject(abortErr);
+      };
+
       const timeoutId = setTimeout(() => {
+        signal?.removeEventListener('abort', onAbort);
         pendingRequests.delete(requestId);
         reject(new TranscriptionError('Transcription timed out'));
       }, timeout);
 
+      signal?.addEventListener('abort', onAbort, { once: true });
+
       pendingRequests.set(requestId, {
         rawResponse: true,
         resolve: (result) => {
+          signal?.removeEventListener('abort', onAbort);
           clearTimeout(timeoutId);
           resolve(result);
         },
         reject: (error) => {
+          signal?.removeEventListener('abort', onAbort);
           clearTimeout(timeoutId);
           reject(error);
         },
@@ -224,6 +243,7 @@ export class TranscriptionService {
       try {
         daemonProcess.stdin.write(`${JSON.stringify({ id: requestId, ...payload })}\n`);
       } catch (error) {
+        signal?.removeEventListener('abort', onAbort);
         pendingRequests.delete(requestId);
         clearTimeout(timeoutId);
         reject(new TranscriptionError(`Failed to write to daemon: ${error.message}`));
@@ -238,13 +258,17 @@ export class TranscriptionService {
       );
     }
 
-    const { timestamps = false, wordTimestamps = false } = options;
-    const response = await this._sendRawRequest({
-      type: 'transcribe',
-      audio_path: audioFilePath,
-      timestamps,
-      word_timestamps: wordTimestamps,
-    });
+    const { timestamps = false, wordTimestamps = false, signal = undefined } = options;
+    const response = await this._sendRawRequest(
+      {
+        type: 'transcribe',
+        audio_path: audioFilePath,
+        timestamps,
+        word_timestamps: wordTimestamps,
+      },
+      config.transcription.timeout,
+      signal,
+    );
 
     const result = { text: response.text, rawOutput: '' };
     if (response.timestamps) result.timestamps = response.timestamps;
